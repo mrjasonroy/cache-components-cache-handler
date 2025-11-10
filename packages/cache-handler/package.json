@@ -1,0 +1,47 @@
+{
+  "name": "@mrjasonroy/cache-components-cache-handler",
+  "version": "0.0.1",
+  "description": "Cache handler for Next.js 16+ with support for 'use cache' directive and Cache Components",
+  "author": "Jason Roy",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./handlers/memory": {
+      "types": "./dist/handlers/memory.d.ts",
+      "import": "./dist/handlers/memory.js"
+    },
+    "./handlers/composite": {
+      "types": "./dist/handlers/composite.d.ts",
+      "import": "./dist/handlers/composite.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo node_modules"
+  },
+  "keywords": ["nextjs", "next", "cache", "cache-handler", "use-cache", "isr", "revalidation"],
+  "peerDependencies": {
+    "next": ">=16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

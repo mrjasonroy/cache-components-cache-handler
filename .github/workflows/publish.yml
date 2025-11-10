@@ -1,0 +1,143 @@
+name: Publish to NPM
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (e.g., 16.0.1)"
+        required: true
+        type: string
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Run e2e tests (memory)
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+          pnpm start &
+          sleep 10
+          pnpm test:e2e
+
+      - name: Run e2e tests (Redis)
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          lsof -ti:3000 | xargs kill -9 || true
+          sleep 2
+          cd apps/e2e-test-app
+          pnpm build
+          pnpm start &
+          sleep 10
+          pnpm test:e2e
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # Required for npm provenance
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Publish @mrjasonroy/cache-components-cache-handler
+        working-directory: packages/cache-handler
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --access public --provenance
+
+      - name: Publish @mrjasonroy/cache-components-cache-handler-redis
+        working-directory: packages/cache-handler-redis
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --access public --provenance
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+          NEXTJS_VERSION=$(node -p "require('./package.json').devDependencies.next")
+
+          gh release create "v${VERSION}" \
+            --title "v${VERSION} - Next.js ${NEXTJS_VERSION}" \
+            --notes "## Changes
+
+- Compatible with Next.js ${NEXTJS_VERSION}
+- All e2e tests passing
+- Memory and Redis cache handlers tested
+
+## Installation
+
+\`\`\`bash
+npm install @mrjasonroy/cache-components-cache-handler@${VERSION}
+\`\`\`
+
+See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for usage instructions.
+
+---
+*Published automatically by [publish workflow](https://github.com/${{ github.repository }}/actions/workflows/publish.yml)*"

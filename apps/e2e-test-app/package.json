@@ -1,0 +1,29 @@
+{
+  "name": "e2e-test-app",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:redis": "CACHE_HANDLER=redis playwright test",
+    "build:redis": "CACHE_HANDLER=redis next build",
+    "start:redis": "CACHE_HANDLER=redis next start"
+  },
+  "dependencies": {
+    "@mrjasonroy/cache-components-cache-handler": "workspace:*",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "redis": "^5.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.6",
+    "@types/react-dom": "^19.0.2",
+    "typescript": "^5.7.2"
+  }
+}

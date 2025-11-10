@@ -1,0 +1,35 @@
+{
+  "name": "@mrjasonroy/cache-components-cache-handler-redis",
+  "version": "0.1.0",
+  "description": "Redis cache handler for Next.js 16+ with Cache Components support",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["nextjs", "cache", "redis", "cache-handler", "isr", "elasticache", "valkey"],
+  "author": "Jason Roy",
+  "license": "MIT",
+  "dependencies": {
+    "@mrjasonroy/cache-components-cache-handler": "workspace:*",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  },
+  "peerDependencies": {
+    "next": ">=16.0.0"
+  }
+}

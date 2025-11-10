@@ -1,0 +1,42 @@
+{
+  "name": "cache-components-cache-handler",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Next.js 16+ cache handler with support for Cache Components and 'use cache' directive",
+  "author": "Jason Roy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrjasonroy/cache-components-cache-handler"
+  },
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "test": "turbo test",
+    "test:e2e": "turbo test:e2e",
+    "test:e2e:redis": "pnpm docker:up && pnpm --filter e2e-test-app test:e2e:redis",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test:ui": "vitest --ui",
+    "start:e2e:ui": "turbo start:e2e:ui",
+    "start:e2e": "turbo start:e2e",
+    "start": "turbo start",
+    "typecheck": "turbo typecheck",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f redis",
+    "clean": "turbo clean && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@vitest/ui": "2.1.9",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2",
+    "vitest": "2.1.9"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}

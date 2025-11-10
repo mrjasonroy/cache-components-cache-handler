@@ -1,0 +1,236 @@
+name: Next.js Version Check
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  check-nextjs-version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Check for new Next.js version
+        id: check_version
+        run: |
+          # Get current Next.js version from package.json
+          CURRENT_VERSION=$(node -p "require('./package.json').devDependencies.next")
+          echo "Current version: $CURRENT_VERSION"
+
+          # Get latest Next.js version from npm
+          LATEST_VERSION=$(npm view next version)
+          echo "Latest version: $LATEST_VERSION"
+
+          # Extract major.minor from versions
+          CURRENT_MAJOR_MINOR=$(echo $CURRENT_VERSION | sed -E 's/^[^0-9]*([0-9]+\.[0-9]+).*/\1/')
+          LATEST_MAJOR_MINOR=$(echo $LATEST_VERSION | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "current_major_minor=$CURRENT_MAJOR_MINOR" >> $GITHUB_OUTPUT
+          echo "latest_major_minor=$LATEST_MAJOR_MINOR" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_MAJOR_MINOR" != "$LATEST_MAJOR_MINOR" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "New Next.js version available: $LATEST_VERSION"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Already on latest major.minor: $CURRENT_MAJOR_MINOR"
+          fi
+
+      - name: Create feature branch
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b nextjs-${{ steps.check_version.outputs.latest_major_minor }}
+
+      - name: Update Next.js version
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          # Update Next.js in root package.json
+          pnpm add -D next@${{ steps.check_version.outputs.latest_version }}
+
+          # Update e2e-test-app
+          cd apps/e2e-test-app
+          pnpm add next@${{ steps.check_version.outputs.latest_version }}
+          cd ../..
+
+          # Update legacy-cache-test if it exists
+          if [ -d "apps/legacy-cache-test" ]; then
+            cd apps/legacy-cache-test
+            pnpm add next@${{ steps.check_version.outputs.latest_version }}
+            cd ../..
+          fi
+
+          # Update package versions to match Next.js
+          NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_major_minor }}.0"
+
+          # Update core package
+          cd packages/cache-handler
+          npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
+          cd ../..
+
+          # Update Redis package
+          cd packages/cache-handler-redis
+          npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
+          cd ../..
+
+      - name: Install updated dependencies
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: pnpm install
+
+      - name: Run linting
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: pnpm lint
+        continue-on-error: true
+
+      - name: Run type checking
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: pnpm typecheck
+        continue-on-error: true
+
+      - name: Build packages
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: pnpm build
+
+      - name: Start Docker services
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          docker compose up -d
+          sleep 5
+          docker ps
+
+      - name: Run e2e tests with memory cache
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+          pnpm start &
+          sleep 10
+          pnpm test:e2e
+        continue-on-error: true
+        id: test_memory
+
+      - name: Run e2e tests with Redis
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          # Kill previous server
+          lsof -ti:3000 | xargs kill -9 || true
+          sleep 2
+
+          # Flush Redis
+          docker exec nextjs-cache-redis redis-cli FLUSHALL
+
+          # Build and test with Redis
+          cd apps/e2e-test-app
+          CACHE_HANDLER=redis pnpm build
+          CACHE_HANDLER=redis pnpm start &
+          sleep 10
+          CACHE_HANDLER=redis pnpm test:e2e
+        continue-on-error: true
+        id: test_redis
+
+      - name: Stop Docker services
+        if: always()
+        run: docker compose down
+
+      - name: Commit changes
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          git add .
+          git commit -m "chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
+
+          - Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
+          - Updated package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
+          - Memory tests: ${{ steps.test_memory.outcome }}
+          - Redis tests: ${{ steps.test_redis.outcome }}
+
+          Co-Authored-By: GitHub Actions <github-actions[bot]@users.noreply.github.com>"
+
+      - name: Push changes
+        if: steps.check_version.outputs.needs_update == 'true'
+        run: |
+          git push origin nextjs-${{ steps.check_version.outputs.latest_major_minor }}
+
+      - name: Create Pull Request
+        if: steps.check_version.outputs.needs_update == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MEMORY_STATUS="${{ steps.test_memory.outcome }}"
+          REDIS_STATUS="${{ steps.test_redis.outcome }}"
+
+          if [ "$MEMORY_STATUS" = "success" ] && [ "$REDIS_STATUS" = "success" ]; then
+            PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing"
+            PR_BODY="## Next.js ${{ steps.check_version.outputs.latest_version }} Update
+
+All tests passing! Ready to merge and publish.
+
+### Changes
+- ⬆️ Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
+- 📦 Bumped package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
+
+### Test Results
+- ✅ Memory cache tests: PASSED
+- ✅ Redis cache tests: PASSED
+
+### Next Steps
+1. Review changes
+2. Merge this PR
+3. Publish packages to npm
+
+---
+*Auto-generated by [nextjs-version-check workflow](https://github.com/${{ github.repository }}/actions/workflows/nextjs-version-check.yml)*"
+          else
+            PR_TITLE="⚠️ Next.js ${{ steps.check_version.outputs.latest_version }} - Tests need review"
+            PR_BODY="## Next.js ${{ steps.check_version.outputs.latest_version }} Update
+
+Some tests failed. Please review before merging.
+
+### Changes
+- ⬆️ Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
+- 📦 Bumped package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
+
+### Test Results
+- $( [ \"$MEMORY_STATUS\" = \"success\" ] && echo \"✅\" || echo \"❌\" ) Memory cache tests: $MEMORY_STATUS
+- $( [ \"$REDIS_STATUS\" = \"success\" ] && echo \"✅\" || echo \"❌\" ) Redis cache tests: $REDIS_STATUS
+
+### Next Steps
+1. Review test failures
+2. Fix compatibility issues
+3. Re-run tests
+4. Merge when passing
+
+---
+*Auto-generated by [nextjs-version-check workflow](https://github.com/${{ github.repository }}/actions/workflows/nextjs-version-check.yml)*"
+          fi
+
+          gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --base main \
+            --head nextjs-${{ steps.check_version.outputs.latest_major_minor }} \
+            --label "dependencies" \
+            --label "nextjs-update"
