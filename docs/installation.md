@@ -21,42 +21,37 @@ For development or single-instance deployments:
 import { createMemoryDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default createMemoryDataCacheHandler({
-  maxSize: 100 * 1024 * 1024, // 100MB (default: 50MB)
+  maxSize: 100 * 1024 * 1024, // 100MB
   debug: process.env.NODE_ENV === "development",
 });
 ```
 
 ```javascript
 // next.config.js
-module.exports = {
-  experimental: {
-    cacheComponents: true,
-    cacheHandlers: {
-      default: require.resolve("./data-cache-handler.mjs"),
-    },
+export default {
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
   },
 };
 ```
+
+That's it! This handles all `"use cache"` directives in your app.
 
 ## Redis Cache Setup
 
 For production or multi-instance deployments:
 
 ```bash
-npm install redis
+npm install ioredis
 ```
 
 ```javascript
 // data-cache-handler.mjs
-import { createClient } from "redis";
+import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = createClient({
-  url: process.env.REDIS_URL || "redis://localhost:6379",
-});
-
-redis.on("error", (err) => console.error("Redis error:", err));
-await redis.connect();
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 export default createRedisDataCacheHandler({
   redis,

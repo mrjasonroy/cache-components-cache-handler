@@ -1,86 +1,105 @@
 # Redis Configuration
 
-## Basic Setup
+This package uses `ioredis` for Redis connections. Install it as a peer dependency:
+
+```bash
+npm install ioredis
+```
+
+## Basic Setup (for "use cache" directive)
 
 ```javascript
-import { createClient } from "redis";
+// data-cache-handler.mjs
+import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = createClient({
-  url: process.env.REDIS_URL || "redis://localhost:6379",
-});
-
-await redis.connect();
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 export default createRedisDataCacheHandler({
   redis,
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
 });
+```
+
+```javascript
+// next.config.js
+export default {
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+  },
+};
 ```
 
 ## Connection Options
 
-### URL Format
+### URL Format (Recommended)
 
 ```javascript
-const redis = createClient({
-  url: "redis://username:password@host:port/db",
-});
+const redis = new Redis(process.env.REDIS_URL);
+// Examples:
+// redis://localhost:6379
+// redis://:password@host:6379/0
+// rediss://host:6380 (TLS)
 ```
 
 ### Object Configuration
 
 ```javascript
-const redis = createClient({
-  socket: {
-    host: "localhost",
-    port: 6379,
-  },
+const redis = new Redis({
+  host: "localhost",
+  port: 6379,
   password: "your-password",
-  database: 0,
+  db: 0,
 });
 ```
 
 ## TLS/SSL
 
 ```javascript
-const redis = createClient({
-  url: "rediss://host:port", // Note the 'rediss://' protocol
-  socket: {
-    tls: true,
-    rejectUnauthorized: false, // For self-signed certificates
+const redis = new Redis({
+  host: "your-host.com",
+  port: 6380,
+  tls: {
+    rejectUnauthorized: false, // For self-signed certs
   },
 });
+```
+
+Or use `rediss://` protocol:
+
+```javascript
+const redis = new Redis("rediss://your-host.com:6380");
 ```
 
 ## Error Handling
 
 ```javascript
-const redis = createClient({ url: process.env.REDIS_URL });
+const redis = new Redis(process.env.REDIS_URL);
 
 redis.on("error", (err) => {
-  console.error("Redis Client Error", err);
+  console.error("Redis Error:", err);
 });
 
 redis.on("connect", () => {
-  console.log("Redis Client Connected");
+  console.log("Redis Connected");
 });
 
 redis.on("ready", () => {
-  console.log("Redis Client Ready");
+  console.log("Redis Ready");
 });
-
-await redis.connect();
 ```
 
-## Cache Handler Options
+## Handler Options
 
 ```javascript
 export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",      // Namespace your keys
-  tagPrefix: "myapp:tags:",        // Namespace your tags
-  defaultTTL: 86400,               // 24 hours in seconds
-  debug: process.env.NODE_ENV === "development",
+  redis,                          // ioredis client instance
+  keyPrefix: "myapp:cache:",      // Namespace for cache keys
+  tagPrefix: "myapp:tags:",       // Namespace for cache tags
+  defaultTTL: 86400,              // Default TTL in seconds (24 hours)
+  debug: false,                   // Enable debug logging
 });
 ```
 
@@ -111,38 +130,37 @@ docker compose up -d
 
 ### Connection Pooling
 
-The `redis` client handles connection pooling automatically.
+`ioredis` handles connection pooling automatically. No additional configuration needed.
 
-### Sentinel
+### Redis Sentinel (High Availability)
 
-For high availability:
+For automatic failover:
 
 ```javascript
-import { createClient } from "redis";
+import Redis from "ioredis";
 
-const redis = createClient({
+const redis = new Redis({
   sentinels: [
     { host: "sentinel-1", port: 26379 },
     { host: "sentinel-2", port: 26379 },
+    { host: "sentinel-3", port: 26379 },
   ],
   name: "mymaster",
 });
 ```
 
-### Cluster
+### Redis Cluster (Horizontal Scaling)
 
-For horizontal scaling:
+For distributed deployments:
 
 ```javascript
-import { createCluster } from "redis";
+import { Cluster } from "ioredis";
 
-const redis = createCluster({
-  rootNodes: [
-    { url: "redis://node1:6379" },
-    { url: "redis://node2:6379" },
-    { url: "redis://node3:6379" },
-  ],
-});
+const redis = new Cluster([
+  { host: "node1", port: 6379 },
+  { host: "node2", port: 6379 },
+  { host: "node3", port: 6379 },
+]);
 ```
 
 ### Key Expiration

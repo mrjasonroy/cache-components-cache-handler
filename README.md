@@ -56,26 +56,31 @@ module.exports = {
 ### Redis (Production)
 
 ```bash
-npm install redis
+npm install ioredis
 ```
 
 ```javascript
 // data-cache-handler.mjs
-import { createClient } from "redis";
+import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = createClient({
-  url: process.env.REDIS_URL || "redis://localhost:6379",
-});
-
-await redis.connect();
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 export default createRedisDataCacheHandler({
   redis,
   keyPrefix: "myapp:cache:",
   tagPrefix: "myapp:tags:",
-  defaultTTL: 86400, // 24 hours
 });
+```
+
+```javascript
+// next.config.js
+export default {
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+  },
+};
 ```
 
 ## Usage
