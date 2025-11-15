@@ -1,3 +1,5 @@
+import Redis, { type RedisOptions } from "ioredis";
+import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -5,9 +7,7 @@ import type {
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
-} from "@mrjasonroy/cache-components-cache-handler";
-import { calculateLifespan, isExpired } from "@mrjasonroy/cache-components-cache-handler";
-import Redis, { type RedisOptions } from "ioredis";
+} from "../types.js";
 
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
@@ -54,7 +54,7 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
  * @example
  * ```typescript
  * // In cache-handler.mjs or data-cache-handler.mjs
- * import { RedisCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler-redis";
+ * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler/handlers/redis";
  *
  * export default class NextCacheHandler extends RedisCacheHandler {
  *   constructor(options) {

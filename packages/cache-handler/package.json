@@ -13,14 +13,6 @@
       "import": "./dist/index.js",
       "require": "./dist/index.js",
       "default": "./dist/index.js"
-    },
-    "./handlers/memory": {
-      "types": "./dist/handlers/memory.d.ts",
-      "import": "./dist/handlers/memory.js"
-    },
-    "./handlers/composite": {
-      "types": "./dist/handlers/composite.d.ts",
-      "import": "./dist/handlers/composite.js"
     }
   },
   "files": ["dist"],
@@ -32,9 +24,28 @@
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo node_modules"
   },
-  "keywords": ["nextjs", "next", "cache", "cache-handler", "use-cache", "isr", "revalidation"],
+  "keywords": [
+    "nextjs",
+    "next",
+    "cache",
+    "cache-handler",
+    "use-cache",
+    "isr",
+    "revalidation",
+    "redis",
+    "elasticache",
+    "valkey"
+  ],
   "peerDependencies": {
     "next": "~16.0.0"
+  },
+  "peerDependenciesMeta": {
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

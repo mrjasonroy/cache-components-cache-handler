@@ -18,6 +18,10 @@ export {
   MemoryCacheHandler,
   type MemoryCacheHandlerOptions,
 } from "./handlers/memory.js";
+export {
+  RedisCacheHandler,
+  type RedisCacheHandlerOptions,
+} from "./handlers/redis.js";
 export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
 // Helpers
 export { isImplicitTag } from "./helpers/is-implicit-tag.js";

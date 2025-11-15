@@ -28,7 +28,7 @@ pnpm build
 
 All should complete successfully.
 
-## Step 3: Publish Core Package
+## Step 3: Publish Package
 
 ```bash
 cd packages/cache-handler
@@ -45,36 +45,17 @@ npm publish --access public
 + @mrjasonroy/cache-components-cache-handler@16.0.0
 ```
 
-## Step 4: Publish Redis Package
+## Step 4: Verify Published
 
 ```bash
-cd ../cache-handler-redis
-
-# DRY RUN
-npm publish --dry-run --access public
-
-# PUBLISH FOR REAL
-npm publish --access public
-```
-
-**Expected output**:
-```
-+ @mrjasonroy/cache-components-cache-handler-redis@16.0.0
-```
-
-## Step 5: Verify Published
-
-```bash
-# Check they're live
+# Check it's live
 npm view @mrjasonroy/cache-components-cache-handler
-npm view @mrjasonroy/cache-components-cache-handler-redis
 ```
 
 Visit npm:
 - https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler
-- https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler-redis
 
-## Step 6: Push to GitHub
+## Step 5: Push to GitHub
 
 ```bash
 cd ../..  # Back to root
@@ -87,7 +68,7 @@ git tag v16.0.0
 git push origin v16.0.0
 ```
 
-## Step 7: Create GitHub Release
+## Step 6: Create GitHub Release
 
 - Go to: https://github.com/mrjasonroy/cache-components-cache-handler/releases/new
 - Tag: `v16.0.0`

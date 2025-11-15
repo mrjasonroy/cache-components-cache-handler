@@ -101,25 +101,10 @@ importers:
       vitest:
         specifier: ^2.1.8
         version: 2.1.9(@types/node@22.19.0)(@vitest/ui@2.1.9)
-
-  packages/cache-handler-redis:
-    dependencies:
-      '@mrjasonroy/cache-components-cache-handler':
-        specifier: workspace:*
-        version: link:../cache-handler
+    optionalDependencies:
       ioredis:
         specifier: ^5.4.1
         version: 5.8.2
-      next:
-        specifier: ~16.0.0
-        version: 16.0.1(@playwright/test@1.56.1)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
-    devDependencies:
-      '@types/node':
-        specifier: ^22.10.2
-        version: 22.19.0
-      typescript:
-        specifier: ^5.7.2
-        version: 5.9.3
 
 packages:
 
@@ -1295,7 +1280,8 @@ snapshots:
   '@img/sharp-win32-x64@0.34.5':
     optional: true
 
-  '@ioredis/commands@1.4.0': {}
+  '@ioredis/commands@1.4.0':
+    optional: true
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
@@ -1514,7 +1500,8 @@ snapshots:
 
   deep-eql@5.0.2: {}
 
-  denque@2.1.0: {}
+  denque@2.1.0:
+    optional: true
 
   detect-libc@2.1.2:
     optional: true
@@ -1580,10 +1567,13 @@ snapshots:
       standard-as-callback: 2.1.0
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
-  lodash.defaults@4.2.0: {}
+  lodash.defaults@4.2.0:
+    optional: true
 
-  lodash.isarguments@3.1.0: {}
+  lodash.isarguments@3.1.0:
+    optional: true
 
   loupe@3.2.1: {}
 
@@ -1656,11 +1646,13 @@ snapshots:
 
   react@19.2.0: {}
 
-  redis-errors@1.2.0: {}
+  redis-errors@1.2.0:
+    optional: true
 
   redis-parser@3.0.0:
     dependencies:
       redis-errors: 1.2.0
+    optional: true
 
   redis@5.9.0:
     dependencies:
@@ -1747,7 +1739,8 @@ snapshots:
 
   stackback@0.0.2: {}
 
-  standard-as-callback@2.1.0: {}
+  standard-as-callback@2.1.0:
+    optional: true
 
   std-env@3.10.0: {}
 
