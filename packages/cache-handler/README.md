@@ -1,4 +1,4 @@
-# @mrjasonroy/better-nextjs-cache-handler
+# @mrjasonroy/cache-components-cache-handler
 
 Modern cache handler for Next.js 16+ with support for the `"use cache"` directive and cache components.
 
@@ -16,11 +16,11 @@ Modern cache handler for Next.js 16+ with support for the `"use cache"` directiv
 ## Installation
 
 ```bash
-npm install @mrjasonroy/better-nextjs-cache-handler
+npm install @mrjasonroy/cache-components-cache-handler
 # or
-pnpm add @mrjasonroy/better-nextjs-cache-handler
+pnpm add @mrjasonroy/cache-components-cache-handler
 # or
-yarn add @mrjasonroy/better-nextjs-cache-handler
+yarn add @mrjasonroy/cache-components-cache-handler
 ```
 
 ## Quick Start
@@ -35,7 +35,7 @@ Use the helper function to configure both easily:
 
 ```typescript
 // next.config.mjs
-import { createCacheConfig } from "@mrjasonroy/better-nextjs-cache-handler";
+import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
 import { resolve } from "path";
 
 const cacheConfig = createCacheConfig({
@@ -54,7 +54,7 @@ Then create your cache handler files:
 
 ```javascript
 // cache-handler.mjs (ISR Cache)
-import { createMemoryCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler";
+import { createMemoryCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default createMemoryCacheHandler({
   maxItemsNumber: 1000,
@@ -64,7 +64,7 @@ export default createMemoryCacheHandler({
 
 ```javascript
 // data-cache-handler.mjs (Data Cache for "use cache")
-import { createMemoryDataCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler";
+import { createMemoryDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default createMemoryDataCacheHandler({
   ttl: 3600, // 1 hour default
@@ -78,7 +78,7 @@ export default createMemoryDataCacheHandler({
 import {
   createMemoryCacheHandler,
   createCompositeHandler,
-} from "@mrjasonroy/better-nextjs-cache-handler";
+} from "@mrjasonroy/cache-components-cache-handler";
 
 const memoryHandler = createMemoryCacheHandler({
   maxItemsNumber: 100, // Small L1 cache
@@ -132,7 +132,7 @@ Helper function to generate Next.js 16 cache configuration for both ISR and Data
 **Example:**
 
 ```typescript
-import { createCacheConfig } from "@mrjasonroy/better-nextjs-cache-handler";
+import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
 import { resolve } from "path";
 
 const cacheConfig = createCacheConfig({
@@ -369,7 +369,7 @@ Benchmark (1000 items, 1KB each):
 
 ```diff
 // next.config.js
-+ import { createMemoryCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler";
++ import { createMemoryCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default {
 +  cacheHandler: createMemoryCacheHandler(),
@@ -383,7 +383,7 @@ export default {
 import {
   createMemoryCacheHandler,
 +  createCompositeHandler,
-} from "@mrjasonroy/better-nextjs-cache-handler";
+} from "@mrjasonroy/cache-components-cache-handler";
 import { createRedisHandler } from "./redis-handler";
 
 export default {
@@ -428,10 +428,10 @@ MIT © Jason Roy
 
 ## Support
 
-- [GitHub Issues](https://github.com/mrjasonroy/better-nextjs-cache-handler/issues)
-- [Documentation](https://github.com/mrjasonroy/better-nextjs-cache-handler)
+- [GitHub Issues](https://github.com/mrjasonroy/cache-components-cache-handler/issues)
+- [Documentation](https://github.com/mrjasonroy/cache-components-cache-handler)
 
 ## Related
 
 - [Next.js 16 Cache Documentation](https://nextjs.org/docs/app/getting-started/cache-components)
-- [@mrjasonroy/better-nextjs-cache-handler-redis](../cache-handler-redis) - Redis implementation (coming soon)
+- [@mrjasonroy/cache-components-cache-handler-redis](../cache-handler-redis) - Redis implementation

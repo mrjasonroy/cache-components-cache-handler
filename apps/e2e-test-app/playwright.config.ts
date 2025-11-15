@@ -23,7 +23,8 @@ export default defineConfig({
   webServer: {
     // IMPORTANT: Must use production build for cache testing
     // "use cache" and cache components don't persist in dev mode
-    command: "npm run build && npm run start",
+    // Build is done separately in CI, this just starts the server
+    command: "npm run start",
     url: "http://localhost:3000",
     reuseExistingServer: !process.env.CI,
     timeout: 120 * 1000,

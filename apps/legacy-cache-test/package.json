@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --port 3002",
     "build": "next build",
-    "start": "next start --port 3002"
+    "start": "next start --port 3002",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@mrjasonroy/cache-components-cache-handler": "workspace:*",
@@ -14,9 +15,9 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20",
+    "@types/node": "^22.10.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "typescript": "^5"
+    "typescript": "^5.7.2"
   }
 }

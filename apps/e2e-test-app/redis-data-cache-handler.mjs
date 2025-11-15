@@ -1,4 +1,4 @@
-import { createRedisDataCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler";
+import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 import { createClient } from "redis";
 
 // Create Redis client

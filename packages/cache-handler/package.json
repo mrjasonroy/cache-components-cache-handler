@@ -1,6 +1,6 @@
 {
   "name": "@mrjasonroy/cache-components-cache-handler",
-  "version": "0.0.1",
+  "version": "16.0.0",
   "description": "Cache handler for Next.js 16+ with support for 'use cache' directive and Cache Components",
   "author": "Jason Roy",
   "license": "MIT",
@@ -34,7 +34,7 @@
   },
   "keywords": ["nextjs", "next", "cache", "cache-handler", "use-cache", "isr", "revalidation"],
   "peerDependencies": {
-    "next": ">=16.0.0"
+    "next": "~16.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
@@ -43,5 +43,14 @@
   },
   "engines": {
     "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrjasonroy/cache-components-cache-handler",
+    "directory": "packages/cache-handler"
+  },
+  "homepage": "https://github.com/mrjasonroy/cache-components-cache-handler#readme",
+  "bugs": {
+    "url": "https://github.com/mrjasonroy/cache-components-cache-handler/issues"
   }
 }

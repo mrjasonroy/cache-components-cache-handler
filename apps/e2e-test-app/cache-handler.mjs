@@ -1,4 +1,4 @@
-import { MemoryCacheHandler } from "@mrjasonroy/better-nextjs-cache-handler";
+import { MemoryCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 // Next.js expects a class that it will instantiate
 export default class NextCacheHandler extends MemoryCacheHandler {

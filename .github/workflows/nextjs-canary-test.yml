@@ -1,0 +1,205 @@
+name: Next.js Canary Compatibility Test
+
+on:
+  schedule:
+    # Run daily at 06:00 UTC (after Next.js canary releases)
+    - cron: "0 6 * * *"
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  test-canary:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nextjs-version:
+          - canary
+          - rc
+          - latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Get Next.js version info
+        id: nextjs_info
+        run: |
+          VERSION=$(npm view next@${{ matrix.nextjs-version }} version)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Testing with Next.js ${{ matrix.nextjs-version }}: $VERSION"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Next.js ${{ matrix.nextjs-version }}
+        run: |
+          # Update Next.js in apps to test version
+          cd apps/e2e-test-app
+          pnpm add next@${{ matrix.nextjs-version }}
+          cd ../..
+
+          cd apps/legacy-cache-test
+          pnpm add next@${{ matrix.nextjs-version }}
+          cd ../..
+
+          pnpm install
+
+      - name: Build packages
+        id: build
+        run: pnpm build
+        continue-on-error: true
+
+      - name: Run unit tests
+        id: unit_tests
+        if: steps.build.outcome == 'success'
+        run: pnpm test
+        continue-on-error: true
+
+      - name: Typecheck
+        id: typecheck
+        if: steps.build.outcome == 'success'
+        run: pnpm typecheck
+        continue-on-error: true
+
+      - name: Install Playwright browsers
+        if: steps.build.outcome == 'success'
+        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+
+      - name: Build e2e app
+        id: build_e2e
+        if: steps.build.outcome == 'success'
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+        continue-on-error: true
+
+      - name: Run e2e tests with memory cache
+        id: test_memory
+        if: steps.build_e2e.outcome == 'success'
+        run: |
+          cd apps/e2e-test-app
+          pnpm test:e2e
+        continue-on-error: true
+
+      - name: Start Redis
+        if: steps.build_e2e.outcome == 'success'
+        run: docker compose up -d
+
+      - name: Build e2e app with Redis
+        id: build_redis
+        if: steps.build_e2e.outcome == 'success'
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+        continue-on-error: true
+
+      - name: Run e2e tests with Redis
+        id: test_redis
+        if: steps.build_redis.outcome == 'success'
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cd apps/e2e-test-app
+          pnpm test:e2e
+        continue-on-error: true
+
+      - name: Stop Docker
+        if: always()
+        run: docker compose down
+
+      - name: Report Results
+        if: always()
+        run: |
+          echo "## Next.js ${{ matrix.nextjs-version }} (${{ steps.nextjs_info.outputs.version }}) Test Results"
+          echo ""
+          echo "| Test | Status |"
+          echo "|------|--------|"
+          echo "| Build | ${{ steps.build.outcome }} |"
+          echo "| Unit Tests | ${{ steps.unit_tests.outcome }} |"
+          echo "| Typecheck | ${{ steps.typecheck.outcome }} |"
+          echo "| E2E Build | ${{ steps.build_e2e.outcome }} |"
+          echo "| Memory Tests | ${{ steps.test_memory.outcome }} |"
+          echo "| Redis Tests | ${{ steps.test_redis.outcome }} |"
+
+          # Fail ONLY if testing 'latest' (official release)
+          if [ "${{ matrix.nextjs-version }}" = "latest" ]; then
+            if [ "${{ steps.build.outcome }}" != "success" ] || \
+               [ "${{ steps.unit_tests.outcome }}" != "success" ] || \
+               [ "${{ steps.test_memory.outcome }}" != "success" ] || \
+               [ "${{ steps.test_redis.outcome }}" != "success" ]; then
+              echo ""
+              echo "❌ CRITICAL: Tests failed against official Next.js release!"
+              exit 1
+            fi
+          else
+            # Canary/RC failures are warnings only
+            if [ "${{ steps.build.outcome }}" != "success" ] || \
+               [ "${{ steps.unit_tests.outcome }}" != "success" ] || \
+               [ "${{ steps.test_memory.outcome }}" != "success" ] || \
+               [ "${{ steps.test_redis.outcome }}" != "success" ]; then
+              echo ""
+              echo "⚠️  Warning: Tests failed against ${{ matrix.nextjs-version }}"
+              echo "This is expected and provides early warning of potential issues."
+            else
+              echo ""
+              echo "✅ All tests passed against ${{ matrix.nextjs-version }}!"
+            fi
+          fi
+
+  create-issue-on-canary-failure:
+    runs-on: ubuntu-latest
+    needs: test-canary
+    if: failure() && github.event_name == 'schedule'
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create issue for canary failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = '⚠️ Next.js Canary/RC Compatibility Issue Detected';
+            const body = `## Next.js Canary Compatibility Test Failed
+
+            The daily canary compatibility test has detected potential issues with upcoming Next.js versions.
+
+            **Action Required:**
+            1. Review the [workflow run](${context.payload.repository.html_url}/actions/runs/${context.runId})
+            2. Determine if this is a breaking change in Next.js
+            3. Plan for compatibility updates if needed
+
+            **Note:** This is an early warning. The failure is expected and won't block current releases.
+
+            ---
+            *Auto-generated by [nextjs-canary-test workflow](${context.payload.repository.html_url}/actions/workflows/nextjs-canary-test.yml)*`;
+
+            // Check if issue already exists
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'nextjs-canary,automated'
+            });
+
+            if (issues.data.length === 0) {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['nextjs-canary', 'automated', 'needs-investigation']
+              });
+            }

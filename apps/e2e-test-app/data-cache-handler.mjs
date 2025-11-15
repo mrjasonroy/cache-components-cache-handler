@@ -12,7 +12,9 @@ let handler;
 if (cacheType === "redis") {
   // Redis handler
   const { createClient } = await import("redis");
-  const { createRedisDataCacheHandler } = await import("@mrjasonroy/better-nextjs-cache-handler");
+  const { createRedisDataCacheHandler } = await import(
+    "@mrjasonroy/cache-components-cache-handler"
+  );
 
   const redis = createClient({
     url: process.env.REDIS_URL || "redis://localhost:6379",
@@ -39,7 +41,9 @@ if (cacheType === "redis") {
   });
 } else {
   // Memory handler (default)
-  const { createMemoryDataCacheHandler } = await import("@mrjasonroy/better-nextjs-cache-handler");
+  const { createMemoryDataCacheHandler } = await import(
+    "@mrjasonroy/cache-components-cache-handler"
+  );
 
   handler = createMemoryDataCacheHandler({
     maxSize: 100 * 1024 * 1024, // 100MB

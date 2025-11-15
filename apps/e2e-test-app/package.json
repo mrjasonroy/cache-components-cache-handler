@@ -10,11 +10,12 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:redis": "CACHE_HANDLER=redis playwright test",
     "build:redis": "CACHE_HANDLER=redis next build",
-    "start:redis": "CACHE_HANDLER=redis next start"
+    "start:redis": "CACHE_HANDLER=redis next start",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@mrjasonroy/cache-components-cache-handler": "workspace:*",
-    "next": "^16.0.0",
+    "next": "^16.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "redis": "^5.0.0"
