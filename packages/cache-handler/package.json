@@ -1,6 +1,6 @@
 {
   "name": "@mrjasonroy/cache-components-cache-handler",
-  "version": "16.0.0-alpha.2",
+  "version": "16.0.0-alpha.3",
   "description": "Cache handler for Next.js 16+ with support for 'use cache' directive and Cache Components",
   "author": "Jason Roy",
   "license": "MIT",
