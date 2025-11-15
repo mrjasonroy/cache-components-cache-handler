@@ -1,0 +1,15 @@
+# Code Owners - Automatically requested for review on PRs
+# Learn more: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything in the repo
+* @mrjasonroy
+
+# Package owners
+/packages/cache-handler/ @mrjasonroy
+
+# Workflow and CI/CD changes
+/.github/ @mrjasonroy
+
+# Documentation changes (can be reviewed by anyone)
+/docs/ @mrjasonroy
+*.md @mrjasonroy
