@@ -347,7 +347,6 @@ export function createMemoryDataCacheHandler(
         debug?.("set", cacheKey, "done", { size });
       } catch (err) {
         debug?.("set", cacheKey, "failed", err);
-        // TODO: store partial buffer with error after we retry 3 times
       } finally {
         resolvePending();
         pendingSets.delete(cacheKey);

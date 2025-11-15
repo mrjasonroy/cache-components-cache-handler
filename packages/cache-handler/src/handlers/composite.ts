@@ -71,7 +71,6 @@ export class CompositeHandler implements CacheHandler {
         }
       } catch (error) {
         // Log error but continue to next handler
-        // In production, you'd use a proper logger here
         console.error(`Handler ${handler.name} failed:`, error);
       }
     }

@@ -145,6 +145,15 @@ This project is AI-friendly and contributor-friendly.
 - **For AI Agents:** See [CLAUDE.md](./CLAUDE.md) for instructions
 - **For Humans:** See [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## For Maintainers
+
+Publishing and release documentation:
+
+- [First Publish](./docs/publishing/FIRST_PUBLISH.md) - One-time setup for npm
+- [Automated Releases](./docs/publishing/AUTOMATED_RELEASE.md) - Automated release workflow
+- [Prerelease Versions](./docs/publishing/PRERELEASE.md) - Alpha, beta, and RC releases
+- [Release Checklist](./docs/publishing/RELEASE.md) - Complete release process
+
 ## License
 
 MIT © [Jason Roy](https://github.com/mrjasonroy)
