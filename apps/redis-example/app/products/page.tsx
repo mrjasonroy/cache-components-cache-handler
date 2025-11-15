@@ -28,11 +28,17 @@ export default async function ProductsPage() {
     <div>
       <h1>Products (Cached)</h1>
 
-      <p><Link href="/">← Back to home</Link></p>
+      <p>
+        <Link href="/">← Back to home</Link>
+      </p>
 
-      <div style={{ background: "#f0f0f0", padding: "1rem", margin: "1rem 0", borderRadius: "4px" }}>
+      <div
+        style={{ background: "#f0f0f0", padding: "1rem", margin: "1rem 0", borderRadius: "4px" }}
+      >
         <h2>Product List:</h2>
-        <p><strong>Fetched at:</strong> {timestamp}</p>
+        <p>
+          <strong>Fetched at:</strong> {timestamp}
+        </p>
         <ul>
           {products.map((product) => (
             <li key={product.id}>
@@ -42,9 +48,13 @@ export default async function ProductsPage() {
         </ul>
       </div>
 
-      <div style={{ background: "#e3f2fd", padding: "1rem", margin: "1rem 0", borderRadius: "4px" }}>
+      <div
+        style={{ background: "#e3f2fd", padding: "1rem", margin: "1rem 0", borderRadius: "4px" }}
+      >
         <h3>🏷️ Tagged Cache Revalidation</h3>
-        <p>This data is cached with tag: <code>products</code></p>
+        <p>
+          This data is cached with tag: <code>products</code>
+        </p>
         <form action={handleRevalidate}>
           <button
             type="submit"
@@ -60,7 +70,9 @@ export default async function ProductsPage() {
             Revalidate Products Cache
           </button>
         </form>
-        <p><small>Click the button to invalidate the cache, then refresh to see new timestamp</small></p>
+        <p>
+          <small>Click the button to invalidate the cache, then refresh to see new timestamp</small>
+        </p>
       </div>
     </div>
   );
