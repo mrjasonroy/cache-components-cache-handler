@@ -96,11 +96,48 @@ chore: update dependencies
 
 ## Release Process
 
-1. Update version in package.json files
-2. Update CHANGELOG.md
+### First-Time Setup: GitHub Environment
+
+Before you can publish, configure the "publish" environment in GitHub with manual approval:
+
+1. Go to **Settings** → **Environments** in your GitHub repository
+2. Click **New environment** and name it `publish`
+3. Under **Deployment protection rules**, enable **Required reviewers**
+4. Add yourself (or trusted maintainers) as a required reviewer
+5. Click **Save protection rules**
+
+This ensures all npm publishes require manual approval for security.
+
+### Publishing a Release
+
+1. Update version in `packages/cache-handler/package.json`
+2. Commit: `git commit -m "chore: bump version to 16.0.1"`
 3. Create git tag: `git tag v16.0.1`
-4. Push tag: `git push origin v16.0.1`
-5. GitHub Actions will run tests and publish to npm
+4. Push commits and tag: `git push origin main --tags`
+5. GitHub Actions will:
+   - Run all tests (lint, typecheck, unit, e2e)
+   - Wait for your approval (check **Actions** tab)
+   - Publish to npm after approval
+
+### Publishing Pre-releases
+
+For alpha/beta/rc versions:
+
+```bash
+# Alpha
+git tag v16.0.1-alpha.0
+git push origin v16.0.1-alpha.0
+
+# Beta
+git tag v16.0.1-beta.0
+git push origin v16.0.1-beta.0
+
+# Release Candidate
+git tag v16.0.1-rc.0
+git push origin v16.0.1-rc.0
+```
+
+Pre-releases are published with corresponding npm dist-tags (`@alpha`, `@beta`, `@rc`).
 
 ## CI/CD
 
