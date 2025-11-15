@@ -1,64 +1,41 @@
-# Pull Request
-
 ## Description
 
-<!-- Provide a brief description of the changes -->
+<!-- Describe what this PR does and why -->
 
 ## Type of Change
 
-<!-- Mark relevant options with an 'x' -->
+<!-- Mark the relevant option with an "x" -->
 
-- [ ] Bug fix (non-breaking change that fixes an issue)
-- [ ] New feature (non-breaking change that adds functionality)
+- [ ] Bug fix (non-breaking change which fixes an issue)
+- [ ] New feature (non-breaking change which adds functionality)
 - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
 - [ ] Documentation update
-- [ ] Code refactoring
-- [ ] Performance improvement
-- [ ] Test updates
-
-## Related Issues
-
-<!-- Link related issues: Fixes #123, Relates to #456 -->
-
-## Changes Made
-
-<!-- List the key changes -->
-
--
--
--
+- [ ] Chore (dependencies, CI, etc.)
 
 ## Testing
 
-<!-- Describe the testing you've done -->
+<!-- Describe the tests you ran and how to reproduce them -->
 
-- [ ] Unit tests pass (`pnpm test`)
-- [ ] E2E tests pass (if applicable) (`pnpm test:e2e`)
-- [ ] Lint checks pass (`pnpm lint`)
-- [ ] Type checks pass (`pnpm typecheck`)
-- [ ] Build succeeds (`pnpm build`)
-- [ ] Manual testing performed
-
-### Test Plan
-
-<!-- Describe how to test these changes -->
-
-## Screenshots (if applicable)
-
-<!-- Add screenshots to help explain your changes -->
+- [ ] All existing tests pass (`pnpm test`)
+- [ ] Added new tests for new functionality
+- [ ] Tested with memory cache handler
+- [ ] Tested with Redis cache handler (if applicable)
+- [ ] E2E tests pass (`pnpm test:e2e`)
 
 ## Checklist
 
-- [ ] My code follows the project's code style (Biome formatted)
-- [ ] I have performed a self-review of my code
-- [ ] I have commented my code, particularly in hard-to-understand areas
-- [ ] I have made corresponding changes to the documentation
-- [ ] My changes generate no new warnings or errors
+- [ ] My code follows the project's code style (`pnpm lint` passes)
+- [ ] I have run `pnpm format` to format my code
+- [ ] Type checking passes (`pnpm typecheck`)
+- [ ] I have updated the documentation accordingly
+- [ ] My changes generate no new warnings
 - [ ] I have added tests that prove my fix is effective or that my feature works
 - [ ] New and existing unit tests pass locally with my changes
-- [ ] I have checked `implementation/` docs and updated them if needed
-- [ ] Any dependent changes have been merged and published
 
-## Additional Notes
+## Related Issues
 
-<!-- Any additional information for reviewers -->
+<!-- Link to related issues, e.g., "Fixes #123" or "Closes #456" -->
+
+## Additional Context
+
+<!-- Add any other context about the PR here -->
