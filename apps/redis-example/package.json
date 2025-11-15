@@ -1,0 +1,26 @@
+{
+  "name": "redis-example",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "demo": "pnpm docker:up && sleep 2 && pnpm build && pnpm start"
+  },
+  "dependencies": {
+    "@mrjasonroy/cache-components-cache-handler": "workspace:*",
+    "ioredis": "^5.4.1",
+    "next": "^16.0.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "typescript": "^5.7.2"
+  }
+}
