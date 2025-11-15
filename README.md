@@ -22,6 +22,7 @@ Backends:
 - Memory (development)
 - Redis (production, distributed)
 - Valkey (Redis-compatible)
+- AWS ElastiCache (production, managed)
 
 ## Install
 
@@ -83,6 +84,48 @@ export default {
   },
 };
 ```
+
+### AWS ElastiCache (Production)
+
+```bash
+npm install ioredis
+```
+
+```javascript
+// data-cache-handler.mjs
+import Redis from "ioredis";
+import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+const redis = new Redis({
+  host: process.env.ELASTICACHE_ENDPOINT,
+  port: 6379,
+  tls: {}, // Enable TLS for in-transit encryption
+  // For IAM authentication, configure username/password
+  username: process.env.ELASTICACHE_USER,
+  password: process.env.ELASTICACHE_AUTH_TOKEN,
+});
+
+export default createRedisDataCacheHandler({
+  redis,
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
+});
+```
+
+```javascript
+// next.config.js
+export default {
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+  },
+};
+```
+
+**Environment Variables:**
+- `ELASTICACHE_ENDPOINT` - Your ElastiCache cluster endpoint
+- `ELASTICACHE_USER` - Username for IAM auth (optional)
+- `ELASTICACHE_AUTH_TOKEN` - Auth token or password
 
 ## Usage
 
