@@ -1,15 +1,14 @@
-name: Publish to NPM
+name: Publish to npm
 
 on:
+  release:
+    types: [published]
   push:
     tags:
-      - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      version:
-        description: "Version to publish (e.g., 16.0.1)"
-        required: true
-        type: string
+      - 'v*.*.*'
+      - 'v*.*.*-alpha.*'
+      - 'v*.*.*-beta.*'
+      - 'v*.*.*-rc.*'
 
 jobs:
   test:
@@ -26,18 +25,17 @@ jobs:
           - 6379:6379
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: "pnpm"
+          node-version: '22'
+          cache: 'pnpm'
 
       - name: Install dependencies
         run: pnpm install
@@ -51,48 +49,80 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Run e2e tests (memory)
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Install Playwright browsers
+        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+
+      - name: Build e2e app
         run: |
           cd apps/e2e-test-app
           pnpm build
-          pnpm start &
-          sleep 10
+
+      - name: Run e2e tests with memory cache
+        run: |
+          cd apps/e2e-test-app
           pnpm test:e2e
 
-      - name: Run e2e tests (Redis)
+      - name: Build e2e app with Redis
         env:
           CACHE_HANDLER: redis
           REDIS_URL: redis://localhost:6379
         run: |
-          lsof -ti:3000 | xargs kill -9 || true
-          sleep 2
           cd apps/e2e-test-app
           pnpm build
-          pnpm start &
-          sleep 10
+
+      - name: Run e2e tests with Redis
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cd apps/e2e-test-app
           pnpm test:e2e
 
   publish:
     needs: test
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write # Required for npm provenance
+      contents: read
+      id-token: write # Required for npm provenance and trusted publishing
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify git tag matches package version
+        run: |
+          # Extract version from git tag (v16.0.0-alpha.0 -> 16.0.0-alpha.0)
+          GIT_TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+
+          # Get version from package.json
+          PACKAGE_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+
+          echo "Git tag version: $GIT_TAG_VERSION"
+          echo "Package.json version: $PACKAGE_VERSION"
+
+          # Verify they match
+          if [ "$GIT_TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "❌ ERROR: Version mismatch!"
+            echo "Git tag: v$GIT_TAG_VERSION"
+            echo "package.json: $PACKAGE_VERSION"
+            echo "These must match. The git tag is the source of truth."
+            exit 1
+          fi
+
+          echo "✅ Versions match: $PACKAGE_VERSION"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: "pnpm"
-          registry-url: "https://registry.npmjs.org"
+          node-version: '22'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: pnpm install
@@ -100,44 +130,50 @@ jobs:
       - name: Build packages
         run: pnpm build
 
-      - name: Publish @mrjasonroy/cache-components-cache-handler
-        working-directory: packages/cache-handler
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --access public --provenance
-
-      - name: Publish @mrjasonroy/cache-components-cache-handler-redis
-        working-directory: packages/cache-handler-redis
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          echo "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
-          npm publish --access public --provenance
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Determine npm dist-tag
+        id: dist_tag
         run: |
           VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
-          NEXTJS_VERSION=$(node -p "require('./package.json').devDependencies.next")
+          if [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "tag=alpha" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-beta"* ]]; then
+            echo "tag=beta" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-rc"* ]]; then
+            echo "tag=rc" >> $GITHUB_OUTPUT
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+          fi
+          echo "Publishing with tag: $(cat $GITHUB_OUTPUT | grep tag= | cut -d= -f2)"
 
-          gh release create "v${VERSION}" \
-            --title "v${VERSION} - Next.js ${NEXTJS_VERSION}" \
-            --notes "## Changes
+      - name: Publish to npm (with trusted publishing)
+        working-directory: packages/cache-handler
+        run: npm publish --access public --provenance --tag ${{ steps.dist_tag.outputs.tag }}
 
-- Compatible with Next.js ${NEXTJS_VERSION}
-- All e2e tests passing
-- Memory and Redis cache handlers tested
+      - name: Verify published
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+          DIST_TAG="${{ steps.dist_tag.outputs.tag }}"
+          echo "✅ Published @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION"
+          echo "📦 npm dist-tag: $DIST_TAG"
+          npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
 
-## Installation
+      - name: Comment on release
+        if: github.event_name == 'release'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = require('./packages/cache-handler/package.json').version;
+            const distTag = '${{ steps.dist_tag.outputs.tag }}';
+            const releaseId = context.payload.release.id;
 
-\`\`\`bash
-npm install @mrjasonroy/cache-components-cache-handler@${VERSION}
-\`\`\`
+            let installCmd = `npm install @mrjasonroy/cache-components-cache-handler@${version}`;
+            if (distTag !== 'latest') {
+              installCmd += `\n# Or install by tag:\nnpm install @mrjasonroy/cache-components-cache-handler@${distTag}`;
+            }
 
-See [README](https://github.com/${{ github.repository }}/blob/main/README.md) for usage instructions.
-
----
-*Published automatically by [publish workflow](https://github.com/${{ github.repository }}/actions/workflows/publish.yml)*"
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: releaseId,
+              body: `✅ Successfully published to npm!\n\n📦 **dist-tag**: \`${distTag}\`\n\n\`\`\`bash\n${installCmd}\n\`\`\`\n\nView on npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler/v/${version}`
+            });

@@ -1,0 +1,115 @@
+name: Version Bump
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - prerelease-alpha
+          - prerelease-beta
+          - prerelease-rc
+          - graduate
+          - specific
+      specific_version:
+        description: 'Specific version (e.g., 16.1.0 or 16.0.0-alpha.0) - only used if "specific" is selected'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: version
+        run: |
+          cd packages/cache-handler
+
+          if [ "${{ inputs.version }}" = "specific" ]; then
+            NEW_VERSION="${{ inputs.specific_version }}"
+            npm version $NEW_VERSION --no-git-tag-version
+          elif [ "${{ inputs.version }}" = "prerelease-alpha" ]; then
+            NEW_VERSION=$(npm version prerelease --preid=alpha --no-git-tag-version | sed 's/v//')
+          elif [ "${{ inputs.version }}" = "prerelease-beta" ]; then
+            NEW_VERSION=$(npm version prerelease --preid=beta --no-git-tag-version | sed 's/v//')
+          elif [ "${{ inputs.version }}" = "prerelease-rc" ]; then
+            NEW_VERSION=$(npm version prerelease --preid=rc --no-git-tag-version | sed 's/v//')
+          elif [ "${{ inputs.version }}" = "graduate" ]; then
+            # Remove prerelease tags (16.0.0-alpha.0 -> 16.0.0)
+            CURRENT_VERSION=$(node -p "require('./package.json').version")
+            NEW_VERSION=$(echo $CURRENT_VERSION | sed 's/-.*$//')
+            npm version $NEW_VERSION --no-git-tag-version
+          else
+            NEW_VERSION=$(npm version ${{ inputs.version }} --no-git-tag-version | sed 's/v//')
+          fi
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+          # Determine npm dist-tag
+          if [[ "$NEW_VERSION" == *"-alpha"* ]]; then
+            echo "dist_tag=alpha" >> $GITHUB_OUTPUT
+          elif [[ "$NEW_VERSION" == *"-beta"* ]]; then
+            echo "dist_tag=beta" >> $GITHUB_OUTPUT
+          elif [[ "$NEW_VERSION" == *"-rc"* ]]; then
+            echo "dist_tag=rc" >> $GITHUB_OUTPUT
+          else
+            echo "dist_tag=latest" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update lockfile
+        run: pnpm install
+
+      - name: Commit version bump
+        run: |
+          git add .
+          git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
+          git push origin main
+
+      - name: Create and push tag
+        run: |
+          git tag v${{ steps.version.outputs.new_version }}
+          git push origin v${{ steps.version.outputs.new_version }}
+
+      - name: Summary
+        run: |
+          echo "✅ Version bumped to ${{ steps.version.outputs.new_version }}"
+          echo "📦 Tag v${{ steps.version.outputs.new_version }} created"
+          echo "🏷️  npm dist-tag: ${{ steps.version.outputs.dist_tag }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Go to: https://github.com/${{ github.repository }}/releases/new"
+          echo "2. Select tag: v${{ steps.version.outputs.new_version }}"
+          if [[ "${{ steps.version.outputs.dist_tag }}" != "latest" ]]; then
+            echo "3. ⚠️  Mark as pre-release (check the box)"
+          else
+            echo "3. Generate release notes and publish"
+          fi
+          echo "4. Publishing to npm will happen automatically with tag: ${{ steps.version.outputs.dist_tag }}"

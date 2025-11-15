@@ -1,84 +1,60 @@
-# Publish to npm - Quick Start
+# Automated Publishing (Recommended)
 
-Follow these steps **IN ORDER** to publish v16.0.0 to npm.
+**This project uses GitHub Actions for automated publishing.**
 
-## Step 1: Login to npm
+See [AUTOMATED_RELEASE.md](./AUTOMATED_RELEASE.md) for the full automated workflow.
+
+## Quick Start: Publish a New Version
+
+### 1. First Time Only
+
+If this is the first publish, see [FIRST_PUBLISH.md](./FIRST_PUBLISH.md).
+
+After that, no setup needed - uses npm Trusted Publishing!
+
+### 2. Bump Version
+
+Go to: https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/version-bump.yml
+
+Click "Run workflow" and select:
+- **patch**: Bug fixes (16.0.0 → 16.0.1)
+- **minor**: Features (16.0.0 → 16.1.0)
+- **major**: Breaking changes (16.0.0 → 17.0.0)
+- **specific**: Enter exact version (e.g., 16.1.0)
+
+### 3. Create GitHub Release
+
+1. Workflow creates tag automatically
+2. Go to: https://github.com/mrjasonroy/cache-components-cache-handler/releases/new
+3. Select the new tag
+4. Click "Generate release notes"
+5. Click "Publish release"
+
+### 4. Publishing Happens Automatically!
+
+- Runs all tests (lint, typecheck, unit, e2e)
+- Publishes to npm with provenance
+- Comments on release with install command
+- Done! ✨
+
+## Manual Publishing (Not Recommended)
+
+Only use if GitHub Actions is down:
 
 ```bash
-npm login
-```
-
-Enter your npm credentials. If you don't have an account:
-- Go to https://www.npmjs.com/signup
-- Create account and verify email
-- Then run `npm login`
-
-Verify you're logged in:
-```bash
-npm whoami
-```
-
-## Step 2: Final Build
-
-```bash
-pnpm clean
-pnpm install
+# Build
 pnpm build
-```
 
-All should complete successfully.
-
-## Step 3: Publish Package
-
-```bash
+# Publish
 cd packages/cache-handler
-
-# DRY RUN first (doesn't actually publish)
-npm publish --dry-run --access public
-
-# If dry run looks good, PUBLISH FOR REAL
 npm publish --access public
+
+# Tag
+git tag v16.0.1
+git push origin v16.0.1
 ```
 
-**Expected output**:
-```
-+ @mrjasonroy/cache-components-cache-handler@16.0.0
-```
-
-## Step 4: Verify Published
-
-```bash
-# Check it's live
-npm view @mrjasonroy/cache-components-cache-handler
-```
-
-Visit npm:
-- https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler
-
-## Step 5: Push to GitHub
-
-```bash
-cd ../..  # Back to root
-
-# Push commits
-git push origin main
-
-# Create and push tag
-git tag v16.0.0
-git push origin v16.0.0
-```
-
-## Step 6: Create GitHub Release
-
-- Go to: https://github.com/mrjasonroy/cache-components-cache-handler/releases/new
-- Tag: `v16.0.0`
-- Title: `v16.0.0 - Initial Release`
-- Body: See NPM_SETUP.md for suggested release notes
-- Click "Publish release"
-
-## Done! 🎉
-
-Your packages are now live on npm!
+**But you shouldn't need to!** Use the automated workflow above.
 
 Test installation:
 ```bash
