@@ -17,12 +17,11 @@ async function getProducts() {
 
 async function handleRevalidate() {
   "use server";
-  revalidateTag("products");
+  revalidateTag("products", "max");
 }
 
 export default async function ProductsPage() {
   const products = await getProducts();
-  const timestamp = new Date().toISOString();
 
   return (
     <div>
@@ -36,9 +35,6 @@ export default async function ProductsPage() {
         style={{ background: "#f0f0f0", padding: "1rem", margin: "1rem 0", borderRadius: "4px" }}
       >
         <h2>Product List:</h2>
-        <p>
-          <strong>Fetched at:</strong> {timestamp}
-        </p>
         <ul>
           {products.map((product) => (
             <li key={product.id}>
@@ -71,7 +67,7 @@ export default async function ProductsPage() {
           </button>
         </form>
         <p>
-          <small>Click the button to invalidate the cache, then refresh to see new timestamp</small>
+          <small>Click the button to invalidate the cache, then refresh the page</small>
         </p>
       </div>
     </div>
