@@ -84,6 +84,7 @@ jobs:
   publish:
     needs: test
     runs-on: ubuntu-latest
+    environment: publish # Requires manual approval before publishing
     permissions:
       contents: read
       id-token: write # Required for npm provenance and trusted publishing
