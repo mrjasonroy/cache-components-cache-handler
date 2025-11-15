@@ -57,7 +57,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mrjasonroy/cache-components-cache-handler",
+    "url": "git+https://github.com/mrjasonroy/cache-components-cache-handler.git",
     "directory": "packages/cache-handler"
   },
   "homepage": "https://github.com/mrjasonroy/cache-components-cache-handler#readme",
