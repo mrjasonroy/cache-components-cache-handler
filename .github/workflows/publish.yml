@@ -124,6 +124,8 @@ jobs:
           node-version: '22'
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: pnpm install
@@ -146,9 +148,11 @@ jobs:
           fi
           echo "Publishing with tag: $(cat $GITHUB_OUTPUT | grep tag= | cut -d= -f2)"
 
-      - name: Publish to npm (with trusted publishing)
+      - name: Publish to npm
         working-directory: packages/cache-handler
-        run: npm publish --access public --provenance --tag ${{ steps.dist_tag.outputs.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag ${{ steps.dist_tag.outputs.tag }}
 
       - name: Verify published
         run: |
