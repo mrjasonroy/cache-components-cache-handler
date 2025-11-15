@@ -158,17 +158,77 @@ jobs:
           path: apps/e2e-test-app/playwright-report/
           retention-days: 7
 
+  test-valkey:
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    services:
+      valkey:
+        image: valkey/valkey:7-alpine
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Install Playwright browsers
+        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+
+      - name: Build e2e app with Valkey
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+
+      - name: Run e2e tests with Valkey
+        env:
+          CACHE_HANDLER: redis
+          REDIS_URL: redis://localhost:6379
+        run: |
+          cd apps/e2e-test-app
+          pnpm test:e2e
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-valkey
+          path: apps/e2e-test-app/playwright-report/
+          retention-days: 7
+
   test-summary:
     runs-on: ubuntu-latest
-    needs: [test-memory, test-redis]
+    needs: [test-memory, test-redis, test-valkey]
     if: always()
     steps:
       - name: Check test results
         run: |
           echo "Memory tests: ${{ needs.test-memory.result }}"
           echo "Redis tests: ${{ needs.test-redis.result }}"
+          echo "Valkey tests: ${{ needs.test-valkey.result }}"
 
-          if [ "${{ needs.test-memory.result }}" != "success" ] || [ "${{ needs.test-redis.result }}" != "success" ]; then
+          if [ "${{ needs.test-memory.result }}" != "success" ] || [ "${{ needs.test-redis.result }}" != "success" ] || [ "${{ needs.test-valkey.result }}" != "success" ]; then
             echo "❌ Some tests failed"
             exit 1
           else

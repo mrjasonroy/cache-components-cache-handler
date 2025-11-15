@@ -21,6 +21,7 @@ Implements Next.js 16+ caching APIs:
 Backends:
 - Memory (development)
 - Redis (production, distributed)
+- Valkey (Redis-compatible)
 
 ## Install
 
