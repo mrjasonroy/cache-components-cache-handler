@@ -57,9 +57,37 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-  test-memory:
+  e2e-tests:
     runs-on: ubuntu-latest
     needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: memory
+            cache_handler: memory
+            service_image: ""
+            redis_url: ""
+
+          - backend: redis
+            cache_handler: redis
+            service_image: redis:7-alpine
+            redis_url: redis://localhost:6379
+
+          - backend: valkey
+            cache_handler: redis
+            service_image: valkey/valkey:7-alpine
+            redis_url: redis://localhost:6379
+
+    services:
+      cache-service:
+        image: ${{ matrix.service_image || 'alpine:latest' }}
+        ports:
+          - 6379:6379
+        options: >-
+          ${{ matrix.service_image && contains(matrix.service_image, 'redis') && '--health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
+          ${{ matrix.service_image && contains(matrix.service_image, 'valkey') && '--health-cmd "valkey-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -82,11 +110,17 @@ jobs:
         run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
 
       - name: Build e2e app
+        env:
+          CACHE_HANDLER: ${{ matrix.cache_handler }}
+          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm build
 
-      - name: Run e2e tests with memory cache
+      - name: Run e2e tests
+        env:
+          CACHE_HANDLER: ${{ matrix.cache_handler }}
+          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
@@ -95,23 +129,28 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-memory
+          name: playwright-report-${{ matrix.backend }}
           path: apps/e2e-test-app/playwright-report/
           retention-days: 7
 
-  test-redis:
+  e2e-elasticache:
     runs-on: ubuntu-latest
     needs: unit-tests
     services:
-      redis:
-        image: redis:7-alpine
+      localstack:
+        image: localstack/localstack:latest
+        env:
+          SERVICES: elasticache
+          DEBUG: 1
+          LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+        ports:
+          - 4566:4566
+          - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "curl -f http://localhost:4566/_localstack/health || exit 1"
           --health-interval 10s
           --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+          --health-retries 10
 
     steps:
       - uses: actions/checkout@v4
@@ -128,64 +167,55 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build packages
-        run: pnpm build
-
-      - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
-
-      - name: Build e2e app with Redis
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
+      - name: Install AWS CLI
         run: |
-          cd apps/e2e-test-app
-          pnpm build
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip -q awscliv2.zip
+          sudo ./aws/install --update
+          aws --version
 
-      - name: Run e2e tests with Redis
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
+      - name: Configure AWS CLI for LocalStack
         run: |
-          cd apps/e2e-test-app
-          pnpm test:e2e
+          aws configure set aws_access_key_id test --profile localstack
+          aws configure set aws_secret_access_key test --profile localstack
+          aws configure set region us-east-1 --profile localstack
 
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-redis
-          path: apps/e2e-test-app/playwright-report/
-          retention-days: 7
+      - name: Wait for LocalStack to be ready
+        run: |
+          echo "Waiting for LocalStack..."
+          for i in {1..30}; do
+            if curl -s http://localhost:4566/_localstack/health | grep -q '"elasticache"'; then
+              echo "LocalStack ElastiCache is ready!"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          curl -s http://localhost:4566/_localstack/health | jq .
 
-  test-valkey:
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    services:
-      valkey:
-        image: valkey/valkey:7-alpine
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
+      - name: Create ElastiCache cluster in LocalStack
+        env:
+          AWS_ENDPOINT_URL: http://localhost:4566
+        run: |
+          # Create ElastiCache cluster
+          aws elasticache create-cache-cluster \
+            --cache-cluster-id test-cluster \
+            --engine redis \
+            --cache-node-type cache.t3.micro \
+            --num-cache-nodes 1 \
+            --profile localstack \
+            --endpoint-url http://localhost:4566 || true
 
-    steps:
-      - uses: actions/checkout@v4
+          # Wait for cluster to be available
+          echo "Waiting for cluster to be available..."
+          sleep 5
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Install dependencies
-        run: pnpm install
+          # Get cluster info
+          aws elasticache describe-cache-clusters \
+            --cache-cluster-id test-cluster \
+            --show-cache-node-info \
+            --profile localstack \
+            --endpoint-url http://localhost:4566 || true
 
       - name: Build packages
         run: pnpm build
@@ -193,82 +223,30 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
 
-      - name: Build e2e app with Valkey
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm build
-
-      - name: Run e2e tests with Valkey
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm test:e2e
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-valkey
-          path: apps/e2e-test-app/playwright-report/
-          retention-days: 7
-
-  test-elasticache:
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    # Only run if ElastiCache endpoint is configured
-    if: vars.ELASTICACHE_ENDPOINT != ''
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
-
-      - name: Build e2e app with ElastiCache
+      - name: Build e2e app with ElastiCache (LocalStack)
         env:
           CACHE_HANDLER: elasticache
-          ELASTICACHE_ENDPOINT: ${{ vars.ELASTICACHE_ENDPOINT }}
-          ELASTICACHE_PORT: ${{ vars.ELASTICACHE_PORT || '6379' }}
-          ELASTICACHE_USE_IAM: ${{ vars.ELASTICACHE_USE_IAM || 'false' }}
-          ELASTICACHE_TLS: ${{ vars.ELASTICACHE_TLS || 'true' }}
-          ELASTICACHE_AUTH_TOKEN: ${{ secrets.ELASTICACHE_AUTH_TOKEN }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ELASTICACHE_ENDPOINT: localhost
+          ELASTICACHE_PORT: "6379"
+          ELASTICACHE_USE_IAM: "false"
+          ELASTICACHE_TLS: "false"
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
         run: |
           cd apps/e2e-test-app
           pnpm build
 
-      - name: Run e2e tests with ElastiCache
+      - name: Run e2e tests with ElastiCache (LocalStack)
         env:
           CACHE_HANDLER: elasticache
-          ELASTICACHE_ENDPOINT: ${{ vars.ELASTICACHE_ENDPOINT }}
-          ELASTICACHE_PORT: ${{ vars.ELASTICACHE_PORT || '6379' }}
-          ELASTICACHE_USE_IAM: ${{ vars.ELASTICACHE_USE_IAM || 'false' }}
-          ELASTICACHE_TLS: ${{ vars.ELASTICACHE_TLS || 'true' }}
-          ELASTICACHE_AUTH_TOKEN: ${{ secrets.ELASTICACHE_AUTH_TOKEN }}
-          AWS_REGION: ${{ vars.AWS_REGION }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          ELASTICACHE_ENDPOINT: localhost
+          ELASTICACHE_PORT: "6379"
+          ELASTICACHE_USE_IAM: "false"
+          ELASTICACHE_TLS: "false"
+          AWS_REGION: us-east-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
@@ -283,31 +261,17 @@ jobs:
 
   test-summary:
     runs-on: ubuntu-latest
-    needs: [test-memory, test-redis, test-valkey, test-elasticache]
+    needs: [e2e-tests, e2e-elasticache]
     if: always()
     steps:
       - name: Check test results
         run: |
-          echo "Memory tests: ${{ needs.test-memory.result }}"
-          echo "Redis tests: ${{ needs.test-redis.result }}"
-          echo "Valkey tests: ${{ needs.test-valkey.result }}"
-          echo "ElastiCache tests: ${{ needs.test-elasticache.result }}"
+          echo "E2E Matrix Tests: ${{ needs.e2e-tests.result }}"
+          echo "ElastiCache Tests: ${{ needs.e2e-elasticache.result }}"
 
-          # ElastiCache tests are optional (skipped if not configured)
-          if [ "${{ needs.test-elasticache.result }}" == "skipped" ]; then
-            echo "⚠️ ElastiCache tests skipped (not configured)"
-          fi
-
-          # Fail if any required tests failed (memory, redis, valkey)
-          if [ "${{ needs.test-memory.result }}" != "success" ] || [ "${{ needs.test-redis.result }}" != "success" ] || [ "${{ needs.test-valkey.result }}" != "success" ]; then
-            echo "❌ Some required tests failed"
+          if [ "${{ needs.e2e-tests.result }}" != "success" ] || [ "${{ needs.e2e-elasticache.result }}" != "success" ]; then
+            echo "❌ Some tests failed"
             exit 1
           fi
 
-          # Fail if ElastiCache tests ran but failed
-          if [ "${{ needs.test-elasticache.result }}" == "failure" ]; then
-            echo "❌ ElastiCache tests failed"
-            exit 1
-          fi
-
-          echo "✅ All tests passed!"
+          echo "✅ All tests passed (memory, redis, valkey, elasticache)!"
