@@ -78,15 +78,29 @@ if (cacheType === "redis") {
     config.password = process.env.ELASTICACHE_AUTH_TOKEN;
   }
 
-  const redis = new Redis(config);
+  const ioredisClient = new Redis(config);
 
-  redis.on("error", (err) => {
+  ioredisClient.on("error", (err) => {
     console.error("[ElastiCache] Connection error:", err);
   });
 
-  redis.on("connect", () => {
+  ioredisClient.on("connect", () => {
     console.log("[ElastiCache] Connected successfully to", endpoint);
   });
+
+  // Wrap ioredis to provide node-redis compatible API
+  // ioredis uses lowercase methods (hget, hset, hgetall)
+  // createRedisDataCacheHandler expects node-redis API (hGet, hSet, hGetAll)
+  const redis = {
+    get: (key) => ioredisClient.get(key),
+    set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
+    del: (...keys) => ioredisClient.del(...keys),
+    exists: (...keys) => ioredisClient.exists(...keys),
+    ttl: (key) => ioredisClient.ttl(key),
+    hGet: (key, field) => ioredisClient.hget(key, field),
+    hSet: (key, field, value) => ioredisClient.hset(key, field, value),
+    hGetAll: (key) => ioredisClient.hgetall(key),
+  };
 
   handler = createRedisDataCacheHandler({
     redis,

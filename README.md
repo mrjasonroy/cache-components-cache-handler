@@ -134,7 +134,7 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = new Redis({
+const ioredisClient = new Redis({
   host: process.env.ELASTICACHE_ENDPOINT,
   port: 6379,
   tls: {}, // Enable TLS for in-transit encryption
@@ -142,6 +142,18 @@ const redis = new Redis({
   username: process.env.ELASTICACHE_USER,
   password: process.env.ELASTICACHE_AUTH_TOKEN,
 });
+
+// Wrap ioredis to provide node-redis compatible API
+const redis = {
+  get: (key) => ioredisClient.get(key),
+  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
+  del: (...keys) => ioredisClient.del(...keys),
+  exists: (...keys) => ioredisClient.exists(...keys),
+  ttl: (key) => ioredisClient.ttl(key),
+  hGet: (key, field) => ioredisClient.hget(key, field),
+  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
+  hGetAll: (key) => ioredisClient.hgetall(key),
+};
 
 export default createRedisDataCacheHandler({
   redis,
