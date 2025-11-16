@@ -71,7 +71,19 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+const ioredisClient = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+
+// Wrap ioredis to provide node-redis compatible API
+const redis = {
+  get: (key) => ioredisClient.get(key),
+  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
+  del: (...keys) => ioredisClient.del(...keys),
+  exists: (...keys) => ioredisClient.exists(...keys),
+  ttl: (key) => ioredisClient.ttl(key),
+  hGet: (key, field) => ioredisClient.hget(key, field),
+  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
+  hGetAll: (key) => ioredisClient.hgetall(key),
+};
 
 export default createRedisDataCacheHandler({
   redis,
@@ -103,11 +115,23 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-// Valkey is Redis-compatible, use the same client
-const valkey = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
+// Valkey is Redis-compatible, use ioredis client
+const ioredisClient = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
+
+// Wrap ioredis to provide node-redis compatible API
+const redis = {
+  get: (key) => ioredisClient.get(key),
+  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
+  del: (...keys) => ioredisClient.del(...keys),
+  exists: (...keys) => ioredisClient.exists(...keys),
+  ttl: (key) => ioredisClient.ttl(key),
+  hGet: (key, field) => ioredisClient.hget(key, field),
+  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
+  hGetAll: (key) => ioredisClient.hgetall(key),
+};
 
 export default createRedisDataCacheHandler({
-  redis: valkey,
+  redis,
   keyPrefix: "myapp:cache:",
   tagPrefix: "myapp:tags:",
 });

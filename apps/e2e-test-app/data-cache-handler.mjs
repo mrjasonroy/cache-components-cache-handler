@@ -10,27 +10,34 @@ console.log(`[DataCacheHandler] Using cache type: ${cacheType}`);
 let handler;
 
 if (cacheType === "redis") {
-  // Redis handler
-  const { createClient } = await import("redis");
+  // Redis/Valkey handler (using ioredis for consistency)
+  const Redis = (await import("ioredis")).default;
   const { createRedisDataCacheHandler } = await import(
     "@mrjasonroy/cache-components-cache-handler"
   );
 
-  const redis = createClient({
-    url: process.env.REDIS_URL || "redis://localhost:6379",
-  });
+  const url = process.env.REDIS_URL || "redis://localhost:6379";
+  const ioredisClient = new Redis(url);
 
-  redis.on("error", (err) => {
+  ioredisClient.on("error", (err) => {
     console.error("[Redis] Connection error:", err);
   });
 
-  try {
-    await redis.connect();
-    console.log("[Redis] Connected successfully");
-  } catch (error) {
-    console.error("[Redis] Failed to connect:", error);
-    throw error;
-  }
+  ioredisClient.on("connect", () => {
+    console.log("[Redis] Connected successfully to", url);
+  });
+
+  // Wrap ioredis to provide node-redis compatible API
+  const redis = {
+    get: (key) => ioredisClient.get(key),
+    set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
+    del: (...keys) => ioredisClient.del(...keys),
+    exists: (...keys) => ioredisClient.exists(...keys),
+    ttl: (key) => ioredisClient.ttl(key),
+    hGet: (key, field) => ioredisClient.hget(key, field),
+    hSet: (key, field, value) => ioredisClient.hset(key, field, value),
+    hGetAll: (key) => ioredisClient.hgetall(key),
+  };
 
   handler = createRedisDataCacheHandler({
     redis,
