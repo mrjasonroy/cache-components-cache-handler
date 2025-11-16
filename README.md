@@ -18,11 +18,16 @@ Implements Next.js 16+ caching APIs:
 - `revalidatePath()` - Invalidate by path
 - Cache Components and PPR
 
-Backends:
-- Memory (development)
-- Redis (production, distributed)
-- Valkey (Redis-compatible)
-- AWS ElastiCache (production, managed)
+## Supported Backends
+
+All backends are **integration tested** with Next.js 16+ in our CI pipeline, ensuring reliability for production use.
+
+| Backend | Use Case | Key Features |
+|---------|----------|--------------|
+| **Memory** | Development, Single-instance | Zero config, fast, no external dependencies |
+| **Redis** | Production, Distributed | Industry standard, high performance, clustering |
+| **Valkey** | Production, Open Source | Redis-compatible, LGPL licensed, drop-in replacement |
+| **AWS ElastiCache** | Production, Managed | Fully managed, IAM auth, auto-scaling, high availability |
 
 ## Install
 
@@ -70,6 +75,39 @@ const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
 export default createRedisDataCacheHandler({
   redis,
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
+});
+```
+
+```javascript
+// next.config.js
+export default {
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+  },
+};
+```
+
+### Valkey (Production, Open Source)
+
+[Valkey](https://valkey.io/) is an open-source Redis fork with full compatibility. Use the same Redis handler:
+
+```bash
+npm install ioredis
+```
+
+```javascript
+// data-cache-handler.mjs
+import Redis from "ioredis";
+import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+// Valkey is Redis-compatible, use the same client
+const valkey = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
+
+export default createRedisDataCacheHandler({
+  redis: valkey,
   keyPrefix: "myapp:cache:",
   tagPrefix: "myapp:tags:",
 });
