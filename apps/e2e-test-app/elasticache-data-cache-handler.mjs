@@ -58,7 +58,6 @@ function createElastiCacheClient() {
     // The ioredis library doesn't support this natively, so we use password auth
     // with AWS credentials. The username format is: {username}:{region}:{replication-group-id}
     const username = process.env.ELASTICACHE_USER || "default";
-    const region = process.env.AWS_REGION;
 
     // Note: For true IAM auth, you would typically use a library like
     // @aws-sdk/credential-providers to generate tokens, but for simplicity
@@ -66,6 +65,7 @@ function createElastiCacheClient() {
     if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
       // This is a simplified approach for testing
       // In production, use AWS SDK to generate proper IAM auth tokens
+      console.log(`[ElastiCache] IAM auth using region: ${process.env.AWS_REGION}`);
       config.username = username;
       config.password = process.env.AWS_SECRET_ACCESS_KEY;
     } else {
