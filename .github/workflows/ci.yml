@@ -175,11 +175,7 @@ jobs:
           CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
-          ELASTICACHE_USE_IAM: "false"
           ELASTICACHE_TLS: "false"
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
         run: |
           cd apps/e2e-test-app
           pnpm build
@@ -189,11 +185,7 @@ jobs:
           CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
-          ELASTICACHE_USE_IAM: "false"
           ELASTICACHE_TLS: "false"
-          AWS_REGION: us-east-1
-          AWS_ACCESS_KEY_ID: test
-          AWS_SECRET_ACCESS_KEY: test
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e

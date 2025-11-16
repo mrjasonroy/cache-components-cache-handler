@@ -160,11 +160,14 @@ import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-
 
 const ioredisClient = new Redis({
   host: process.env.ELASTICACHE_ENDPOINT,
-  port: 6379,
-  tls: {}, // Enable TLS for in-transit encryption
-  // For IAM authentication, configure username/password
-  username: process.env.ELASTICACHE_USER,
-  password: process.env.ELASTICACHE_AUTH_TOKEN,
+  port: parseInt(process.env.ELASTICACHE_PORT || "6379", 10),
+  tls: process.env.ELASTICACHE_TLS !== "false" ? {} : undefined, // TLS enabled by default
+  password: process.env.ELASTICACHE_AUTH_TOKEN, // Password-based auth
+  connectTimeout: 10000,
+  retryStrategy: (times) => {
+    if (times > 3) return null;
+    return Math.min(times * 200, 2000);
+  },
 });
 
 // Wrap ioredis to provide node-redis compatible API
@@ -197,9 +200,10 @@ export default {
 ```
 
 **Environment Variables:**
-- `ELASTICACHE_ENDPOINT` - Your ElastiCache cluster endpoint
-- `ELASTICACHE_USER` - Username for IAM auth (optional)
-- `ELASTICACHE_AUTH_TOKEN` - Auth token or password
+- `ELASTICACHE_ENDPOINT` - Your ElastiCache cluster endpoint (required)
+- `ELASTICACHE_PORT` - Port number (default: 6379)
+- `ELASTICACHE_AUTH_TOKEN` - Auth token or password (optional)
+- `ELASTICACHE_TLS` - Set to "false" to disable TLS (default: enabled)
 
 ## Usage
 
@@ -241,6 +245,31 @@ export async function POST(request: Request) {
 }
 ```
 
+## Cache Handler API
+
+This library implements the Next.js 16+ `DataCacheHandler` interface:
+
+```typescript
+interface DataCacheHandler {
+  // Retrieve cached entry for a cache key
+  get(cacheKey: string, softTags: string[]): Promise<DataCacheEntry | undefined>;
+
+  // Store a cache entry (handles streaming responses)
+  set(cacheKey: string, pendingEntry: Promise<DataCacheEntry>): Promise<void>;
+
+  // Called periodically to refresh local tag manifest
+  refreshTags(): Promise<void>;
+
+  // Get maximum revalidation timestamp for tags
+  getExpiration(tags: string[]): Promise<Timestamp>;
+
+  // Called when revalidateTag() invalidates tags
+  updateTags(tags: string[], durations?: { expire?: number }): Promise<void>;
+}
+```
+
+When you call `revalidateTag('my-tag')` in your application, Next.js internally calls our `updateTags(['my-tag'])` implementation, which marks all cache entries with that tag as stale.
+
 ## Documentation
 
 - [Installation & Setup](./docs/installation.md)
@@ -272,7 +301,6 @@ This project is AI-friendly and contributor-friendly.
 
 Publishing and release documentation:
 
-- [First Publish](./docs/publishing/FIRST_PUBLISH.md) - One-time setup for npm
 - [Automated Releases](./docs/publishing/AUTOMATED_RELEASE.md) - Automated release workflow
 - [Prerelease Versions](./docs/publishing/PRERELEASE.md) - Alpha, beta, and RC releases
 - [Release Checklist](./docs/publishing/RELEASE.md) - Complete release process

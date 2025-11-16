@@ -47,7 +47,7 @@ if (cacheType === "redis") {
     debug: process.env.CACHE_DEBUG === "true",
   });
 } else if (cacheType === "elasticache") {
-  // ElastiCache handler
+  // ElastiCache handler (password-based auth only)
   const Redis = (await import("ioredis")).default;
   const { createRedisDataCacheHandler } = await import(
     "@mrjasonroy/cache-components-cache-handler"
@@ -55,7 +55,6 @@ if (cacheType === "redis") {
 
   const endpoint = process.env.ELASTICACHE_ENDPOINT;
   const port = Number.parseInt(process.env.ELASTICACHE_PORT || "6379", 10);
-  const useIAM = process.env.ELASTICACHE_USE_IAM === "true";
 
   if (!endpoint) {
     throw new Error("ELASTICACHE_ENDPOINT environment variable is required");
@@ -64,7 +63,8 @@ if (cacheType === "redis") {
   const config = {
     host: endpoint,
     port,
-    tls: process.env.ELASTICACHE_TLS === "true" ? {} : undefined,
+    // TLS enabled by default for ElastiCache (disable explicitly with "false")
+    tls: process.env.ELASTICACHE_TLS !== "false" ? {} : undefined,
     connectTimeout: 10000,
     retryStrategy: (times) => {
       if (times > 3) {
@@ -75,14 +75,12 @@ if (cacheType === "redis") {
     },
   };
 
-  // Add authentication
-  if (useIAM && process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
-    console.log("[ElastiCache] Using IAM authentication");
-    config.username = process.env.ELASTICACHE_USER || "default";
-    config.password = process.env.AWS_SECRET_ACCESS_KEY;
-  } else if (process.env.ELASTICACHE_AUTH_TOKEN) {
+  // Password-based authentication
+  if (process.env.ELASTICACHE_AUTH_TOKEN) {
     console.log("[ElastiCache] Using auth token authentication");
     config.password = process.env.ELASTICACHE_AUTH_TOKEN;
+  } else {
+    console.log("[ElastiCache] No authentication configured");
   }
 
   const ioredisClient = new Redis(config);
@@ -96,8 +94,6 @@ if (cacheType === "redis") {
   });
 
   // Wrap ioredis to provide node-redis compatible API
-  // ioredis uses lowercase methods (hget, hset, hgetall)
-  // createRedisDataCacheHandler expects node-redis API (hGet, hSet, hGetAll)
   const redis = {
     get: (key) => ioredisClient.get(key),
     set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
