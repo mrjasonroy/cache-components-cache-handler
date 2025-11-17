@@ -200,33 +200,6 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
-  # Wrapper jobs to satisfy branch protection rules
-  test-memory:
-    runs-on: ubuntu-latest
-    needs: e2e-tests
-    if: always()
-    steps:
-      - name: Check memory test result
-        run: |
-          if [ "${{ needs.e2e-tests.result }}" != "success" ]; then
-            echo "❌ E2E tests failed (includes memory test)"
-            exit 1
-          fi
-          echo "✅ Memory tests passed"
-
-  test-redis:
-    runs-on: ubuntu-latest
-    needs: e2e-tests
-    if: always()
-    steps:
-      - name: Check redis test result
-        run: |
-          if [ "${{ needs.e2e-tests.result }}" != "success" ]; then
-            echo "❌ E2E tests failed (includes redis test)"
-            exit 1
-          fi
-          echo "✅ Redis tests passed"
-
   test-summary:
     runs-on: ubuntu-latest
     needs: [e2e-tests, e2e-elasticache]
