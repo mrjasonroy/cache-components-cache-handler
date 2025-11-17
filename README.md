@@ -8,6 +8,8 @@ Cache handler for Next.js 16+ with support for Cache Components and "use cache" 
 [![Next.js 16+](https://img.shields.io/badge/Next.js-16%2B-black)](https://nextjs.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](./apps/e2e-test-app)
 
+**📦 [View on npm](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler) | 🚀 [Releases](https://github.com/mrjasonroy/cache-components-cache-handler/releases)**
+
 ## What This Does
 
 Implements Next.js 16+ caching APIs:
@@ -71,40 +73,26 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const ioredisClient = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
 
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
+export default createRedisDataCacheHandler({ redis });
 ```
 
 ```javascript
 // next.config.js
 export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
+  experimental: {
+    cacheComponents: true,
+    cacheHandlers: {
+      default: "./data-cache-handler.mjs",
+    },
   },
 };
 ```
 
 ### Valkey (Production, Open Source)
 
-[Valkey](https://valkey.io/) is an open-source Redis fork with full compatibility. Use the same Redis handler:
+[Valkey](https://valkey.io/) is an open-source Redis fork with full compatibility:
 
 ```bash
 npm install ioredis
@@ -115,34 +103,19 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-// Valkey is Redis-compatible, use ioredis client
-const ioredisClient = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
+const redis = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
 
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
+export default createRedisDataCacheHandler({ redis });
 ```
 
 ```javascript
 // next.config.js
 export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
+  experimental: {
+    cacheComponents: true,
+    cacheHandlers: {
+      default: "./data-cache-handler.mjs",
+    },
   },
 };
 ```
@@ -158,11 +131,11 @@ npm install ioredis
 import Redis from "ioredis";
 import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-const ioredisClient = new Redis({
+const redis = new Redis({
   host: process.env.ELASTICACHE_ENDPOINT,
   port: parseInt(process.env.ELASTICACHE_PORT || "6379", 10),
-  tls: process.env.ELASTICACHE_TLS !== "false" ? {} : undefined, // TLS enabled by default
-  password: process.env.ELASTICACHE_AUTH_TOKEN, // Password-based auth
+  tls: process.env.ELASTICACHE_TLS !== "false" ? {} : undefined,
+  password: process.env.ELASTICACHE_AUTH_TOKEN,
   connectTimeout: 10000,
   retryStrategy: (times) => {
     if (times > 3) return null;
@@ -170,31 +143,17 @@ const ioredisClient = new Redis({
   },
 });
 
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
+export default createRedisDataCacheHandler({ redis });
 ```
 
 ```javascript
 // next.config.js
 export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
+  experimental: {
+    cacheComponents: true,
+    cacheHandlers: {
+      default: "./data-cache-handler.mjs",
+    },
   },
 };
 ```
