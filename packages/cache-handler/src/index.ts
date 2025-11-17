@@ -47,6 +47,14 @@ export { IMPLICIT_TAG_PREFIX } from "./types.js";
 // Data Cache Handlers (for "use cache" directive)
 // =============================================================================
 
+// Zero-config factory (recommended)
+export {
+  createCacheHandler,
+  type CacheHandlerOptions as DataCacheHandlerOptions,
+  type CacheHandlerType,
+} from "./data-cache/factory.js";
+
+// Advanced: Direct handler creation
 export {
   createMemoryDataCacheHandler,
   type MemoryDataCacheHandlerOptions,
