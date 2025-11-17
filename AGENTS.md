@@ -148,6 +148,16 @@ packages/
 
 ## Git Workflow
 
+### Pre-Commit Checklist (CRITICAL)
+**ALWAYS run these commands before EVERY commit:**
+```bash
+pnpm lint          # Check for linting issues
+pnpm format        # Fix all formatting (including JSON files)
+pnpm typecheck     # Verify TypeScript types
+```
+
+This is non-negotiable. CI will fail if formatting is incorrect, even for JSON files like package.json. Biome formats everything, not just TypeScript.
+
 ### Commits
 Use conventional commits:
 - `feat: add Redis cluster support`
