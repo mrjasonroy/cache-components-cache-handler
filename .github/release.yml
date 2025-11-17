@@ -1,0 +1,68 @@
+# Configuration for auto-generated release notes
+# https://docs.github.com/en/repositories/releasing-projects-on-github/automatically-generated-release-notes
+
+changelog:
+  exclude:
+    labels:
+      - ignore-for-release
+      - dependencies-bot
+    authors:
+      - dependabot
+      - github-actions
+
+  categories:
+    - title: "Breaking Changes"
+      labels:
+        - breaking-change
+        - breaking
+        - major
+
+    - title: "New Features"
+      labels:
+        - enhancement
+        - feature
+        - feat
+
+    - title: "Bug Fixes"
+      labels:
+        - bug
+        - fix
+        - bugfix
+
+    - title: "Performance Improvements"
+      labels:
+        - performance
+        - perf
+
+    - title: "Documentation"
+      labels:
+        - documentation
+        - docs
+
+    - title: "Backend Support"
+      labels:
+        - redis
+        - elasticache
+        - valkey
+        - memory
+        - backend
+
+    - title: "Next.js Updates"
+      labels:
+        - nextjs-update
+        - next.js
+
+    - title: "Dependencies"
+      labels:
+        - dependencies
+        - deps
+
+    - title: "CI/CD"
+      labels:
+        - ci
+        - github-actions
+        - workflow
+
+    - title: "Other Changes"
+      labels:
+        - "*"
