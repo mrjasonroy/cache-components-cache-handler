@@ -126,12 +126,13 @@ jobs:
           pnpm test:e2e
 
       - name: Upload test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-${{ matrix.backend }}
-          path: apps/e2e-test-app/playwright-report/
+          path: apps/e2e-test-app/test-results/
           retention-days: 7
+          if-no-files-found: ignore
 
   e2e-elasticache:
     runs-on: ubuntu-latest
@@ -191,12 +192,13 @@ jobs:
           pnpm test:e2e
 
       - name: Upload test results
-        if: always()
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-elasticache
-          path: apps/e2e-test-app/playwright-report/
+          path: apps/e2e-test-app/test-results/
           retention-days: 7
+          if-no-files-found: ignore
 
   test-summary:
     runs-on: ubuntu-latest
