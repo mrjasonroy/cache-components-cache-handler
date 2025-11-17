@@ -1,0 +1,88 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-alpha.*'
+      - 'v*.*.*-beta.*'
+      - 'v*.*.*-rc.*'
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release type
+        id: release_type
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+
+          if [[ "$VERSION" == *"-alpha"* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "title=$TAG (Alpha)" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-beta"* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "title=$TAG (Beta)" >> $GITHUB_OUTPUT
+          elif [[ "$VERSION" == *"-rc"* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            echo "title=$TAG (Release Candidate)" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+            echo "title=$TAG" >> $GITHUB_OUTPUT
+          fi
+
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release_type.outputs.tag }}"
+          TITLE="${{ steps.release_type.outputs.title }}"
+          PRERELEASE="${{ steps.release_type.outputs.prerelease }}"
+          VERSION="${{ steps.release_type.outputs.version }}"
+
+          # Build release notes header
+          HEADER="## What's Changed
+
+          This release includes the following changes since the last release.
+
+          ### Installation
+
+          \`\`\`bash
+          npm install @mrjasonroy/cache-components-cache-handler@$VERSION
+          \`\`\`
+
+          ---
+          "
+
+          # Create release with auto-generated notes
+          if [ "$PRERELEASE" = "true" ]; then
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --generate-notes \
+              --notes-start-tag "$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo '')" \
+              --prerelease \
+              --draft
+          else
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --generate-notes \
+              --draft
+          fi
+
+          echo "✅ Created draft release for $TAG"
+          echo "📝 Review and edit release notes at:"
+          echo "   https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          echo ""
+          echo "When you're ready, publish the release to trigger npm publishing."
