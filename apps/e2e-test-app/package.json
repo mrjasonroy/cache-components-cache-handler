@@ -15,10 +15,10 @@
   },
   "dependencies": {
     "@mrjasonroy/cache-components-cache-handler": "workspace:*",
+    "ioredis": "^5.4.1",
     "next": "^16.0.1",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "redis": "^5.0.0"
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",

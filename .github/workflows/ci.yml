@@ -57,9 +57,37 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
-  test-memory:
+  e2e-tests:
     runs-on: ubuntu-latest
     needs: unit-tests
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: memory
+            cache_handler: memory
+            service_image: ""
+            redis_url: ""
+
+          - backend: redis
+            cache_handler: redis
+            service_image: redis:7-alpine
+            redis_url: redis://localhost:6379
+
+          - backend: valkey
+            cache_handler: redis
+            service_image: valkey/valkey:7-alpine
+            redis_url: redis://localhost:6379
+
+    services:
+      cache-service:
+        image: ${{ matrix.service_image || 'alpine:latest' }}
+        ports:
+          - 6379:6379
+        options: >-
+          ${{ matrix.service_image && contains(matrix.service_image, 'redis') && '--health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
+          ${{ matrix.service_image && contains(matrix.service_image, 'valkey') && '--health-cmd "valkey-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -82,11 +110,17 @@ jobs:
         run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
 
       - name: Build e2e app
+        env:
+          CACHE_HANDLER: ${{ matrix.cache_handler }}
+          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm build
 
-      - name: Run e2e tests with memory cache
+      - name: Run e2e tests
+        env:
+          CACHE_HANDLER: ${{ matrix.cache_handler }}
+          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
@@ -95,23 +129,25 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-memory
+          name: playwright-report-${{ matrix.backend }}
           path: apps/e2e-test-app/playwright-report/
           retention-days: 7
 
-  test-redis:
+  e2e-elasticache:
     runs-on: ubuntu-latest
     needs: unit-tests
+    # Test ElastiCache handler code path using Redis container
+    # This validates the ElastiCache configuration without requiring actual AWS infrastructure
     services:
       redis:
         image: redis:7-alpine
+        ports:
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 6379:6379
 
     steps:
       - uses: actions/checkout@v4
@@ -134,18 +170,22 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
 
-      - name: Build e2e app with Redis
+      - name: Build e2e app with ElastiCache handler
         env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
+          CACHE_HANDLER: elasticache
+          ELASTICACHE_ENDPOINT: localhost
+          ELASTICACHE_PORT: "6379"
+          ELASTICACHE_TLS: "false"
         run: |
           cd apps/e2e-test-app
           pnpm build
 
-      - name: Run e2e tests with Redis
+      - name: Run e2e tests with ElastiCache handler
         env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
+          CACHE_HANDLER: elasticache
+          ELASTICACHE_ENDPOINT: localhost
+          ELASTICACHE_PORT: "6379"
+          ELASTICACHE_TLS: "false"
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
@@ -154,83 +194,23 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report-redis
-          path: apps/e2e-test-app/playwright-report/
-          retention-days: 7
-
-  test-valkey:
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    services:
-      valkey:
-        image: valkey/valkey:7-alpine
-        options: >-
-          --health-cmd "valkey-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "pnpm"
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
-
-      - name: Build e2e app with Valkey
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm build
-
-      - name: Run e2e tests with Valkey
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm test:e2e
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report-valkey
+          name: playwright-report-elasticache
           path: apps/e2e-test-app/playwright-report/
           retention-days: 7
 
   test-summary:
     runs-on: ubuntu-latest
-    needs: [test-memory, test-redis, test-valkey]
+    needs: [e2e-tests, e2e-elasticache]
     if: always()
     steps:
       - name: Check test results
         run: |
-          echo "Memory tests: ${{ needs.test-memory.result }}"
-          echo "Redis tests: ${{ needs.test-redis.result }}"
-          echo "Valkey tests: ${{ needs.test-valkey.result }}"
+          echo "E2E Matrix Tests: ${{ needs.e2e-tests.result }}"
+          echo "ElastiCache Tests: ${{ needs.e2e-elasticache.result }}"
 
-          if [ "${{ needs.test-memory.result }}" != "success" ] || [ "${{ needs.test-redis.result }}" != "success" ] || [ "${{ needs.test-valkey.result }}" != "success" ]; then
+          if [ "${{ needs.e2e-tests.result }}" != "success" ] || [ "${{ needs.e2e-elasticache.result }}" != "success" ]; then
             echo "❌ Some tests failed"
             exit 1
-          else
-            echo "✅ All tests passed!"
           fi
+
+          echo "✅ All tests passed (memory, redis, valkey, elasticache)!"
