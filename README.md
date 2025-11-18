@@ -8,6 +8,8 @@ Cache handler for Next.js 16+ with support for Cache Components and "use cache" 
 [![Next.js 16+](https://img.shields.io/badge/Next.js-16%2B-black)](https://nextjs.org/)
 [![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](./apps/e2e-test-app)
 
+**📦 [View on npm](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler) | 🚀 [Releases](https://github.com/mrjasonroy/cache-components-cache-handler/releases)**
+
 ## What This Does
 
 Implements Next.js 16+ caching APIs:
@@ -33,177 +35,70 @@ All backends are **integration tested** with Next.js 16+ in our CI pipeline, ens
 
 ```bash
 npm install @mrjasonroy/cache-components-cache-handler
+
+# For Redis/Valkey/ElastiCache, also install ioredis
+npm install ioredis
 ```
 
 ## Quick Start
 
-### Memory (Development)
+### Zero-Config (Recommended)
 
 ```javascript
 // data-cache-handler.mjs
-import { createMemoryDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-export default createMemoryDataCacheHandler({
-  maxSize: 100 * 1024 * 1024, // 100MB
-});
+// Memory (dev)
+export default createCacheHandler({ type: "memory" });
+
+// Redis (production)
+export default createCacheHandler({ type: "redis" });
+
+// Valkey (production)
+export default createCacheHandler({ type: "valkey" });
+
+// ElastiCache (AWS)
+export default createCacheHandler({ type: "elasticache" });
 ```
 
 ```javascript
 // next.config.js
-module.exports = {
+export default {
   experimental: {
     cacheComponents: true,
     cacheHandlers: {
-      default: require.resolve("./data-cache-handler.mjs"),
+      default: "./data-cache-handler.mjs",
     },
   },
 };
 ```
 
-### Redis (Production)
-
-```bash
-npm install ioredis
-```
-
-```javascript
-// data-cache-handler.mjs
-import Redis from "ioredis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-const ioredisClient = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
-
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
-```
-
-```javascript
-// next.config.js
-export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-  },
-};
-```
-
-### Valkey (Production, Open Source)
-
-[Valkey](https://valkey.io/) is an open-source Redis fork with full compatibility. Use the same Redis handler:
-
-```bash
-npm install ioredis
-```
-
-```javascript
-// data-cache-handler.mjs
-import Redis from "ioredis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-// Valkey is Redis-compatible, use ioredis client
-const ioredisClient = new Redis(process.env.VALKEY_URL || "redis://localhost:6379");
-
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
-```
-
-```javascript
-// next.config.js
-export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-  },
-};
-```
-
-### AWS ElastiCache (Production)
-
-```bash
-npm install ioredis
-```
-
-```javascript
-// data-cache-handler.mjs
-import Redis from "ioredis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-const ioredisClient = new Redis({
-  host: process.env.ELASTICACHE_ENDPOINT,
-  port: parseInt(process.env.ELASTICACHE_PORT || "6379", 10),
-  tls: process.env.ELASTICACHE_TLS !== "false" ? {} : undefined, // TLS enabled by default
-  password: process.env.ELASTICACHE_AUTH_TOKEN, // Password-based auth
-  connectTimeout: 10000,
-  retryStrategy: (times) => {
-    if (times > 3) return null;
-    return Math.min(times * 200, 2000);
-  },
-});
-
-// Wrap ioredis to provide node-redis compatible API
-const redis = {
-  get: (key) => ioredisClient.get(key),
-  set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-  del: (...keys) => ioredisClient.del(...keys),
-  exists: (...keys) => ioredisClient.exists(...keys),
-  ttl: (key) => ioredisClient.ttl(key),
-  hGet: (key, field) => ioredisClient.hget(key, field),
-  hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-  hGetAll: (key) => ioredisClient.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
-```
-
-```javascript
-// next.config.js
-export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-  },
-};
-```
-
 **Environment Variables:**
-- `ELASTICACHE_ENDPOINT` - Your ElastiCache cluster endpoint (required)
-- `ELASTICACHE_PORT` - Port number (default: 6379)
-- `ELASTICACHE_AUTH_TOKEN` - Auth token or password (optional)
-- `ELASTICACHE_TLS` - Set to "false" to disable TLS (default: enabled)
+- `REDIS_URL` - Redis connection URL (for redis/valkey)
+- `REDIS_PASSWORD` - Redis password (fallback for all cache types)
+- `VALKEY_URL` - Valkey connection URL (alternative to REDIS_URL)
+- `ELASTICACHE_ENDPOINT` - ElastiCache cluster endpoint
+- `ELASTICACHE_PORT` - Port (default: 6379)
+- `ELASTICACHE_TLS` - Enable TLS (default: true)
+- `ELASTICACHE_AUTH_TOKEN` - Auth token/password
+
+### Advanced: Custom Configuration
+
+Need more control? You can override any option:
+
+```javascript
+// data-cache-handler.mjs
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+export default createCacheHandler({
+  type: "elasticache",
+  endpoint: "my-cluster.cache.amazonaws.com",
+  port: 6380,
+  password: process.env.CUSTOM_TOKEN,
+  keyPrefix: "myapp:",
+  debug: true,
+});
+```
 
 ## Usage
 
