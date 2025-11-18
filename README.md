@@ -75,6 +75,8 @@ export default {
 
 **Environment Variables:**
 - `REDIS_URL` - Redis connection URL (for redis/valkey)
+- `REDIS_PASSWORD` - Redis password (fallback for all cache types)
+- `VALKEY_URL` - Valkey connection URL (alternative to REDIS_URL)
 - `ELASTICACHE_ENDPOINT` - ElastiCache cluster endpoint
 - `ELASTICACHE_PORT` - Port (default: 6379)
 - `ELASTICACHE_TLS` - Enable TLS (default: true)
@@ -113,7 +115,19 @@ const redis = new Redis({
   retryStrategy: (times) => Math.min(times * 50, 2000),
 });
 
-export default createRedisDataCacheHandler({ redis });
+// Adapter for ioredis (uses lowercase methods) to match RedisClient interface (camelCase)
+const redisAdapter = {
+  get: (key) => redis.get(key),
+  set: (key, value, ...args) => redis.set(key, value, ...args),
+  del: (...keys) => redis.del(...keys),
+  exists: (...keys) => redis.exists(...keys),
+  ttl: (key) => redis.ttl(key),
+  hGet: (key, field) => redis.hget(key, field),
+  hSet: (key, field, value) => redis.hset(key, field, value),
+  hGetAll: (key) => redis.hgetall(key),
+};
+
+export default createRedisDataCacheHandler({ redis: redisAdapter });
 ```
 
 ## Usage

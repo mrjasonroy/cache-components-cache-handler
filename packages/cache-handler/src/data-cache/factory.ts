@@ -7,6 +7,35 @@ import { createMemoryDataCacheHandler } from "./memory.js";
 import { type RedisClient, createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
 
+/**
+ * Lazy load ioredis and return the constructor
+ */
+function loadIoredis(type: string): typeof import("ioredis").default {
+  try {
+    return require("ioredis");
+  } catch {
+    throw new Error(
+      `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,
+    );
+  }
+}
+
+/**
+ * Create adapter for ioredis (lowercase methods) to match RedisClient interface (camelCase)
+ */
+function createRedisAdapter(redis: import("ioredis").default): RedisClient {
+  return {
+    get: (key) => redis.get(key),
+    set: (key, value) => redis.set(key, value) as Promise<unknown>,
+    del: (...keys) => redis.del(...keys),
+    exists: (...keys) => redis.exists(...keys),
+    ttl: (key) => redis.ttl(key),
+    hGet: (key, field) => redis.hget(key, field),
+    hSet: (key, field, value) => redis.hset(key, field, value) as Promise<unknown>,
+    hGetAll: (key) => redis.hgetall(key),
+  };
+}
+
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
 
 export interface CacheHandlerOptions {
@@ -98,32 +127,13 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
 
     case "redis":
     case "valkey": {
-      // Lazy load ioredis only when needed
-      let Redis: typeof import("ioredis").default;
-      try {
-        Redis = require("ioredis");
-      } catch {
-        throw new Error(
-          `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,
-        );
-      }
+      const Redis = loadIoredis(type);
 
       const url =
         options.url || process.env.REDIS_URL || process.env.VALKEY_URL || "redis://localhost:6379";
 
       const redis = new Redis(url);
-
-      // Adapter for ioredis (uses lowercase methods) to match RedisClient interface (camelCase)
-      const redisAdapter: RedisClient = {
-        get: (key) => redis.get(key),
-        set: (key, value, ...args) => redis.set(key, value, ...(args as [])) as Promise<unknown>,
-        del: (...keys) => redis.del(...keys),
-        exists: (...keys) => redis.exists(...keys),
-        ttl: (key) => redis.ttl(key),
-        hGet: (key, field) => redis.hget(key, field),
-        hSet: (key, field, value) => redis.hset(key, field, value) as Promise<unknown>,
-        hGetAll: (key) => redis.hgetall(key),
-      };
+      const redisAdapter = createRedisAdapter(redis);
 
       return createRedisDataCacheHandler({
         redis: redisAdapter,
@@ -134,15 +144,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
     }
 
     case "elasticache": {
-      // Lazy load ioredis only when needed
-      let Redis: typeof import("ioredis").default;
-      try {
-        Redis = require("ioredis");
-      } catch {
-        throw new Error(
-          "ioredis is required for elasticache cache handler. Install it with: npm install ioredis",
-        );
-      }
+      const Redis = loadIoredis(type);
 
       const endpoint = options.endpoint || process.env.ELASTICACHE_ENDPOINT;
       if (!endpoint) {
@@ -172,17 +174,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         },
       });
 
-      // Adapter for ioredis (uses lowercase methods) to match RedisClient interface (camelCase)
-      const redisAdapter: RedisClient = {
-        get: (key) => redis.get(key),
-        set: (key, value, ...args) => redis.set(key, value, ...(args as [])) as Promise<unknown>,
-        del: (...keys) => redis.del(...keys),
-        exists: (...keys) => redis.exists(...keys),
-        ttl: (key) => redis.ttl(key),
-        hGet: (key, field) => redis.hget(key, field),
-        hSet: (key, field, value) => redis.hset(key, field, value) as Promise<unknown>,
-        hGetAll: (key) => redis.hgetall(key),
-      };
+      const redisAdapter = createRedisAdapter(redis);
 
       return createRedisDataCacheHandler({
         redis: redisAdapter,
