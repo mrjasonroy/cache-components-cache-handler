@@ -100,36 +100,6 @@ export default createCacheHandler({
 });
 ```
 
-Or create the client yourself:
-
-```javascript
-// data-cache-handler.mjs
-import Redis from "ioredis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-const redis = new Redis({
-  host: process.env.ELASTICACHE_ENDPOINT,
-  port: 6379,
-  tls: {},
-  password: process.env.AUTH_TOKEN,
-  retryStrategy: (times) => Math.min(times * 50, 2000),
-});
-
-// Adapter for ioredis (uses lowercase methods) to match RedisClient interface (camelCase)
-const redisAdapter = {
-  get: (key) => redis.get(key),
-  set: (key, value, ...args) => redis.set(key, value, ...args),
-  del: (...keys) => redis.del(...keys),
-  exists: (...keys) => redis.exists(...keys),
-  ttl: (key) => redis.ttl(key),
-  hGet: (key, field) => redis.hget(key, field),
-  hSet: (key, field, value) => redis.hset(key, field, value),
-  hGetAll: (key) => redis.hgetall(key),
-};
-
-export default createRedisDataCacheHandler({ redis: redisAdapter });
-```
-
 ## Usage
 
 ```typescript
