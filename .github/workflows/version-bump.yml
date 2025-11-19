@@ -22,6 +22,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   bump-version:
@@ -87,29 +88,65 @@ jobs:
       - name: Update lockfile
         run: pnpm install
 
-      - name: Commit version bump
+      - name: Create version bump branch
         run: |
+          BRANCH_NAME="version-bump/${{ steps.version.outputs.new_version }}"
+          git checkout -b $BRANCH_NAME
           git add .
           git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
-          git push origin main
+          git push origin $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+        id: branch
 
-      - name: Create and push tag
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git tag v${{ steps.version.outputs.new_version }}
-          git push origin v${{ steps.version.outputs.new_version }}
+          DIST_TAG="${{ steps.version.outputs.dist_tag }}"
+          PRERELEASE_NOTE=""
+
+          if [[ "$DIST_TAG" != "latest" ]]; then
+            PRERELEASE_NOTE="⚠️ **Pre-release version** - will be published with npm tag: \`$DIST_TAG\`"
+          fi
+
+          gh pr create \
+            --title "chore: bump version to ${{ steps.version.outputs.new_version }}" \
+            --body "$(cat <<'EOF'
+## Version Bump to ${{ steps.version.outputs.new_version }}
+
+This PR bumps the package version as requested.
+
+$PRERELEASE_NOTE
+
+### Changes
+- Updated package.json version to ${{ steps.version.outputs.new_version }}
+- Updated pnpm-lock.yaml
+
+### Next Steps
+1. Review and merge this PR
+2. After merge, the tag \`v${{ steps.version.outputs.new_version }}\` will be created automatically
+3. Create a GitHub release from the tag
+4. Publishing to npm will happen automatically
+
+**npm dist-tag:** \`$DIST_TAG\`
+EOF
+)" \
+            --base main \
+            --head ${{ steps.branch.outputs.branch_name }}
 
       - name: Summary
         run: |
-          echo "✅ Version bumped to ${{ steps.version.outputs.new_version }}"
-          echo "📦 Tag v${{ steps.version.outputs.new_version }} created"
+          echo "✅ Version bump PR created for ${{ steps.version.outputs.new_version }}"
           echo "🏷️  npm dist-tag: ${{ steps.version.outputs.dist_tag }}"
           echo ""
           echo "Next steps:"
-          echo "1. Go to: https://github.com/${{ github.repository }}/releases/new"
-          echo "2. Select tag: v${{ steps.version.outputs.new_version }}"
+          echo "1. Review and merge the PR"
+          echo "2. Tag v${{ steps.version.outputs.new_version }} will be created automatically after merge"
+          echo "3. Go to: https://github.com/${{ github.repository }}/releases/new"
+          echo "4. Select tag: v${{ steps.version.outputs.new_version }}"
           if [[ "${{ steps.version.outputs.dist_tag }}" != "latest" ]]; then
-            echo "3. ⚠️  Mark as pre-release (check the box)"
+            echo "5. ⚠️  Mark as pre-release (check the box)"
           else
-            echo "3. Generate release notes and publish"
+            echo "5. Generate release notes and publish"
           fi
-          echo "4. Publishing to npm will happen automatically with tag: ${{ steps.version.outputs.dist_tag }}"
+          echo "6. Publishing to npm will happen automatically with tag: ${{ steps.version.outputs.dist_tag }}"
