@@ -3,7 +3,7 @@
  * Switches between memory, Redis, and ElastiCache based on CACHE_HANDLER env var
  */
 
-const cacheType = process.env.CACHE_HANDLER || "memory";
+const cacheType = process.env.CACHE_HANDLER || process.env.DATA_CACHE_HANDLER || "memory";
 
 console.log(`[DataCacheHandler] Using cache type: ${cacheType}`);
 
@@ -16,7 +16,7 @@ if (cacheType === "redis") {
     "@mrjasonroy/cache-components-cache-handler"
   );
 
-  const url = process.env.REDIS_URL || "redis://localhost:6379";
+  const url = process.env.REDIS_URL || process.env.DATA_CACHE_URL || "redis://localhost:6379";
   const ioredisClient = new Redis(url);
 
   ioredisClient.on("error", (err) => {

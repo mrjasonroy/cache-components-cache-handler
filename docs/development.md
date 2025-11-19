@@ -50,16 +50,27 @@ pnpm clean            # Remove all build artifacts
 ### E2E Tests
 
 ```bash
-# With memory cache
+# Start containers (Redis + Valkey)
+pnpm docker:up
+
+# Memory backend
 pnpm --filter e2e-test-app build
-pnpm --filter e2e-test-app start &
 pnpm --filter e2e-test-app test:e2e
 
-# With Redis
-pnpm docker:up
-pnpm --filter e2e-test-app build:redis
-pnpm --filter e2e-test-app start:redis &
-pnpm --filter e2e-test-app test:e2e
+# Redis backend (flush cache between runs)
+docker exec nextjs-cache-redis redis-cli FLUSHALL
+CACHE_HANDLER=redis REDIS_URL=redis://localhost:6379 pnpm --filter e2e-test-app test:e2e
+
+# ElastiCache backend (reuses Redis container)
+docker exec nextjs-cache-redis redis-cli FLUSHALL
+CACHE_HANDLER=elasticache ELASTICACHE_ENDPOINT=localhost ELASTICACHE_PORT=6379 ELASTICACHE_TLS=false pnpm --filter e2e-test-app test:e2e
+
+# Valkey backend (optional local check; CI runs this automatically)
+docker exec nextjs-cache-valkey valkey-cli -p 6379 FLUSHALL
+CACHE_HANDLER=redis REDIS_URL=redis://localhost:6380 pnpm --filter e2e-test-app test:e2e
+
+# Stop containers
+pnpm docker:down
 ```
 
 ### Unit Tests

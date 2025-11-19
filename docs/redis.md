@@ -183,12 +183,33 @@ redis-cli --scan --pattern "myapp:tags:*" | wc -l
 
 ## AWS ElastiCache
 
+For ElastiCache you typically get a hostname + token instead of a URI. Use the zero-config factory and let it wire TLS/passwords for you:
+
 ```javascript
-const redis = createClient({
-  socket: {
-    host: "your-cluster.cache.amazonaws.com",
-    port: 6379,
-  },
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+export default createCacheHandler({
+  type: "elasticache",
+  endpoint: process.env.ELASTICACHE_ENDPOINT,
+  port: Number(process.env.ELASTICACHE_PORT ?? 6379),
+  tls: process.env.ELASTICACHE_TLS !== "false",
+  password: process.env.ELASTICACHE_AUTH_TOKEN ?? process.env.REDIS_PASSWORD,
+  keyPrefix: "prod:cache:",
+  tagPrefix: "prod:tags:",
+});
+```
+
+## Valkey
+
+Valkey is a Redis-compatible open source fork. Switch the `type` to `"valkey"` (or set `CACHE_BACKEND=valkey`) and point at your cluster URL:
+
+```javascript
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+export default createCacheHandler({
+  type: "valkey",
+  url: process.env.VALKEY_URL ?? "redis://valkey.internal:6379",
+  password: process.env.REDIS_PASSWORD,
 });
 ```
 
