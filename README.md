@@ -23,6 +23,7 @@ Implements Next.js 16+ caching APIs:
 - `cacheLife()` - Configure cache lifetime
 - `cacheTag()` - Tag cache entries
 - `revalidateTag()` - Invalidate by tags
+- `updateTag()` - Update tags
 - `revalidatePath()` - Invalidate by path
 - Cache Components and PPR
 
