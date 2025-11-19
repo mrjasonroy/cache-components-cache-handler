@@ -223,4 +223,4 @@ MIT © [Jason Roy](https://github.com/mrjasonroy)
 
 ## Acknowledgments
 
-Inspired by [@fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler)
+Forked from/Inspired by [@fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler), but focusing only on supporting Next.js 16+ and the new caching system.
