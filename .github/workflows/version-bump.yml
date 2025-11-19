@@ -101,38 +101,41 @@ jobs:
       - name: Create Pull Request
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.version.outputs.new_version }}
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
+          BRANCH_NAME: ${{ steps.branch.outputs.branch_name }}
         run: |
-          DIST_TAG="${{ steps.version.outputs.dist_tag }}"
-          PRERELEASE_NOTE=""
+          cat > /tmp/pr-body.md <<EOF
+          ## Version Bump to $NEW_VERSION
+
+          This PR bumps the package version as requested.
+
+          EOF
 
           if [[ "$DIST_TAG" != "latest" ]]; then
-            PRERELEASE_NOTE="⚠️ **Pre-release version** - will be published with npm tag: \`$DIST_TAG\`"
+            echo "⚠️ **Pre-release version** - will be published with npm tag: \`$DIST_TAG\`" >> /tmp/pr-body.md
+            echo "" >> /tmp/pr-body.md
           fi
 
+          cat >> /tmp/pr-body.md <<EOF
+          ### Changes
+          - Updated package.json version to $NEW_VERSION
+          - Updated pnpm-lock.yaml
+
+          ### Next Steps
+          1. Review and merge this PR
+          2. After merge, the tag \`v$NEW_VERSION\` will be created automatically
+          3. Create a GitHub release from the tag
+          4. Publishing to npm will happen automatically
+
+          **npm dist-tag:** \`$DIST_TAG\`
+          EOF
+
           gh pr create \
-            --title "chore: bump version to ${{ steps.version.outputs.new_version }}" \
-            --body "$(cat <<'EOF'
-## Version Bump to ${{ steps.version.outputs.new_version }}
-
-This PR bumps the package version as requested.
-
-$PRERELEASE_NOTE
-
-### Changes
-- Updated package.json version to ${{ steps.version.outputs.new_version }}
-- Updated pnpm-lock.yaml
-
-### Next Steps
-1. Review and merge this PR
-2. After merge, the tag \`v${{ steps.version.outputs.new_version }}\` will be created automatically
-3. Create a GitHub release from the tag
-4. Publishing to npm will happen automatically
-
-**npm dist-tag:** \`$DIST_TAG\`
-EOF
-)" \
+            --title "chore: bump version to $NEW_VERSION" \
+            --body-file /tmp/pr-body.md \
             --base main \
-            --head ${{ steps.branch.outputs.branch_name }}
+            --head "$BRANCH_NAME"
 
       - name: Summary
         run: |
