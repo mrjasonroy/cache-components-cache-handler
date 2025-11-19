@@ -3,16 +3,19 @@
  * Automatically configures handlers based on type and environment variables
  */
 
+import { createRequire } from "node:module";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import { type RedisClient, createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
+
+const nodeRequire = createRequire(import.meta.url);
 
 /**
  * Lazy load ioredis and return the constructor
  */
 function loadIoredis(type: string): typeof import("ioredis").default {
   try {
-    return require("ioredis");
+    return nodeRequire("ioredis");
   } catch {
     throw new Error(
       `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,
@@ -132,7 +135,16 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
       const url =
         options.url || process.env.REDIS_URL || process.env.VALKEY_URL || "redis://localhost:6379";
 
-      const redis = new Redis(url);
+      const password = options.password ?? process.env.REDIS_PASSWORD;
+      const tlsEnabled = options.tls ?? false;
+
+      const redis =
+        password || tlsEnabled
+          ? new Redis(url, {
+              ...(password ? { password } : {}),
+              ...(tlsEnabled ? { tls: {} } : {}),
+            })
+          : new Redis(url);
       const redisAdapter = createRedisAdapter(redis);
 
       return createRedisDataCacheHandler({

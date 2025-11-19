@@ -7,8 +7,9 @@ async function getTopUserFromDB(testId: string) {
   "use cache: remote";
   cacheTag("top-user");
 
-  // Simulate slow DB query
-  await new Promise((resolve) => setTimeout(resolve, 3000));
+  // Allow overriding the delay for slower backends (VALKEY_DB_DELAY_MS)
+  const delayMs = Number.parseInt(process.env.VALKEY_DB_DELAY_MS || "3000", 10);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 
   // Use stable ID for verification, timestamp for cache detection
   const timestamp = Date.now();

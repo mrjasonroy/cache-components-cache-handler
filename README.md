@@ -2,6 +2,12 @@
 
 Cache handler for Next.js 16+ with support for Cache Components and "use cache" directive.
 
+> Why another cache handler? I was originally going to contribute to [fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler) but that project is focused on backwards compatibility and carries a lot of legacy baggage. This repo is a ground-up rewrite that:
+> - Targets **Next.js 16+ only** (Cache Components, `"use cache"`, `cacheLife`, etc.)
+> - Ships with **true E2E coverage** (Playwright + Next 16) for every backend
+> - Keeps the surface area small: zero-config memory handler for dev, Redis/Valkey/ElastiCache factory for prod
+> - Provides an AI-first workflow so contributors (human or agent) can ship confidently
+
 [![npm version](https://badge.fury.io/js/@mrjasonroy%2Fcache-components-cache-handler.svg)](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
@@ -22,7 +28,7 @@ Implements Next.js 16+ caching APIs:
 
 ## Supported Backends
 
-All backends are **integration tested** with Next.js 16+ in our CI pipeline, ensuring reliability for production use.
+All backends are **integration tested** with Next.js 16+ in CI so you can trust a release tag.
 
 | Backend | Use Case | Key Features |
 |---------|----------|--------------|
@@ -64,23 +70,22 @@ export default createCacheHandler({ type: "elasticache" });
 ```javascript
 // next.config.js
 export default {
-  experimental: {
-    cacheComponents: true,
-    cacheHandlers: {
-      default: "./data-cache-handler.mjs",
-    },
+  cacheComponents: true,
+  cacheHandler: "./cache-handler.mjs", // Optional: ISR handler (Memory by default)
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+    remote: "./data-cache-handler.mjs",
   },
+  cacheMaxMemorySize: 0, // Disable Next's built-in in-memory handler
 };
 ```
 
 **Environment Variables:**
-- `REDIS_URL` - Redis connection URL (for redis/valkey)
-- `REDIS_PASSWORD` - Redis password (fallback for all cache types)
-- `VALKEY_URL` - Valkey connection URL (alternative to REDIS_URL)
-- `ELASTICACHE_ENDPOINT` - ElastiCache cluster endpoint
-- `ELASTICACHE_PORT` - Port (default: 6379)
-- `ELASTICACHE_TLS` - Enable TLS (default: true)
-- `ELASTICACHE_AUTH_TOKEN` - Auth token/password
+- `REDIS_URL` / `VALKEY_URL` - Primary connection string for Redis-compatible stores (Valkey works with the same URI format, e.g. `redis://localhost:6380` when using the provided docker-compose service)
+- `REDIS_PASSWORD` - Password/token used when your URL lacks credentials (works for every backend)
+- `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT` - AWS ElastiCache hostname + port
+- `ELASTICACHE_TLS` - `"true"`/`"false"` toggle (defaults to `true` for ElastiCache)
+- `ELASTICACHE_AUTH_TOKEN` - Password/token for IAM-authenticated ElastiCache clusters
 
 ### Advanced: Custom Configuration
 
@@ -92,11 +97,13 @@ import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default createCacheHandler({
   type: "elasticache",
-  endpoint: "my-cluster.cache.amazonaws.com",
+  endpoint: "cache.prod-cluster.cache.amazonaws.com",
   port: 6380,
-  password: process.env.CUSTOM_TOKEN,
-  keyPrefix: "myapp:",
-  debug: true,
+  tls: true,
+  password: process.env.CACHE_AUTH_TOKEN,
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
+  debug: process.env.NODE_ENV === "development",
 });
 ```
 
@@ -171,7 +178,17 @@ When you call `revalidateTag('my-tag')` in your application, Next.js internally 
 - [Usage Examples](./docs/usage.md)
 - [API Reference](./docs/api-reference.md)
 - [Redis Configuration](./docs/redis.md)
+- [Valkey & ElastiCache Setup](./docs/redis.md#valkey) *(coming from same guide)*
 - [Contributing](./CONTRIBUTING.md)
+
+## CI & Test Matrix
+
+| Workflow | What it Verifies |
+|----------|------------------|
+| `.github/workflows/ci.yml` | Biome lint + format check, typecheck, Vitest, and Playwright e2e suites against Memory, Redis, Valkey, and ElastiCache-mode backends |
+| `.github/workflows/nextjs-canary-test.yml` | Daily compatibility runs against Next.js canary/rc/latest to catch upstream breakage |
+| `.github/workflows/nextjs-version-check.yml` | Nightly scan for new Next.js releases, opens PRs to bump peer deps |
+| `.github/workflows/publish.yml` | Trusted publishing with provenance – release tags must pass the full matrix before npm sees them |
 
 ## Development
 

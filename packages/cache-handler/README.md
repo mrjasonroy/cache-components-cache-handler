@@ -64,10 +64,13 @@ export default createMemoryCacheHandler({
 
 ```javascript
 // data-cache-handler.mjs (Data Cache for "use cache")
-import { createMemoryDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-export default createMemoryDataCacheHandler({
-  ttl: 3600, // 1 hour default
+export default createCacheHandler({
+  type: process.env.NODE_ENV === "production" ? "redis" : "memory",
+  url: process.env.REDIS_URL,
+  password: process.env.REDIS_PASSWORD,
+  debug: process.env.NODE_ENV === "development",
 });
 ```
 
@@ -76,16 +79,18 @@ export default createMemoryDataCacheHandler({
 ```typescript
 // next.config.js
 import {
-  createMemoryCacheHandler,
   createCompositeHandler,
+  createMemoryCacheHandler,
+  RedisCacheHandler,
 } from "@mrjasonroy/cache-components-cache-handler";
 
 const memoryHandler = createMemoryCacheHandler({
   maxItemsNumber: 100, // Small L1 cache
 });
 
-const redisHandler = createRedisHandler({
-  // Your Redis handler implementation
+const redisHandler = new RedisCacheHandler({
+  redis: process.env.REDIS_URL ?? "redis://localhost:6379",
+  defaultTTL: 3600,
 });
 
 export default {
