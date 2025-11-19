@@ -1,0 +1,51 @@
+name: Create Tag on Version Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  create-tag:
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'version-bump/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Get version from package.json
+        id: version
+        run: |
+          VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version from package.json: $VERSION"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag v${{ steps.version.outputs.version }}
+          git push origin v${{ steps.version.outputs.version }}
+
+      - name: Summary
+        run: |
+          echo "✅ Tag v${{ steps.version.outputs.version }} created and pushed"
+          echo ""
+          echo "Next steps:"
+          echo "1. Go to: https://github.com/${{ github.repository }}/releases/new"
+          echo "2. Select tag: v${{ steps.version.outputs.version }}"
+          echo "3. Generate release notes and publish"
+          echo "4. Publishing to npm will happen automatically"
