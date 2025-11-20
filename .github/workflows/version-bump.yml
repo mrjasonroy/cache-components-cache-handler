@@ -91,6 +91,10 @@ jobs:
       - name: Create version bump branch
         run: |
           BRANCH_NAME="version-bump/${{ steps.version.outputs.new_version }}"
+
+          # Delete remote branch if it exists
+          git push origin --delete $BRANCH_NAME 2>/dev/null || true
+
           git checkout -b $BRANCH_NAME
           git add .
           git commit -m "chore: bump version to ${{ steps.version.outputs.new_version }}"
