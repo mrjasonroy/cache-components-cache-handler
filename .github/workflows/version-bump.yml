@@ -88,6 +88,9 @@ jobs:
       - name: Update lockfile
         run: pnpm install
 
+      - name: Format files
+        run: pnpm format
+
       - name: Create version bump branch
         run: |
           BRANCH_NAME="version-bump/${{ steps.version.outputs.new_version }}"
