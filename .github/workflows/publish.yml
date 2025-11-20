@@ -100,27 +100,33 @@ jobs:
           DIST_TAG="${{ steps.dist_tag.outputs.tag }}"
           TAG="v${VERSION}"
 
-          INSTALL_CMD="npm install @mrjasonroy/cache-components-cache-handler@${VERSION}"
-          if [[ "$DIST_TAG" != "latest" ]]; then
-            INSTALL_CMD="${INSTALL_CMD}\n# Or install by tag:\nnpm install @mrjasonroy/cache-components-cache-handler@${DIST_TAG}"
-          fi
-
-          COMMENT="✅ Successfully published to npm!
+          # Create release comment file
+          cat > /tmp/npm-info.md <<EOF
+✅ Successfully published to npm!
 
 📦 **dist-tag:** \`${DIST_TAG}\`
 
 \`\`\`bash
-${INSTALL_CMD}
+npm install @mrjasonroy/cache-components-cache-handler@${VERSION}
+EOF
+
+          if [[ "$DIST_TAG" != "latest" ]]; then
+            echo "# Or install by tag:" >> /tmp/npm-info.md
+            echo "npm install @mrjasonroy/cache-components-cache-handler@${DIST_TAG}" >> /tmp/npm-info.md
+          fi
+
+          cat >> /tmp/npm-info.md <<EOF
 \`\`\`
 
-View on npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler/v/${VERSION}"
+View on npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler/v/${VERSION}
+EOF
 
-          # Add comment to release discussion
+          # Add to release description
           gh release view "$TAG" --json body --jq .body > /tmp/release-body.md
           echo "" >> /tmp/release-body.md
           echo "---" >> /tmp/release-body.md
           echo "" >> /tmp/release-body.md
-          echo "$COMMENT" >> /tmp/release-body.md
+          cat /tmp/npm-info.md >> /tmp/release-body.md
           gh release edit "$TAG" --notes-file /tmp/release-body.md
 
       - name: Create GitHub Release
