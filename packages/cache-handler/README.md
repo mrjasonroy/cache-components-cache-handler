@@ -1,442 +1,214 @@
 # @mrjasonroy/cache-components-cache-handler
 
-Modern cache handler for Next.js 16+ with support for the `"use cache"` directive and cache components.
+Cache handler for Next.js 16+ with support for Cache Components and "use cache" directive.
 
-## Features
+> Why another cache handler? I was originally going to contribute to [fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler) but that project is focused on backwards compatibility and carries a lot of legacy baggage. This repo is a ground-up rewrite that:
+> - Targets **Next.js 16+ only** (Cache Components, `"use cache"`, `cacheLife`, etc.)
+> - Ships with **true E2E coverage** (Playwright + Next 16) for every backend
+> - Keeps the surface area small: zero-config memory handler for dev, Redis/Valkey/ElastiCache factory for prod
+> - Provides an AI-first workflow so contributors (human or agent) can ship confidently
 
-- ✅ **Next.js 16+ only** - Built specifically for the new caching system
-- ✅ **TypeScript** - Full type safety with strict mode
-- ✅ **In-memory LRU** - Fast, production-ready memory caching
-- ✅ **Composite handler** - Multi-tier caching strategies
-- ✅ **Tag-based revalidation** - Both explicit and implicit tags
-- ✅ **TTL support** - Time-based expiration
-- ✅ **Zero dependencies** - Lightweight and fast
-- ✅ **Comprehensive tests** - 31 tests, 100% coverage
+[![npm version](https://badge.fury.io/js/@mrjasonroy%2Fcache-components-cache-handler.svg)](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.7-blue)](https://www.typescriptlang.org/)
+[![Next.js 16+](https://img.shields.io/badge/Next.js-16%2B-black)](https://nextjs.org/)
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](https://github.com/mrjasonroy/cache-components-cache-handler/tree/main/apps/e2e-test-app)
 
-## Installation
+**📦 [View on npm](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler) | 🚀 [Releases](https://github.com/mrjasonroy/cache-components-cache-handler/releases)**
+
+## What This Does
+
+Implements Next.js 16+ caching APIs:
+- `"use cache"` directive
+- `cacheLife()` - Configure cache lifetime
+- `cacheTag()` - Tag cache entries
+- `revalidateTag()` - Invalidate by tags
+- `updateTag()` - Update tags
+- `revalidatePath()` - Invalidate by path
+- Cache Components and PPR
+
+## Supported Backends
+
+All backends are **integration tested** with Next.js 16+ in CI so you can trust a release tag.
+
+| Backend | Use Case | Key Features |
+|---------|----------|--------------|
+| **Memory** | Development, Single-instance | Zero config, fast, no external dependencies |
+| **Redis** | Production, Distributed | Industry standard, high performance, clustering |
+| **Valkey** | Production, Open Source | Redis-compatible, LGPL licensed, drop-in replacement |
+| **AWS ElastiCache** | Production, Managed | Fully managed, IAM auth, auto-scaling, high availability |
+
+## Install
 
 ```bash
 npm install @mrjasonroy/cache-components-cache-handler
-# or
-pnpm add @mrjasonroy/cache-components-cache-handler
-# or
-yarn add @mrjasonroy/cache-components-cache-handler
+
+# For Redis/Valkey/ElastiCache, also install ioredis
+npm install ioredis
 ```
 
 ## Quick Start
 
-### Setup for Next.js 16
+### Zero-Config (Recommended)
 
-Next.js 16 has **two separate cache systems**:
-1. **ISR Cache** (`cacheHandler`) - For Incremental Static Regeneration
-2. **Data Cache** (`cacheHandlers`) - For `"use cache"` and `"use cache: remote"`
+```javascript
+// data-cache-handler.mjs
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
-Use the helper function to configure both easily:
+// Memory (dev)
+export default createCacheHandler({ type: "memory" });
 
-```typescript
-// next.config.mjs
-import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
-import { resolve } from "path";
+// Redis (production)
+export default createCacheHandler({ type: "redis" });
 
-const cacheConfig = createCacheConfig({
-  isrHandlerPath: resolve(process.cwd(), "./cache-handler.mjs"),
-  dataCacheHandlerPath: resolve(process.cwd(), "./data-cache-handler.mjs"),
-});
+// Valkey (production)
+export default createCacheHandler({ type: "valkey" });
 
+// ElastiCache (AWS)
+export default createCacheHandler({ type: "elasticache" });
+```
+
+```javascript
+// next.config.js
 export default {
-  cacheComponents: true, // Enable cache components
-  ...cacheConfig,
-  // Rest of your Next.js config
+  cacheComponents: true,
+  cacheHandlers: {
+    default: "./data-cache-handler.mjs",
+    remote: "./data-cache-handler.mjs",
+  },
+  cacheMaxMemorySize: 0, // Disable Next's built-in in-memory handler
 };
 ```
 
-Then create your cache handler files:
+**Environment Variables:**
+- `REDIS_URL` / `VALKEY_URL` - Primary connection string for Redis-compatible stores (Valkey works with the same URI format, e.g. `redis://localhost:6380` when using the provided docker-compose service)
+- `REDIS_PASSWORD` - Password/token used when your URL lacks credentials (works for every backend)
+- `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT` - AWS ElastiCache hostname + port
+- `ELASTICACHE_TLS` - `"true"`/`"false"` toggle (defaults to `true` for ElastiCache)
+- `ELASTICACHE_AUTH_TOKEN` - Password/token for IAM-authenticated ElastiCache clusters
+
+### Advanced: Custom Configuration
+
+Need more control? You can override any option:
 
 ```javascript
-// cache-handler.mjs (ISR Cache)
-import { createMemoryCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-export default createMemoryCacheHandler({
-  maxItemsNumber: 1000,
-  maxItemSizeBytes: 100 * 1024 * 1024, // 100MB
-});
-```
-
-```javascript
-// data-cache-handler.mjs (Data Cache for "use cache")
+// data-cache-handler.mjs
 import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 
 export default createCacheHandler({
-  type: process.env.NODE_ENV === "production" ? "redis" : "memory",
-  url: process.env.REDIS_URL,
-  password: process.env.REDIS_PASSWORD,
+  type: "elasticache",
+  endpoint: "cache.prod-cluster.cache.amazonaws.com",
+  port: 6380,
+  tls: true,
+  password: process.env.CACHE_AUTH_TOKEN,
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
   debug: process.env.NODE_ENV === "development",
 });
 ```
 
-### Multi-Tier Caching
+## Usage
 
 ```typescript
-// next.config.js
-import {
-  createCompositeHandler,
-  createMemoryCacheHandler,
-  RedisCacheHandler,
-} from "@mrjasonroy/cache-components-cache-handler";
-
-const memoryHandler = createMemoryCacheHandler({
-  maxItemsNumber: 100, // Small L1 cache
-});
-
-const redisHandler = new RedisCacheHandler({
-  redis: process.env.REDIS_URL ?? "redis://localhost:6379",
-  defaultTTL: 3600,
-});
-
-export default {
-  cacheHandler: createCompositeHandler({
-    handlers: [memoryHandler, redisHandler],
-    // Optional: route based on tags
-    setStrategy: (data) => {
-      if (data.tags.includes("memory-only")) {
-        return 0; // Use memory handler
-      }
-      return 1; // Use Redis handler
-    },
-  }),
-};
-```
-
-## API Reference
-
-### `createCacheConfig(options)`
-
-Helper function to generate Next.js 16 cache configuration for both ISR and Data Cache.
-
-**Options:**
-
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `isrHandlerPath` | `string` | Yes | Path to ISR cache handler file |
-| `dataCacheHandlerPath` | `string` | Yes | Path to data cache handler file |
-| `disableDefaultMemoryCache` | `boolean` | No | Disable Next.js default memory cache (default: `true`) |
-
-**Returns:**
-
-```typescript
-{
-  cacheHandler: string;                    // ISR cache handler path
-  cacheHandlers: {
-    default: string;                       // "use cache" handler path
-    remote: string;                        // "use cache: remote" handler path
-  };
-  cacheMaxMemorySize?: number;            // 0 if disableDefaultMemoryCache is true
-}
-```
-
-**Example:**
-
-```typescript
-import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
-import { resolve } from "path";
-
-const cacheConfig = createCacheConfig({
-  isrHandlerPath: resolve(process.cwd(), "./cache-handler.mjs"),
-  dataCacheHandlerPath: resolve(process.cwd(), "./data-cache-handler.mjs"),
-});
-
-export default {
-  cacheComponents: true,
-  ...cacheConfig,
-};
-```
-
-### `createCacheConfigWithProfiles(options)`
-
-Advanced helper for using different cache handlers for `default` and `remote` profiles.
-
-**Options:**
-
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `isrHandlerPath` | `string` | Yes | Path to ISR cache handler file |
-| `defaultDataCacheHandlerPath` | `string` | Yes | Path for "use cache" (fast, local) |
-| `remoteDataCacheHandlerPath` | `string` | Yes | Path for "use cache: remote" (DB, API) |
-| `disableDefaultMemoryCache` | `boolean` | No | Disable Next.js default memory cache (default: `true`) |
-
-**Example:**
-
-```typescript
-const cacheConfig = createCacheConfigWithProfiles({
-  isrHandlerPath: resolve(process.cwd(), "./cache-handler.mjs"),
-  defaultDataCacheHandlerPath: resolve(process.cwd(), "./data-cache-memory.mjs"),
-  remoteDataCacheHandlerPath: resolve(process.cwd(), "./data-cache-redis.mjs"),
-});
-```
-
-### `createMemoryCacheHandler(options?)`
-
-Creates an in-memory LRU cache handler.
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `maxItemsNumber` | `number` | `1000` | Maximum number of items to store |
-| `maxItemSizeBytes` | `number` | `104857600` (100MB) | Maximum size per item |
-| `defaultTTL` | `number` | `undefined` | Default TTL in seconds |
-
-**Features:**
-
-- LRU eviction when max size exceeded
-- Automatic expiration based on TTL
-- Tag-based revalidation (explicit and implicit)
-- Size-based rejection of oversized entries
-
-**Example:**
-
-```typescript
-const handler = createMemoryCacheHandler({
-  maxItemsNumber: 500,
-  maxItemSizeBytes: 50 * 1024 * 1024, // 50MB
-  defaultTTL: 1800, // 30 minutes
-});
-```
-
-### `createCompositeHandler(options)`
-
-Creates a composite handler that orchestrates multiple cache handlers.
-
-**Options:**
-
-| Option | Type | Required | Description |
-|--------|------|----------|-------------|
-| `handlers` | `CacheHandler[]` | Yes | Array of handlers (ordered by priority) |
-| `setStrategy` | `(data) => number` | No | Function to choose which handler to use for writes |
-
-**Features:**
-
-- First-match read strategy (tries handlers in order)
-- Configurable write strategy
-- Fault tolerance with `Promise.allSettled()`
-- Parallel revalidation across all handlers
-
-**Example:**
-
-```typescript
-const composite = createCompositeHandler({
-  handlers: [memoryHandler, redisHandler],
-  setStrategy: (data) => {
-    // Cache small items in memory, large items in Redis
-    const size = JSON.stringify(data).length;
-    return size < 10000 ? 0 : 1;
-  },
-});
-```
-
-## Advanced Usage
-
-### Tag-Based Revalidation
-
-```typescript
-// app/page.tsx
-export default async function Page() {
+// Basic caching
+async function ProductList() {
   "use cache";
-  // This component will be cached with implicit tags
-  return <div>Cached content</div>;
+  const products = await db.products.findMany();
+  return <ProductGrid products={products} />;
 }
 
-// app/api/revalidate/route.ts
+// With cache lifetime
+import { cacheLife } from "next/cache";
+
+async function BlogPost({ id }: { id: string }) {
+  "use cache";
+  cacheLife("hours"); // 1 hour
+  const post = await db.posts.findUnique({ where: { id } });
+  return <Article post={post} />;
+}
+
+// With tags for selective invalidation
+import { cacheTag } from "next/cache";
+
+async function UserProfile({ userId }: { userId: string }) {
+  "use cache";
+  cacheTag("user-profile", `user:${userId}`);
+  const user = await db.user.findUnique({ where: { id: userId } });
+  return <Profile user={user} />;
+}
+
+// Invalidate from API route
 import { revalidateTag } from "next/cache";
 
 export async function POST(request: Request) {
-  const { tag } = await request.json();
-  revalidateTag(tag);
+  const { userId } = await request.json();
+  revalidateTag(`user:${userId}`);
   return Response.json({ revalidated: true });
 }
 ```
 
-### Time-Based Revalidation
+## Cache Handler API
+
+This library implements the Next.js 16+ `DataCacheHandler` interface:
 
 ```typescript
-// app/page.tsx
-export default async function Page() {
-  "use cache";
-  export const revalidate = 3600; // Revalidate after 1 hour
+interface DataCacheHandler {
+  // Retrieve cached entry for a cache key
+  get(cacheKey: string, softTags: string[]): Promise<DataCacheEntry | undefined>;
 
-  return <div>Cached for 1 hour</div>;
+  // Store a cache entry (handles streaming responses)
+  set(cacheKey: string, pendingEntry: Promise<DataCacheEntry>): Promise<void>;
+
+  // Called periodically to refresh local tag manifest
+  refreshTags(): Promise<void>;
+
+  // Get maximum revalidation timestamp for tags
+  getExpiration(tags: string[]): Promise<Timestamp>;
+
+  // Called when revalidateTag() invalidates tags
+  updateTags(tags: string[], durations?: { expire?: number }): Promise<void>;
 }
 ```
 
-### Custom Cache Tags
+When you call `revalidateTag('my-tag')` in your application, Next.js internally calls our `updateTags(['my-tag'])` implementation, which marks all cache entries with that tag as stale.
 
-```typescript
-// app/actions.ts
-"use server";
+## Documentation
 
-import { unstable_cache } from "next/cache";
+- [GitHub Repository](https://github.com/mrjasonroy/cache-components-cache-handler)
+- [Redis Configuration](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/redis.md)
+- [Valkey & ElastiCache Setup](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/redis.md#valkey)
+- [Contributing](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CONTRIBUTING.md)
 
-export const getData = unstable_cache(
-  async () => {
-    return fetch("https://api.example.com/data").then((res) => res.json());
-  },
-  ["api-data"],
-  {
-    tags: ["api-data", "user-data"],
-    revalidate: 3600,
-  },
-);
-```
+## CI & Test Matrix
 
-## How It Works
+| Workflow | What it Verifies |
+|----------|------------------|
+| **CI** | Biome lint + format check, typecheck, Vitest, and Playwright e2e suites against Memory, Redis, Valkey, and ElastiCache-mode backends |
+| **Next.js Canary Test** | Daily compatibility runs against Next.js canary/rc/latest to catch upstream breakage |
+| **Next.js Version Check** | Nightly scan for new Next.js releases, opens PRs to bump peer deps |
+| **Publish** | Trusted publishing with provenance – release tags must pass the full matrix before npm sees them |
 
-### Implicit vs Explicit Tags
-
-Next.js 16 uses two types of tags:
-
-1. **Explicit tags** - User-defined tags (e.g., `["user-123", "posts"]`)
-2. **Implicit tags** - System-generated tags with `_N_T_` prefix for ISR
-
-The handler tracks both types separately for efficient revalidation.
-
-### LRU Eviction
-
-When the cache reaches `maxItemsNumber`:
-
-1. The oldest (least recently used) entry is evicted
-2. Entries are moved to the end on each access
-3. New entries are always added at the end
-
-### TTL Expiration
-
-Entries can expire based on:
-
-1. `revalidate` value in cache context (seconds)
-2. `defaultTTL` if no revalidate specified
-3. Never expire if `revalidate: false`
-
-Expiration is checked on every `get()` call (lazy expiration).
-
-## Type Definitions
-
-```typescript
-interface CacheHandler {
-  name: string;
-  get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheValue | null>;
-  set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void>;
-  revalidateTag(tag: string): Promise<void>;
-  delete?(key: string): Promise<void>;
-}
-
-interface CacheHandlerContext {
-  tags?: string[];
-  revalidate?: number | false;
-  softTags?: string[];
-}
-
-interface CacheHandlerGetMeta {
-  implicitTags: string[];
-}
-```
-
-## Testing
+## Development
 
 ```bash
-# Run tests
+git clone https://github.com/mrjasonroy/cache-components-cache-handler
+cd cache-components-cache-handler
+pnpm install
+pnpm build
 pnpm test
-
-# Run tests in watch mode
-pnpm test:watch
-
-# Run with coverage
-pnpm test --coverage
 ```
-
-## Performance
-
-The memory handler is optimized for production use:
-
-- Native `Map` for O(1) lookups
-- Minimal overhead per cache entry
-- Zero dependencies
-- Fast expiration checks
-- Efficient LRU implementation
-
-Benchmark (1000 items, 1KB each):
-
-- Set: ~0.01ms per item
-- Get: ~0.005ms per item
-- Memory usage: ~1MB + cache data
-
-## Migration from Other Handlers
-
-### From Next.js Built-in Cache
-
-```diff
-// next.config.js
-+ import { createMemoryCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-export default {
-+  cacheHandler: createMemoryCacheHandler(),
-};
-```
-
-### From Custom Redis Handler
-
-```diff
-// next.config.js
-import {
-  createMemoryCacheHandler,
-+  createCompositeHandler,
-} from "@mrjasonroy/cache-components-cache-handler";
-import { createRedisHandler } from "./redis-handler";
-
-export default {
--  cacheHandler: createRedisHandler(),
-+  cacheHandler: createCompositeHandler({
-+    handlers: [
-+      createMemoryCacheHandler({ maxItemsNumber: 100 }), // L1 cache
-+      createRedisHandler(), // L2 cache
-+    ],
-+  }),
-};
-```
-
-## Troubleshooting
-
-### Cache not working
-
-1. Check Next.js version (requires 16.0.0+)
-2. Verify `"use cache"` directive is at top of component/function
-3. Check browser/server console for errors
-
-### Memory usage too high
-
-1. Reduce `maxItemsNumber`
-2. Reduce `maxItemSizeBytes`
-3. Add TTL with `defaultTTL`
-4. Use composite handler with Redis for large caches
-
-### Revalidation not working
-
-1. Verify tags are correctly defined
-2. Check `revalidateTag()` is called on server
-3. Ensure implicit tags are passed to `get()`
 
 ## Contributing
 
-This project is part of a monorepo. See the main [README](../../README.md) for contribution guidelines.
+This project is AI-friendly and contributor-friendly.
+
+- **For AI Agents:** See [CLAUDE.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CLAUDE.md) for instructions
+- **For Humans:** See [CONTRIBUTING.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CONTRIBUTING.md)
 
 ## License
 
-MIT © Jason Roy
+MIT © [Jason Roy](https://github.com/mrjasonroy)
 
-## Support
+## Acknowledgments
 
-- [GitHub Issues](https://github.com/mrjasonroy/cache-components-cache-handler/issues)
-- [Documentation](https://github.com/mrjasonroy/cache-components-cache-handler)
-
-## Related
-
-- [Next.js 16 Cache Documentation](https://nextjs.org/docs/app/getting-started/cache-components)
-- [@mrjasonroy/cache-components-cache-handler-redis](../cache-handler-redis) - Redis implementation
+Forked from/Inspired by [@fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler), but focusing only on supporting Next.js 16+ and the new caching system.

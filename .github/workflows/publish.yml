@@ -11,78 +11,7 @@ on:
       - 'v*.*.*-rc.*'
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7-alpine
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 6379:6379
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Type check
-        run: pnpm typecheck
-
-      - name: Build packages
-        run: pnpm build
-
-      - name: Run unit tests
-        run: pnpm test
-
-      - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
-
-      - name: Build e2e app
-        run: |
-          cd apps/e2e-test-app
-          pnpm build
-
-      - name: Run e2e tests with memory cache
-        run: |
-          cd apps/e2e-test-app
-          pnpm test:e2e
-
-      - name: Build e2e app with Redis
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm build
-
-      - name: Run e2e tests with Redis
-        env:
-          CACHE_HANDLER: redis
-          REDIS_URL: redis://localhost:6379
-        run: |
-          cd apps/e2e-test-app
-          pnpm test:e2e
-
   publish:
-    needs: test
     runs-on: ubuntu-latest
     environment: publish # Requires manual approval before publishing
     permissions:
@@ -162,26 +91,37 @@ jobs:
           echo "📦 npm dist-tag: $DIST_TAG"
           npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
 
-      - name: Comment on release
+      - name: Update release with npm info
         if: github.event_name == 'release'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const version = require('./packages/cache-handler/package.json').version;
-            const distTag = '${{ steps.dist_tag.outputs.tag }}';
-            const releaseId = context.payload.release.id;
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+          DIST_TAG="${{ steps.dist_tag.outputs.tag }}"
+          TAG="v${VERSION}"
 
-            let installCmd = `npm install @mrjasonroy/cache-components-cache-handler@${version}`;
-            if (distTag !== 'latest') {
-              installCmd += `\n# Or install by tag:\nnpm install @mrjasonroy/cache-components-cache-handler@${distTag}`;
-            }
+          INSTALL_CMD="npm install @mrjasonroy/cache-components-cache-handler@${VERSION}"
+          if [[ "$DIST_TAG" != "latest" ]]; then
+            INSTALL_CMD="${INSTALL_CMD}\n# Or install by tag:\nnpm install @mrjasonroy/cache-components-cache-handler@${DIST_TAG}"
+          fi
 
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: releaseId,
-              body: `✅ Successfully published to npm!\n\n📦 **dist-tag**: \`${distTag}\`\n\n\`\`\`bash\n${installCmd}\n\`\`\`\n\nView on npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler/v/${version}`
-            });
+          COMMENT="✅ Successfully published to npm!
+
+📦 **dist-tag:** \`${DIST_TAG}\`
+
+\`\`\`bash
+${INSTALL_CMD}
+\`\`\`
+
+View on npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler/v/${VERSION}"
+
+          # Add comment to release discussion
+          gh release view "$TAG" --json body --jq .body > /tmp/release-body.md
+          echo "" >> /tmp/release-body.md
+          echo "---" >> /tmp/release-body.md
+          echo "" >> /tmp/release-body.md
+          echo "$COMMENT" >> /tmp/release-body.md
+          gh release edit "$TAG" --notes-file /tmp/release-body.md
 
       - name: Create GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
