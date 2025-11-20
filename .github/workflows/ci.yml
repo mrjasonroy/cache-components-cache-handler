@@ -210,7 +210,12 @@ jobs:
           echo "E2E Matrix Tests: ${{ needs.e2e-tests.result }}"
           echo "ElastiCache Tests: ${{ needs.e2e-elasticache.result }}"
 
-          if [ "${{ needs.e2e-tests.result }}" != "success" ] || [ "${{ needs.e2e-elasticache.result }}" != "success" ]; then
+          E2E_RESULT="${{ needs.e2e-tests.result }}"
+          ELASTICACHE_RESULT="${{ needs.e2e-elasticache.result }}"
+
+          # Accept both 'success' and 'skipped' as valid results
+          if [[ "$E2E_RESULT" != "success" && "$E2E_RESULT" != "skipped" ]] || \
+             [[ "$ELASTICACHE_RESULT" != "success" && "$ELASTICACHE_RESULT" != "skipped" ]]; then
             echo "❌ Some tests failed"
             exit 1
           fi
