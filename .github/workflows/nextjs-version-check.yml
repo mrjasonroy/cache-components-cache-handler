@@ -32,8 +32,8 @@ jobs:
       - name: Check for new Next.js version
         id: check_version
         run: |
-          # Get current Next.js version from package.json
-          CURRENT_VERSION=$(node -p "require('./package.json').devDependencies.next")
+          # Get current Next.js version from e2e-test-app
+          CURRENT_VERSION=$(node -p "require('./apps/e2e-test-app/package.json').dependencies.next")
           echo "Current version: $CURRENT_VERSION"
 
           # Get latest Next.js version from npm
@@ -67,9 +67,6 @@ jobs:
       - name: Update Next.js version
         if: steps.check_version.outputs.needs_update == 'true'
         run: |
-          # Update Next.js in root package.json
-          pnpm add -D next@${{ steps.check_version.outputs.latest_version }}
-
           # Update e2e-test-app
           cd apps/e2e-test-app
           pnpm add next@${{ steps.check_version.outputs.latest_version }}
