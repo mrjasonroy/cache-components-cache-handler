@@ -4,6 +4,7 @@ import type {
   CacheHandler,
   CacheHandlerContext,
   CacheHandlerGetMeta,
+  CacheHandlerGetResult,
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
@@ -65,7 +66,7 @@ export class MemoryCacheHandler implements CacheHandler {
     this.defaultTTL = options.defaultTTL;
   }
 
-  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheValue | null> {
+  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null> {
     const entry = this.cache.get(key);
 
     if (!entry) {
@@ -95,7 +96,12 @@ export class MemoryCacheHandler implements CacheHandler {
     this.cache.delete(key);
     this.cache.set(key, entry);
 
-    return entry.value;
+    // Return the cache handler result with value and metadata
+    return {
+      value: entry.value,
+      lastModified: entry.lastModified,
+      age: Date.now() - entry.lastModified,
+    };
   }
 
   async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {

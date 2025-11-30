@@ -25,7 +25,10 @@ describe("MemoryCacheHandler", () => {
       await handler.set("test-key", value);
       const result = await handler.get("test-key");
 
-      expect(result).toEqual(value);
+      expect(result).not.toBeNull();
+      expect(result?.value).toEqual(value);
+      expect(result?.lastModified).toBeDefined();
+      expect(result?.age).toBeDefined();
     });
 
     test("should return null for non-existent keys", async () => {

@@ -4,6 +4,7 @@ import type {
   CacheHandler,
   CacheHandlerContext,
   CacheHandlerGetMeta,
+  CacheHandlerGetResult,
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
@@ -118,7 +119,7 @@ export class RedisCacheHandler implements CacheHandler {
     return `${this.tagPrefix}${tag}`;
   }
 
-  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheValue | null> {
+  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null> {
     try {
       const cacheKey = this.getCacheKey(key);
       this.log("GET", cacheKey);
@@ -157,7 +158,13 @@ export class RedisCacheHandler implements CacheHandler {
       }
 
       this.log("GET", cacheKey, "HIT");
-      return entry.value;
+
+      // Return the cache handler result with value and metadata
+      return {
+        value: entry.value,
+        lastModified: entry.lastModified,
+        age: Date.now() - entry.lastModified,
+      };
     } catch (error) {
       console.error("[RedisCacheHandler] GET error:", error);
       return null;
