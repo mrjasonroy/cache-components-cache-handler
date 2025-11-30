@@ -2,6 +2,7 @@ import type {
   CacheHandler,
   CacheHandlerContext,
   CacheHandlerGetMeta,
+  CacheHandlerGetResult,
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
@@ -61,13 +62,13 @@ export class CompositeHandler implements CacheHandler {
     this.setStrategy = options.setStrategy;
   }
 
-  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheValue | null> {
+  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null> {
     // Try handlers in order, return first hit
     for (const handler of this.handlers) {
       try {
-        const value = await handler.get(key, meta);
-        if (value !== null) {
-          return value;
+        const result = await handler.get(key, meta);
+        if (result !== null) {
+          return result;
         }
       } catch (error) {
         // Log error but continue to next handler

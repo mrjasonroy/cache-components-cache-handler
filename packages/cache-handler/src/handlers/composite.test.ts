@@ -45,7 +45,7 @@ describe("CompositeHandler", () => {
       });
 
       const result = await composite.get("test-key");
-      expect(result).toEqual(value);
+      expect(result?.value).toEqual(value);
     });
 
     test("should fallback to second handler if first has no value", async () => {
@@ -60,7 +60,7 @@ describe("CompositeHandler", () => {
       });
 
       const result = await composite.get("test-key");
-      expect(result).toEqual(value);
+      expect(result?.value).toEqual(value);
     });
 
     test("should return null if no handler has value", async () => {
@@ -93,7 +93,7 @@ describe("CompositeHandler", () => {
 
       // Should log error but continue to working handler
       const result = await composite.get("test-key");
-      expect(result).toEqual(value);
+      expect(result?.value).toEqual(value);
     });
 
     test("should pass meta to handlers", async () => {
@@ -124,8 +124,10 @@ describe("CompositeHandler", () => {
       const value = createMockValue();
       await composite.set("test-key", value);
 
-      expect(await handler1.get("test-key")).toEqual(value);
-      expect(await handler2.get("test-key")).toEqual(value);
+      const result1 = await handler1.get("test-key");
+      const result2 = await handler2.get("test-key");
+      expect(result1?.value).toEqual(value);
+      expect(result2?.value).toEqual(value);
     });
 
     test("should use setStrategy when provided", async () => {
@@ -141,7 +143,8 @@ describe("CompositeHandler", () => {
       await composite.set("test-key", value);
 
       expect(await handler1.get("test-key")).toBeNull();
-      expect(await handler2.get("test-key")).toEqual(value);
+      const result2 = await handler2.get("test-key");
+      expect(result2?.value).toEqual(value);
     });
 
     test("should route based on tags in setStrategy", async () => {
@@ -166,9 +169,11 @@ describe("CompositeHandler", () => {
         tags: ["other"],
       });
 
-      expect(await memoryHandler.get("memory-key")).toEqual(memoryValue);
+      const memResult = await memoryHandler.get("memory-key");
+      expect(memResult?.value).toEqual(memoryValue);
       expect(await memoryHandler.get("persistent-key")).toBeNull();
-      expect(await persistentHandler.get("persistent-key")).toEqual(persistentValue);
+      const persResult = await persistentHandler.get("persistent-key");
+      expect(persResult?.value).toEqual(persistentValue);
     });
 
     test("should handle handler failures gracefully", async () => {
@@ -189,7 +194,8 @@ describe("CompositeHandler", () => {
       await composite.set("test-key", value);
 
       // Working handler should still have the value
-      expect(await workingHandler.get("test-key")).toEqual(value);
+      const result = await workingHandler.get("test-key");
+      expect(result?.value).toEqual(value);
     });
   });
 

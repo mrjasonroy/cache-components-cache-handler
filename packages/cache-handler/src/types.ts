@@ -138,6 +138,32 @@ export interface CacheHandlerGetMeta {
 }
 
 /**
+ * Return type for cache handler get() method
+ * Matches Next.js CacheHandlerValue structure
+ */
+export interface CacheHandlerGetResult {
+  /**
+   * The actual cache value (ROUTE, PAGE, FETCH, or IMAGE)
+   */
+  value: CacheValue | null;
+
+  /**
+   * Timestamp of last modification (milliseconds since epoch)
+   */
+  lastModified?: number;
+
+  /**
+   * Age of the cache entry in milliseconds
+   */
+  age?: number;
+
+  /**
+   * Cache state metadata (for debugging)
+   */
+  cacheState?: string;
+}
+
+/**
  * Cache handler interface that must be implemented
  */
 export interface CacheHandler {
@@ -148,8 +174,9 @@ export interface CacheHandler {
 
   /**
    * Get a cache entry by key
+   * Returns an object with the cache value and metadata
    */
-  get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheValue | null>;
+  get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null>;
 
   /**
    * Set a cache entry
