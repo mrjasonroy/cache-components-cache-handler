@@ -27,6 +27,7 @@ class FakeRedis {
     this.setCalls.push({ key, args });
 
     let expireAt: number | undefined;
+    // ioredis style: set(key, value, "EX", seconds)
     if (args[0] === "EX" && typeof args[1] === "number") {
       expireAt = Date.now() + args[1] * 1000;
     }
@@ -228,5 +229,63 @@ describe("RedisDataCacheHandler", () => {
     const result = await handler.get("invalidate-key", []);
     expect(result).toBeUndefined();
     expect(redis.delCalls).toContainEqual(["nextjs:data-cache:invalidate-key"]);
+  });
+
+  test("sets TTL correctly with ioredis style args (fixes #16)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis, defaultTTL: 300 });
+
+    const entry = createEntry("ttl-test", { expire: 60, revalidate: 30 });
+    await handler.set("ttl-key", Promise.resolve(entry));
+
+    // Verify the set call used ioredis style: "EX", seconds
+    expect(redis.setCalls).toHaveLength(1);
+    const setCall = redis.setCalls[0];
+    expect(setCall.key).toBe("nextjs:data-cache:ttl-key");
+    expect(setCall.args).toEqual(["EX", 60]);
+  });
+
+  test("TTL causes entry to expire after specified time", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    const entry = createEntry("expiring", {
+      expire: 10, // 10 second TTL
+      revalidate: 5,
+      timestamp: BASE_TIME.getTime(),
+    });
+    await handler.set("expiring-key", Promise.resolve(entry));
+
+    // Should exist immediately
+    const resultBefore = await handler.get("expiring-key", []);
+    expect(resultBefore).toBeDefined();
+
+    // Advance past TTL
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 11_000));
+
+    // Should be gone due to Redis TTL expiration (simulated in FakeRedis)
+    const resultAfter = await handler.get("expiring-key", []);
+    expect(resultAfter).toBeUndefined();
+  });
+
+  test("uses defaultTTL when entry expire is MAX_SAFE_INTEGER", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis, defaultTTL: 3600 });
+
+    // Entry with very large expire (effectively no expiration from entry)
+    const entry = createEntry("default-ttl", { expire: 4294967294, revalidate: 60 });
+    await handler.set("default-ttl-key", Promise.resolve(entry));
+
+    expect(redis.setCalls).toHaveLength(1);
+    expect(redis.setCalls[0].args).toEqual(["EX", 3600]);
   });
 });

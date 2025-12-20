@@ -29,7 +29,12 @@ function loadIoredis(type: string): typeof import("ioredis").default {
 function createRedisAdapter(redis: import("ioredis").default): RedisClient {
   return {
     get: (key) => redis.get(key),
-    set: (key, value) => redis.set(key, value) as Promise<unknown>,
+    set: (key, value, exFlag?, ttl?) => {
+      if (exFlag === "EX" && typeof ttl === "number") {
+        return redis.set(key, value, "EX", ttl) as Promise<unknown>;
+      }
+      return redis.set(key, value) as Promise<unknown>;
+    },
     del: (...keys) => redis.del(...keys),
     exists: (...keys) => redis.exists(...keys),
     ttl: (key) => redis.ttl(key),

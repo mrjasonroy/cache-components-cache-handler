@@ -10,7 +10,7 @@ import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
 export interface RedisDataCacheHandlerOptions {
   /**
-   * Redis client instance (ioredis or node-redis)
+   * Redis client instance (ioredis compatible)
    */
   redis: RedisClient;
 
@@ -41,7 +41,8 @@ export interface RedisDataCacheHandlerOptions {
 }
 
 /**
- * Redis client interface (compatible with ioredis and node-redis)
+ * Redis client interface (ioredis compatible)
+ * Uses ioredis-style SET with "EX" positional args: set(key, value, "EX", seconds)
  */
 export interface RedisClient {
   get(key: string): Promise<string | null>;
