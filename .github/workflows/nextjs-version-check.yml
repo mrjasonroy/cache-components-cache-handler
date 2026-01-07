@@ -87,11 +87,6 @@ jobs:
           npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
           cd ../..
 
-          # Update Redis package
-          cd packages/cache-handler-redis
-          npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
-          cd ../..
-
       - name: Install updated dependencies
         if: steps.check_version.outputs.needs_update == 'true'
         run: pnpm install
