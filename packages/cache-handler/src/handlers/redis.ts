@@ -14,9 +14,12 @@ import type {
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
    * Redis connection options (ioredis)
-   * Can be a URL string or RedisOptions object
+   * Can be:
+   * - A Redis client instance (ioredis)
+   * - A URL string
+   * - A RedisOptions object
    */
-  redis?: string | RedisOptions;
+  redis?: Redis | string | RedisOptions;
 
   /**
    * Key prefix for all cache entries
@@ -58,11 +61,32 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
  * // In cache-handler.mjs or data-cache-handler.mjs
  * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler/handlers/redis";
  *
+ * // Option 1: Pass a Redis URL or config
  * export default class NextCacheHandler extends RedisCacheHandler {
  *   constructor(options) {
  *     super({
  *       ...options,
  *       redis: process.env.REDIS_URL || "redis://localhost:6379",
+ *       keyPrefix: "nextjs:cache:",
+ *       defaultTTL: 3600
+ *     });
+ *   }
+ * }
+ *
+ * // Option 2: Pass an existing Redis client instance
+ * import Redis from "ioredis";
+ *
+ * const redisClient = new Redis({
+ *   host: "localhost",
+ *   port: 6379,
+ *   // ... other options
+ * });
+ *
+ * export default class NextCacheHandler extends RedisCacheHandler {
+ *   constructor(options) {
+ *     super({
+ *       ...options,
+ *       redis: redisClient, // Pass existing client
  *       keyPrefix: "nextjs:cache:",
  *       defaultTTL: 3600
  *     });
@@ -81,9 +105,14 @@ export class RedisCacheHandler implements CacheHandler {
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     // Initialize Redis connection
-    if (typeof options.redis === "string") {
+    if (options.redis instanceof Redis) {
+      // Use existing Redis client instance
+      this.redis = options.redis;
+    } else if (typeof options.redis === "string") {
+      // Create new client from URL string
       this.redis = new Redis(options.redis);
     } else {
+      // Create new client from RedisOptions or default config
       this.redis = new Redis(options.redis || {});
     }
 
@@ -92,10 +121,12 @@ export class RedisCacheHandler implements CacheHandler {
     this.defaultTTL = options.defaultTTL;
     this.debug = options.debug ?? false;
 
-    // Handle Redis connection errors
-    this.redis.on("error", (err) => {
-      console.error("[RedisCacheHandler] Redis connection error:", err);
-    });
+    // Handle Redis connection errors (only add listener if we created the client)
+    if (!(options.redis instanceof Redis)) {
+      this.redis.on("error", (err) => {
+        console.error("[RedisCacheHandler] Redis connection error:", err);
+      });
+    }
 
     if (this.debug) {
       console.log("[RedisCacheHandler] Initialized", {
