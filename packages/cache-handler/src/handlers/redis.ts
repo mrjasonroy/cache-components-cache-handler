@@ -102,6 +102,7 @@ export class RedisCacheHandler implements CacheHandler {
   private readonly tagPrefix: string;
   private readonly defaultTTL?: number;
   private readonly debug: boolean;
+  private didCreateClient = false;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     // Initialize Redis connection
@@ -111,9 +112,11 @@ export class RedisCacheHandler implements CacheHandler {
     } else if (typeof options.redis === "string") {
       // Create new client from URL string
       this.redis = new Redis(options.redis);
+      this.didCreateClient = true;
     } else {
       // Create new client from RedisOptions or default config
       this.redis = new Redis(options.redis || {});
+      this.didCreateClient = true;
     }
 
     this.keyPrefix = options.keyPrefix ?? "nextjs:cache:";
@@ -320,11 +323,17 @@ export class RedisCacheHandler implements CacheHandler {
   /**
    * Close the Redis connection
    * Call this when shutting down your application
+   * Note: Only closes connections created by this handler, not shared clients
    */
   async close(): Promise<void> {
     try {
-      await this.redis.quit();
-      this.log("Connection closed");
+      // Only close if we created the client
+      if (this.didCreateClient) {
+        await this.redis.quit();
+        this.log("Connection closed");
+      } else {
+        this.log("Skipping close (using shared client)");
+      }
     } catch (error) {
       console.error("[RedisCacheHandler] close error:", error);
     }
