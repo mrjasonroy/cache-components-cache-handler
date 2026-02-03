@@ -138,8 +138,6 @@ jobs:
         run: |
           cd apps/e2e-test-app
           pnpm build
-          pnpm start &
-          sleep 10
           pnpm test:e2e
         continue-on-error: true
         id: test_memory
@@ -147,18 +145,12 @@ jobs:
       - name: Run e2e tests with Redis
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
-          # Kill previous server
-          lsof -ti:3000 | xargs kill -9 || true
-          sleep 2
-
           # Flush Redis
           docker exec nextjs-cache-redis redis-cli FLUSHALL
 
           # Build and test with Redis
           cd apps/e2e-test-app
           CACHE_HANDLER=redis pnpm build
-          CACHE_HANDLER=redis pnpm start &
-          sleep 10
           CACHE_HANDLER=redis pnpm test:e2e
         continue-on-error: true
         id: test_redis
