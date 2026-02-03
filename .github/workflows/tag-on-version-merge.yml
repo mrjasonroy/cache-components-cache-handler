@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   create-tag:
-    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'version-bump/')
+    # Trigger on version-bump/ branches (manual bumps) or nextjs- branches (automated updates)
+    if: github.event.pull_request.merged == true && (startsWith(github.event.pull_request.head.ref, 'version-bump/') || startsWith(github.event.pull_request.head.ref, 'nextjs-'))
     runs-on: ubuntu-latest
 
     steps:
@@ -25,7 +26,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Get version from package.json
         id: version
@@ -34,7 +35,18 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version from package.json: $VERSION"
 
+      - name: Check if tag already exists
+        id: tag_check
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag v${{ steps.version.outputs.version }} already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create and push tag
+        if: steps.tag_check.outputs.exists != 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -43,10 +55,11 @@ jobs:
 
       - name: Summary
         run: |
-          echo "✅ Tag v${{ steps.version.outputs.version }} created and pushed"
-          echo ""
-          echo "Next steps:"
-          echo "1. Go to: https://github.com/${{ github.repository }}/releases/new"
-          echo "2. Select tag: v${{ steps.version.outputs.version }}"
-          echo "3. Generate release notes and publish"
-          echo "4. Publishing to npm will happen automatically"
+          if [ "${{ steps.tag_check.outputs.exists }}" = "true" ]; then
+            echo "⚠️ Tag v${{ steps.version.outputs.version }} already exists, skipping"
+          else
+            echo "✅ Tag v${{ steps.version.outputs.version }} created and pushed"
+            echo ""
+            echo "The publish workflow will be triggered automatically."
+            echo "Watch: https://github.com/${{ github.repository }}/actions/workflows/publish.yml"
+          fi

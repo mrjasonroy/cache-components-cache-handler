@@ -1,0 +1,221 @@
+name: Catch-up Release
+
+# This workflow is for catching up to the latest Next.js version when you've fallen behind.
+# It will update the package to match the latest Next.js major.minor version, run tests,
+# and automatically publish if tests pass.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (don't actually publish)"
+        type: boolean
+        default: false
+
+jobs:
+  catch-up:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Check versions
+        id: versions
+        run: |
+          CURRENT_PKG_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
+          LATEST_NEXTJS=$(npm view next version)
+          LATEST_MAJOR_MINOR=$(echo $LATEST_NEXTJS | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
+          NEW_PKG_VERSION="${LATEST_MAJOR_MINOR}.0"
+
+          echo "current_pkg_version=$CURRENT_PKG_VERSION" >> $GITHUB_OUTPUT
+          echo "latest_nextjs=$LATEST_NEXTJS" >> $GITHUB_OUTPUT
+          echo "latest_major_minor=$LATEST_MAJOR_MINOR" >> $GITHUB_OUTPUT
+          echo "new_pkg_version=$NEW_PKG_VERSION" >> $GITHUB_OUTPUT
+
+          echo "📦 Current package version: $CURRENT_PKG_VERSION"
+          echo "🔄 Latest Next.js version: $LATEST_NEXTJS"
+          echo "🎯 Target package version: $NEW_PKG_VERSION"
+
+          if [ "$CURRENT_PKG_VERSION" = "$NEW_PKG_VERSION" ]; then
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Already up to date!"
+          else
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update Next.js in apps
+        if: steps.versions.outputs.needs_update == 'true'
+        run: |
+          # Update e2e-test-app
+          cd apps/e2e-test-app
+          pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
+          cd ../..
+
+          # Update legacy-cache-test if it exists
+          if [ -d "apps/legacy-cache-test" ]; then
+            cd apps/legacy-cache-test
+            pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
+            cd ../..
+          fi
+
+      - name: Update package version
+        if: steps.versions.outputs.needs_update == 'true'
+        run: |
+          cd packages/cache-handler
+          npm version ${{ steps.versions.outputs.new_pkg_version }} --no-git-tag-version --allow-same-version
+          cd ../..
+
+      - name: Install updated dependencies
+        if: steps.versions.outputs.needs_update == 'true'
+        run: pnpm install
+
+      - name: Run formatting
+        if: steps.versions.outputs.needs_update == 'true'
+        run: pnpm format
+
+      - name: Run linting
+        if: steps.versions.outputs.needs_update == 'true'
+        run: pnpm lint
+
+      - name: Run type checking
+        if: steps.versions.outputs.needs_update == 'true'
+        run: pnpm typecheck
+
+      - name: Build packages
+        if: steps.versions.outputs.needs_update == 'true'
+        run: pnpm build
+
+      - name: Start Docker services
+        if: steps.versions.outputs.needs_update == 'true'
+        run: |
+          docker compose up -d
+          sleep 5
+          docker ps
+
+      - name: Run e2e tests with memory cache
+        if: steps.versions.outputs.needs_update == 'true'
+        id: test_memory
+        run: |
+          cd apps/e2e-test-app
+          pnpm build
+          pnpm start &
+          sleep 10
+          pnpm test:e2e
+
+      - name: Run e2e tests with Redis
+        if: steps.versions.outputs.needs_update == 'true'
+        id: test_redis
+        run: |
+          # Kill previous server
+          lsof -ti:3000 | xargs kill -9 || true
+          sleep 2
+
+          # Flush Redis
+          docker exec nextjs-cache-redis redis-cli FLUSHALL
+
+          # Build and test with Redis
+          cd apps/e2e-test-app
+          CACHE_HANDLER=redis pnpm build
+          CACHE_HANDLER=redis pnpm start &
+          sleep 10
+          CACHE_HANDLER=redis pnpm test:e2e
+
+      - name: Stop Docker services
+        if: always()
+        run: docker compose down || true
+
+      - name: Commit and tag
+        if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add .
+          git commit -m "chore: catch-up release for Next.js ${{ steps.versions.outputs.latest_nextjs }}
+
+          - Updated Next.js to ${{ steps.versions.outputs.latest_nextjs }}
+          - Updated package version to ${{ steps.versions.outputs.new_pkg_version }}
+          - All tests passing
+
+          Co-Authored-By: GitHub Actions <github-actions[bot]@users.noreply.github.com>"
+
+          git tag v${{ steps.versions.outputs.new_pkg_version }}
+          git push origin main
+          git push origin v${{ steps.versions.outputs.new_pkg_version }}
+
+      - name: Publish to npm
+        if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true
+        working-directory: packages/cache-handler
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag latest
+
+      - name: Create GitHub Release
+        if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.versions.outputs.new_pkg_version }}"
+          TAG="v$VERSION"
+
+          RELEASE_NOTES=$(cat <<EOF
+          ## Catch-up Release for Next.js ${{ steps.versions.outputs.latest_nextjs }}
+
+          This release updates the cache handler to support Next.js ${{ steps.versions.outputs.latest_major_minor }}.x.
+
+          ## Installation
+
+          \`\`\`bash
+          npm install @mrjasonroy/cache-components-cache-handler@$VERSION
+          \`\`\`
+
+          ## Changes
+          - Updated to support Next.js ${{ steps.versions.outputs.latest_nextjs }}
+          - Peer dependency now allows all 16.x versions (\`^16.0.0\`)
+
+          ## Test Results
+          - ✅ Memory cache tests: PASSED
+          - ✅ Redis cache tests: PASSED
+          EOF
+          )
+
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes "$RELEASE_NOTES"
+
+          echo "✅ Created GitHub release for $TAG"
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.versions.outputs.needs_update }}" != "true" ]; then
+            echo "✅ Already up to date with Next.js ${{ steps.versions.outputs.latest_nextjs }}"
+          elif [ "${{ inputs.dry_run }}" = "true" ]; then
+            echo "🧪 DRY RUN - Would have published:"
+            echo "   - Package version: ${{ steps.versions.outputs.new_pkg_version }}"
+            echo "   - Next.js version: ${{ steps.versions.outputs.latest_nextjs }}"
+          else
+            echo "✅ Successfully published @mrjasonroy/cache-components-cache-handler@${{ steps.versions.outputs.new_pkg_version }}"
+            echo "📦 npm: https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler"
+            echo "🔗 Release: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.versions.outputs.new_pkg_version }}"
+          fi

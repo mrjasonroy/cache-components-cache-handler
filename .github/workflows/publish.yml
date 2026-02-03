@@ -5,15 +5,17 @@ on:
     types: [published]
   push:
     tags:
-      - 'v*.*.*'
-      - 'v*.*.*-alpha.*'
-      - 'v*.*.*-beta.*'
-      - 'v*.*.*-rc.*'
+      - "v*.*.*"
+      - "v*.*.*-alpha.*"
+      - "v*.*.*-beta.*"
+      - "v*.*.*-rc.*"
 
 jobs:
   publish:
     runs-on: ubuntu-latest
-    environment: publish # Requires manual approval before publishing
+    # Note: For full automation, we've removed the environment approval requirement
+    # If you want manual approval, uncomment the next line and configure the "publish" environment in GitHub
+    # environment: publish
     permissions:
       contents: write # Required for creating releases
       id-token: write # Required for npm provenance and trusted publishing
@@ -50,9 +52,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
+          node-version: "22"
+          cache: "pnpm"
+          registry-url: "https://registry.npmjs.org"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -89,16 +91,11 @@ jobs:
           DIST_TAG="${{ steps.dist_tag.outputs.tag }}"
           echo "✅ Published @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION"
           echo "📦 npm dist-tag: $DIST_TAG"
-          npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
 
-      # Commented out due to YAML parsing issues with special characters
-      # Can be re-enabled in future by properly escaping content
-      # - name: Update release with npm info
-      #   if: github.event_name == 'release'
-      #   env:
-      #     GH_TOKEN: ${{ github.token }}
-      #   run: |
-      #     echo "Skipping release update - npm info available in workflow summary"
+          # Wait a moment for npm to propagate
+          sleep 5
+
+          npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
 
       - name: Create GitHub Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')

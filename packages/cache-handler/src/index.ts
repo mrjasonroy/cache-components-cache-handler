@@ -27,9 +27,9 @@ export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
 export { isImplicitTag } from "./helpers/is-implicit-tag.js";
 export { calculateLifespan, isExpired } from "./helpers/lifespan.js";
 export {
+  type CacheHandlerConfig,
   createCacheConfig,
   createCacheConfigWithProfiles,
-  type CacheHandlerConfig,
 } from "./helpers/next-config.js";
 // Types
 export type {
@@ -49,9 +49,9 @@ export { IMPLICIT_TAG_PREFIX } from "./types.js";
 
 // Zero-config factory (recommended)
 export {
-  createCacheHandler,
   type CacheHandlerOptions as DataCacheHandlerOptions,
   type CacheHandlerType,
+  createCacheHandler,
 } from "./data-cache/factory.js";
 
 // Advanced: Direct handler creation
