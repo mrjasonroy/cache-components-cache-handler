@@ -20,11 +20,7 @@ async function fetchDatabaseData(id: string) {
   };
 }
 
-export default async function RemoteCachePage({
-  searchParams,
-}: {
-  searchParams: { id?: string };
-}) {
+export default async function RemoteCachePage({ searchParams }: { searchParams: { id?: string } }) {
   const id = searchParams.id || "default";
   const data = await fetchDatabaseData(id);
 

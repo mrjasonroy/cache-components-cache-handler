@@ -20,11 +20,7 @@ async function fetchExternalAPI(id: string) {
   };
 }
 
-export default async function RemoteFetchPage({
-  searchParams,
-}: {
-  searchParams: { id?: string };
-}) {
+export default async function RemoteFetchPage({ searchParams }: { searchParams: { id?: string } }) {
   const id = searchParams.id || "default";
   const data = await fetchExternalAPI(id);
 

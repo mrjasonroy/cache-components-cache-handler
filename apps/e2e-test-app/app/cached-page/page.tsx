@@ -16,11 +16,7 @@ async function CachedPageContent({ id }: { id: string }) {
   );
 }
 
-export default async function Page({
-  searchParams,
-}: {
-  searchParams: { id?: string };
-}) {
+export default async function Page({ searchParams }: { searchParams: { id?: string } }) {
   const id = searchParams.id || "default";
 
   return (

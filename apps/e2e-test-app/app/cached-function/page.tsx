@@ -2,11 +2,7 @@ import { getCachedData } from "@/lib/cached-function";
 
 // E2E-003: use cache in async utility function
 
-export default async function Page({
-  searchParams,
-}: {
-  searchParams: { id?: string };
-}) {
+export default async function Page({ searchParams }: { searchParams: { id?: string } }) {
   const id = searchParams.id || "default";
 
   const data1 = await getCachedData(id);

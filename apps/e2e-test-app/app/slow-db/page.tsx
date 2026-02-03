@@ -24,11 +24,7 @@ async function getTopUserFromDB(testId: string) {
 }
 
 // Dynamic content component that awaits searchParams
-async function DynamicContent({
-  searchParams,
-}: {
-  searchParams: Promise<{ testId?: string }>;
-}) {
+async function DynamicContent({ searchParams }: { searchParams: Promise<{ testId?: string }> }) {
   // Await searchParams in the child component
   const params = await searchParams;
   const testId = params.testId || `default-${Date.now()}`;

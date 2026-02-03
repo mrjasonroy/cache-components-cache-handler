@@ -4,13 +4,7 @@ import { Suspense } from "react";
 // E2E-101: Cached component WITH Suspense boundary
 // Accessing cookies outside cache scope and passing as argument
 
-async function CachedContent({
-  userValue,
-  id,
-}: {
-  userValue: string | undefined;
-  id: string;
-}) {
+async function CachedContent({ userValue, id }: { userValue: string | undefined; id: string }) {
   "use cache";
 
   // Simulate some async work

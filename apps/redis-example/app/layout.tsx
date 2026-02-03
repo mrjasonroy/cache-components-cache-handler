@@ -3,11 +3,7 @@ export const metadata = {
   description: "Next.js 16 + Redis caching with use cache directive",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
       <body
