@@ -110,16 +110,12 @@ jobs:
             cd ../..
           fi
 
-          # Only bump package version on major.minor changes
-          if [ "${{ steps.check_version.outputs.is_major_minor_bump }}" = "true" ]; then
-            NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_major_minor }}.0"
-            cd packages/cache-handler
-            npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
-            cd ../..
-            echo "Bumped package version to $NEW_PKG_VERSION"
-          else
-            echo "Patch update only - no package version bump"
-          fi
+          # Bump package version to match Next.js version
+          NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_version }}"
+          cd packages/cache-handler
+          npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
+          cd ../..
+          echo "Bumped package version to $NEW_PKG_VERSION"
 
       - name: Install updated dependencies
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
@@ -185,24 +181,13 @@ jobs:
       - name: Commit changes
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
-          IS_MAJOR_MINOR="${{ steps.check_version.outputs.is_major_minor_bump }}"
-          if [ "$IS_MAJOR_MINOR" = "true" ]; then
-            COMMIT_MSG="chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
+          git add .
+          git commit -m "chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
 
           - Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
-          - Bumped package version to ${{ steps.check_version.outputs.latest_major_minor }}.0
+          - Bumped package version to ${{ steps.check_version.outputs.latest_version }}
           - Memory tests: ${{ steps.test_memory.outcome }}
-          - Redis tests: ${{ steps.test_redis.outcome }}"
-          else
-            COMMIT_MSG="chore: test Next.js ${{ steps.check_version.outputs.latest_version }}
-
-          - Updated Next.js to ${{ steps.check_version.outputs.latest_version }} (patch update)
-          - Memory tests: ${{ steps.test_memory.outcome }}
-          - Redis tests: ${{ steps.test_redis.outcome }}"
-          fi
-
-          git add .
-          git commit -m "$COMMIT_MSG
+          - Redis tests: ${{ steps.test_redis.outcome }}
 
           Co-Authored-By: GitHub Actions <github-actions[bot]@users.noreply.github.com>"
 
@@ -219,30 +204,19 @@ jobs:
         run: |
           MEMORY_STATUS="${{ steps.test_memory.outcome }}"
           REDIS_STATUS="${{ steps.test_redis.outcome }}"
-          IS_MAJOR_MINOR="${{ steps.check_version.outputs.is_major_minor_bump }}"
 
           if [ "$MEMORY_STATUS" = "success" ] && [ "$REDIS_STATUS" = "success" ]; then
-            if [ "$IS_MAJOR_MINOR" = "true" ]; then
-              PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing (release)"
-            else
-              PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing (patch)"
-            fi
+            PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing"
             ALL_TESTS_PASSED="true"
           else
             PR_TITLE="⚠️ Next.js ${{ steps.check_version.outputs.latest_version }} - Tests need review"
             ALL_TESTS_PASSED="false"
           fi
 
-          if [ "$IS_MAJOR_MINOR" = "true" ]; then
-            VERSION_NOTE="📦 **Release PR** - Package version will be bumped to ${{ steps.check_version.outputs.latest_major_minor }}.0"
-          else
-            VERSION_NOTE="🔧 **Patch test** - No package version change, just verifying compatibility"
-          fi
-
           PR_BODY=$(cat <<EOF
-          ## Next.js ${{ steps.check_version.outputs.latest_version }} Update
+          ## Next.js ${{ steps.check_version.outputs.latest_version }} Release
 
-          $VERSION_NOTE
+          📦 Package version will be bumped to **${{ steps.check_version.outputs.latest_version }}**
 
           ### Changes
           - ⬆️ Updated Next.js from ${{ steps.check_version.outputs.current_nextjs }} to ${{ steps.check_version.outputs.latest_version }}

@@ -43,12 +43,10 @@ jobs:
         run: |
           CURRENT_PKG_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
           LATEST_NEXTJS=$(npm view next version)
-          LATEST_MAJOR_MINOR=$(echo $LATEST_NEXTJS | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
-          NEW_PKG_VERSION="${LATEST_MAJOR_MINOR}.0"
+          NEW_PKG_VERSION="$LATEST_NEXTJS"
 
           echo "current_pkg_version=$CURRENT_PKG_VERSION" >> $GITHUB_OUTPUT
           echo "latest_nextjs=$LATEST_NEXTJS" >> $GITHUB_OUTPUT
-          echo "latest_major_minor=$LATEST_MAJOR_MINOR" >> $GITHUB_OUTPUT
           echo "new_pkg_version=$NEW_PKG_VERSION" >> $GITHUB_OUTPUT
 
           echo "📦 Current package version: $CURRENT_PKG_VERSION"
@@ -172,7 +170,7 @@ jobs:
           PR_BODY=$(cat <<'EOF'
           ## Catch-up Release for Next.js ${{ steps.versions.outputs.latest_nextjs }}
 
-          This release updates the cache handler to support Next.js ${{ steps.versions.outputs.latest_major_minor }}.x.
+          This release updates the cache handler to support Next.js ${{ steps.versions.outputs.latest_nextjs }}.
 
           ### Changes
           - ⬆️ Updated Next.js to ${{ steps.versions.outputs.latest_nextjs }}
