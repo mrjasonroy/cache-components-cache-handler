@@ -16,7 +16,7 @@ jobs:
     outputs:
       needs_update: ${{ steps.check_version.outputs.needs_update }}
       latest_version: ${{ steps.check_version.outputs.latest_version }}
-      latest_major_minor: ${{ steps.check_version.outputs.latest_major_minor }}
+      is_major_minor_bump: ${{ steps.check_version.outputs.is_major_minor_bump }}
 
     steps:
       - name: Checkout repository
@@ -37,6 +37,10 @@ jobs:
       - name: Check for new Next.js version
         id: check_version
         run: |
+          # Get current Next.js version from e2e-test-app (what we're testing against)
+          CURRENT_NEXTJS=$(node -p "require('./apps/e2e-test-app/package.json').dependencies.next")
+          echo "Current Next.js in e2e-test-app: $CURRENT_NEXTJS"
+
           # Get current package version
           CURRENT_PKG_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
           echo "Current package version: $CURRENT_PKG_VERSION"
@@ -49,24 +53,34 @@ jobs:
           CURRENT_MAJOR_MINOR=$(echo $CURRENT_PKG_VERSION | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
           LATEST_MAJOR_MINOR=$(echo $LATEST_VERSION | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
 
+          echo "current_nextjs=$CURRENT_NEXTJS" >> $GITHUB_OUTPUT
           echo "current_pkg_version=$CURRENT_PKG_VERSION" >> $GITHUB_OUTPUT
           echo "latest_version=$LATEST_VERSION" >> $GITHUB_OUTPUT
           echo "current_major_minor=$CURRENT_MAJOR_MINOR" >> $GITHUB_OUTPUT
           echo "latest_major_minor=$LATEST_MAJOR_MINOR" >> $GITHUB_OUTPUT
 
+          # Check if major.minor changed (triggers package version bump)
           if [ "$CURRENT_MAJOR_MINOR" != "$LATEST_MAJOR_MINOR" ]; then
+            echo "is_major_minor_bump=true" >> $GITHUB_OUTPUT
+            echo "New major.minor: $LATEST_MAJOR_MINOR"
+          else
+            echo "is_major_minor_bump=false" >> $GITHUB_OUTPUT
+          fi
+
+          # Check if we need any update (patch or major.minor)
+          if [ "$CURRENT_NEXTJS" != "$LATEST_VERSION" ]; then
             echo "needs_update=true" >> $GITHUB_OUTPUT
-            echo "New Next.js major.minor available: $LATEST_MAJOR_MINOR (current: $CURRENT_MAJOR_MINOR)"
+            echo "Update needed: $CURRENT_NEXTJS -> $LATEST_VERSION"
           else
             echo "needs_update=false" >> $GITHUB_OUTPUT
-            echo "Already on latest major.minor: $CURRENT_MAJOR_MINOR"
+            echo "Already on latest: $LATEST_VERSION"
           fi
 
       - name: Check if branch already exists
         if: steps.check_version.outputs.needs_update == 'true'
         id: branch_check
         run: |
-          BRANCH_NAME="nextjs-${{ steps.check_version.outputs.latest_major_minor }}"
+          BRANCH_NAME="nextjs-${{ steps.check_version.outputs.latest_version }}"
           if git ls-remote --heads origin $BRANCH_NAME | grep -q $BRANCH_NAME; then
             echo "branch_exists=true" >> $GITHUB_OUTPUT
             echo "Branch $BRANCH_NAME already exists"
@@ -79,7 +93,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout -b nextjs-${{ steps.check_version.outputs.latest_major_minor }}
+          git checkout -b nextjs-${{ steps.check_version.outputs.latest_version }}
 
       - name: Update Next.js version
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
@@ -96,13 +110,16 @@ jobs:
             cd ../..
           fi
 
-          # Update package versions to match Next.js
-          NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_major_minor }}.0"
-
-          # Update core package
-          cd packages/cache-handler
-          npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
-          cd ../..
+          # Only bump package version on major.minor changes
+          if [ "${{ steps.check_version.outputs.is_major_minor_bump }}" = "true" ]; then
+            NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_major_minor }}.0"
+            cd packages/cache-handler
+            npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
+            cd ../..
+            echo "Bumped package version to $NEW_PKG_VERSION"
+          else
+            echo "Patch update only - no package version bump"
+          fi
 
       - name: Install updated dependencies
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
@@ -168,20 +185,31 @@ jobs:
       - name: Commit changes
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
-          git add .
-          git commit -m "chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
+          IS_MAJOR_MINOR="${{ steps.check_version.outputs.is_major_minor_bump }}"
+          if [ "$IS_MAJOR_MINOR" = "true" ]; then
+            COMMIT_MSG="chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
 
           - Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
-          - Updated package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
+          - Bumped package version to ${{ steps.check_version.outputs.latest_major_minor }}.0
           - Memory tests: ${{ steps.test_memory.outcome }}
-          - Redis tests: ${{ steps.test_redis.outcome }}
+          - Redis tests: ${{ steps.test_redis.outcome }}"
+          else
+            COMMIT_MSG="chore: test Next.js ${{ steps.check_version.outputs.latest_version }}
+
+          - Updated Next.js to ${{ steps.check_version.outputs.latest_version }} (patch update)
+          - Memory tests: ${{ steps.test_memory.outcome }}
+          - Redis tests: ${{ steps.test_redis.outcome }}"
+          fi
+
+          git add .
+          git commit -m "$COMMIT_MSG
 
           Co-Authored-By: GitHub Actions <github-actions[bot]@users.noreply.github.com>"
 
       - name: Push changes
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
-          git push origin nextjs-${{ steps.check_version.outputs.latest_major_minor }}
+          git push origin nextjs-${{ steps.check_version.outputs.latest_version }}
 
       - name: Create Pull Request
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
@@ -191,63 +219,48 @@ jobs:
         run: |
           MEMORY_STATUS="${{ steps.test_memory.outcome }}"
           REDIS_STATUS="${{ steps.test_redis.outcome }}"
+          IS_MAJOR_MINOR="${{ steps.check_version.outputs.is_major_minor_bump }}"
 
           if [ "$MEMORY_STATUS" = "success" ] && [ "$REDIS_STATUS" = "success" ]; then
-            PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing"
+            if [ "$IS_MAJOR_MINOR" = "true" ]; then
+              PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing (release)"
+            else
+              PR_TITLE="✅ Next.js ${{ steps.check_version.outputs.latest_version }} - All tests passing (patch)"
+            fi
             ALL_TESTS_PASSED="true"
-            PR_BODY=$(cat <<'EOF'
-          ## Next.js ${{ steps.check_version.outputs.latest_version }} Update
-
-          All tests passing! This PR will be auto-merged and published to npm.
-
-          ### Changes
-          - ⬆️ Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
-          - 📦 Bumped package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
-
-          ### Test Results
-          - ✅ Memory cache tests: PASSED
-          - ✅ Redis cache tests: PASSED
-
-          ### Automation
-          This PR will be automatically merged and a new version will be published to npm.
-
-          ---
-          *Auto-generated by [nextjs-version-check workflow](https://github.com/${{ github.repository }}/actions/workflows/nextjs-version-check.yml)*
-          EOF
-          )
           else
             PR_TITLE="⚠️ Next.js ${{ steps.check_version.outputs.latest_version }} - Tests need review"
             ALL_TESTS_PASSED="false"
-            PR_BODY=$(cat <<'EOF'
+          fi
+
+          if [ "$IS_MAJOR_MINOR" = "true" ]; then
+            VERSION_NOTE="📦 **Release PR** - Package version will be bumped to ${{ steps.check_version.outputs.latest_major_minor }}.0"
+          else
+            VERSION_NOTE="🔧 **Patch test** - No package version change, just verifying compatibility"
+          fi
+
+          PR_BODY=$(cat <<EOF
           ## Next.js ${{ steps.check_version.outputs.latest_version }} Update
 
-          Some tests failed. Manual review required before merging.
+          $VERSION_NOTE
 
           ### Changes
-          - ⬆️ Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
-          - 📦 Bumped package versions to ${{ steps.check_version.outputs.latest_major_minor }}.0
+          - ⬆️ Updated Next.js from ${{ steps.check_version.outputs.current_nextjs }} to ${{ steps.check_version.outputs.latest_version }}
 
           ### Test Results
-          - $( [ "$MEMORY_STATUS" = "success" ] && echo "✅" || echo "❌" ) Memory cache tests: $MEMORY_STATUS
-          - $( [ "$REDIS_STATUS" = "success" ] && echo "✅" || echo "❌" ) Redis cache tests: $REDIS_STATUS
-
-          ### Next Steps
-          1. Review test failures
-          2. Fix compatibility issues
-          3. Re-run tests
-          4. Merge when passing
+          - $([ "$MEMORY_STATUS" = "success" ] && echo "✅" || echo "❌") Memory cache tests: $MEMORY_STATUS
+          - $([ "$REDIS_STATUS" = "success" ] && echo "✅" || echo "❌") Redis cache tests: $REDIS_STATUS
 
           ---
           *Auto-generated by [nextjs-version-check workflow](https://github.com/${{ github.repository }}/actions/workflows/nextjs-version-check.yml)*
           EOF
           )
-          fi
 
           PR_URL=$(gh pr create \
             --title "$PR_TITLE" \
             --body "$PR_BODY" \
             --base main \
-            --head nextjs-${{ steps.check_version.outputs.latest_major_minor }})
+            --head nextjs-${{ steps.check_version.outputs.latest_version }})
 
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
           echo "all_tests_passed=$ALL_TESTS_PASSED" >> $GITHUB_OUTPUT
@@ -258,7 +271,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "All tests passed! Enabling auto-merge..."
-          gh pr merge nextjs-${{ steps.check_version.outputs.latest_major_minor }} --auto --squash
+          gh pr merge nextjs-${{ steps.check_version.outputs.latest_version }} --auto --squash || echo "Auto-merge not available, PR created for manual review"
 
-          echo "✅ Auto-merge enabled for PR"
-          echo "The PR will be merged once all status checks pass."
+          echo "✅ PR created and ready for merge"
