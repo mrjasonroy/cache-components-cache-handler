@@ -111,6 +111,12 @@ jobs:
           sleep 5
           docker ps
 
+      - name: Install Playwright browsers
+        if: steps.versions.outputs.needs_update == 'true'
+        run: |
+          cd apps/e2e-test-app
+          pnpm exec playwright install chromium
+
       - name: Run e2e tests with memory cache
         if: steps.versions.outputs.needs_update == 'true'
         id: test_memory
