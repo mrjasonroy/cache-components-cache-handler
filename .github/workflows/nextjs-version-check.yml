@@ -247,9 +247,7 @@ jobs:
             --title "$PR_TITLE" \
             --body "$PR_BODY" \
             --base main \
-            --head nextjs-${{ steps.check_version.outputs.latest_major_minor }} \
-            --label "dependencies" \
-            --label "nextjs-update")
+            --head nextjs-${{ steps.check_version.outputs.latest_major_minor }})
 
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
           echo "all_tests_passed=$ALL_TESTS_PASSED" >> $GITHUB_OUTPUT

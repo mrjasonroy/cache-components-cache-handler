@@ -196,9 +196,7 @@ jobs:
             --title "✅ Catch-up: Next.js ${{ steps.versions.outputs.latest_nextjs }} (v$VERSION)" \
             --body "$PR_BODY" \
             --base main \
-            --head $BRANCH_NAME \
-            --label "dependencies" \
-            --label "auto-release"
+            --head $BRANCH_NAME
 
           # Enable auto-merge
           gh pr merge $BRANCH_NAME --auto --squash
