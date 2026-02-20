@@ -19,6 +19,17 @@ jobs:
       contents: write
       pull-requests: write
 
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -102,13 +113,6 @@ jobs:
         if: steps.versions.outputs.needs_update == 'true'
         run: pnpm build
 
-      - name: Start Docker services
-        if: steps.versions.outputs.needs_update == 'true'
-        run: |
-          docker compose up -d
-          sleep 5
-          docker ps
-
       - name: Install Playwright browsers
         if: steps.versions.outputs.needs_update == 'true'
         run: |
@@ -127,17 +131,13 @@ jobs:
         if: steps.versions.outputs.needs_update == 'true'
         id: test_redis
         run: |
-          # Flush Redis
-          docker exec nextjs-cache-redis redis-cli FLUSHALL
+          # Flush Redis (service container is accessible on localhost)
+          redis-cli -h localhost FLUSHALL
 
           # Build and test with Redis
           cd apps/e2e-test-app
           CACHE_HANDLER=redis pnpm build
           CACHE_HANDLER=redis pnpm test:e2e
-
-      - name: Stop Docker services
-        if: always()
-        run: docker compose down || true
 
       - name: Create branch and commit
         if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true
