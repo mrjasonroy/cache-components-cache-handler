@@ -1,5 +1,6 @@
 import Redis, { type RedisOptions } from "ioredis";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
+import { jsonReplacer, jsonReviver } from "../helpers/serialization.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -9,60 +10,6 @@ import type {
   CacheHandlerValue,
   CacheValue,
 } from "../types.js";
-
-/**
- * Custom JSON replacer that serializes Map and Buffer instances.
- * - Maps become `{ __serialized_type: "Map", entries: [...] }`
- * - Buffers become `{ __serialized_type: "Buffer", data: "<base64>" }`
- *
- * This is needed because Next.js 16 APP_PAGE entries store `segmentData`
- * as a Map<string, Buffer> and `rscData` as a Buffer, neither of which
- * survive a plain JSON.stringify round-trip.
- */
-function jsonReplacer(_key: string, value: unknown): unknown {
-  if (value instanceof Map) {
-    return {
-      __serialized_type: "Map",
-      entries: Array.from(value.entries()),
-    };
-  }
-  if (Buffer.isBuffer(value)) {
-    return {
-      __serialized_type: "Buffer",
-      data: value.toString("base64"),
-    };
-  }
-  return value;
-}
-
-/**
- * Custom JSON reviver that restores Map and Buffer instances.
- * Also handles backward-compat with Node's native Buffer JSON
- * representation `{ type: "Buffer", data: [byte, ...] }`.
- */
-function jsonReviver(_key: string, value: unknown): unknown {
-  if (value && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-
-    if (
-      obj.__serialized_type === "Map" &&
-      Array.isArray(obj.entries) &&
-      obj.entries.every((e) => Array.isArray(e) && e.length === 2)
-    ) {
-      return new Map(obj.entries as [unknown, unknown][]);
-    }
-
-    if (obj.__serialized_type === "Buffer" && typeof obj.data === "string") {
-      return Buffer.from(obj.data, "base64");
-    }
-
-    // Backward compat: Node's Buffer.toJSON() format
-    if (obj.type === "Buffer" && Array.isArray(obj.data)) {
-      return Buffer.from(obj.data as number[]);
-    }
-  }
-  return value;
-}
 
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
@@ -209,6 +156,21 @@ export class RedisCacheHandler implements CacheHandler {
           await this.delete(key);
           return null;
         }
+      }
+
+      // Invalidate old APP_PAGE entries where segmentData was stored as a
+      // plain object (pre-fix serialization). Next.js expects a Map and would
+      // crash on .get() if we returned a plain object.
+      if (
+        entry.value &&
+        (entry.value as Record<string, unknown>).kind === "APP_PAGE" &&
+        (entry.value as Record<string, unknown>).segmentData !== undefined &&
+        (entry.value as Record<string, unknown>).segmentData !== null &&
+        !((entry.value as Record<string, unknown>).segmentData instanceof Map)
+      ) {
+        this.log("GET", cacheKey, "STALE (old APP_PAGE format without Map serialization)");
+        await this.delete(key);
+        return null;
       }
 
       this.log("GET", cacheKey, "HIT");

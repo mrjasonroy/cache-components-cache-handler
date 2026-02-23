@@ -25,6 +25,7 @@ export {
 export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
 // Helpers
 export { isImplicitTag } from "./helpers/is-implicit-tag.js";
+export { jsonReplacer, jsonReviver } from "./helpers/serialization.js";
 export { calculateLifespan, isExpired } from "./helpers/lifespan.js";
 export {
   type CacheHandlerConfig,

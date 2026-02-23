@@ -28,20 +28,6 @@ export type CacheValue =
       headers: Record<string, string | string[]>;
     }
   | {
-      kind: "ROUTE";
-      html: string;
-      pageData: Record<string, unknown>;
-      status?: number;
-      headers?: Record<string, string | string[]>;
-    }
-  | {
-      kind: "PAGE";
-      html: string;
-      pageData: Record<string, unknown>;
-      status?: number;
-      headers?: Record<string, string[]>;
-    }
-  | {
       kind: "PAGES";
       html: string;
       pageData: Record<string, unknown>;
@@ -65,6 +51,7 @@ export type CacheValue =
   | {
       kind: "IMAGE";
       etag: string;
+      upstreamEtag: string;
       buffer: Buffer;
       extension: string;
       isMiss?: boolean;
@@ -169,7 +156,7 @@ export interface CacheHandlerGetMeta {
  */
 export interface CacheHandlerGetResult {
   /**
-   * The actual cache value (ROUTE, PAGE, FETCH, or IMAGE)
+   * The actual cache value (APP_PAGE, APP_ROUTE, PAGES, FETCH, REDIRECT, or IMAGE)
    */
   value: CacheValue | null;
 

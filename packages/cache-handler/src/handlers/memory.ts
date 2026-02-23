@@ -1,5 +1,6 @@
 import { isImplicitTag } from "../helpers/is-implicit-tag.js";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
+import { jsonReplacer } from "../helpers/serialization.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -105,8 +106,8 @@ export class MemoryCacheHandler implements CacheHandler {
   }
 
   async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {
-    // Calculate size of the entry
-    const size = JSON.stringify(value).length;
+    // Calculate size of the entry (use replacer to account for Map/Buffer)
+    const size = JSON.stringify(value, jsonReplacer).length;
 
     // Check if entry exceeds max size
     if (size > this.maxItemSizeBytes) {

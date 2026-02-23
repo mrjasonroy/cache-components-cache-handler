@@ -218,6 +218,7 @@ describe("RedisCacheHandler", () => {
         value: {
           kind: "IMAGE",
           etag: "abc",
+          upstreamEtag: "upstream-abc",
           buffer: { type: "Buffer", data: [104, 101, 108, 108, 111] },
           extension: "png",
         },
@@ -280,11 +281,11 @@ describe("RedisCacheHandler", () => {
       expect(result?.value).toEqual(value);
     });
 
-    test("should round-trip PAGE values", async () => {
+    test("should round-trip PAGES values", async () => {
       const handler = new RedisCacheHandler();
 
       const value: CacheValue = {
-        kind: "PAGE",
+        kind: "PAGES",
         html: "<html>test</html>",
         pageData: { props: { test: true } },
         status: 200,
@@ -295,6 +296,112 @@ describe("RedisCacheHandler", () => {
 
       expect(result).not.toBeNull();
       expect(result?.value).toEqual(value);
+    });
+
+    test("should round-trip IMAGE values with Buffer", async () => {
+      const handler = new RedisCacheHandler();
+
+      const value: CacheValue = {
+        kind: "IMAGE",
+        etag: "abc123",
+        upstreamEtag: "upstream-abc123",
+        buffer: Buffer.from("fake-image-data"),
+        extension: "png",
+      };
+
+      await handler.set("image-key", value, { revalidate: false });
+      const result = await handler.get("image-key");
+
+      expect(result).not.toBeNull();
+      const retrieved = result?.value as CacheValue & { kind: "IMAGE" };
+      expect(retrieved.kind).toBe("IMAGE");
+      expect(retrieved.etag).toBe("abc123");
+      expect(retrieved.upstreamEtag).toBe("upstream-abc123");
+      expect(Buffer.isBuffer(retrieved.buffer)).toBe(true);
+      expect(retrieved.buffer.toString()).toBe("fake-image-data");
+    });
+
+    test("should round-trip REDIRECT values", async () => {
+      const handler = new RedisCacheHandler();
+
+      const value: CacheValue = {
+        kind: "REDIRECT",
+        props: { destination: "/new-page", permanent: true },
+      };
+
+      await handler.set("redirect-key", value, { revalidate: false });
+      const result = await handler.get("redirect-key");
+
+      expect(result).not.toBeNull();
+      expect(result?.value).toEqual(value);
+    });
+  });
+
+  describe("binary data round-trip", () => {
+    test("should preserve non-UTF8 binary data in Buffers", async () => {
+      const handler = new RedisCacheHandler();
+      const binaryData = Buffer.from([0x00, 0xff, 0x80, 0xde, 0xad, 0xbe, 0xef, 0x01]);
+
+      const value: CacheValue = {
+        kind: "APP_PAGE",
+        html: "<html>binary test</html>",
+        rscData: binaryData,
+        headers: undefined,
+        postponed: undefined,
+        status: 200,
+        segmentData: new Map<string, Buffer>([
+          ["/binary-segment", Buffer.from([0x00, 0x01, 0xfe, 0xff])],
+        ]),
+      };
+
+      await handler.set("binary-key", value, { revalidate: false });
+      const result = await handler.get("binary-key");
+
+      expect(result).not.toBeNull();
+      const retrieved = result?.value as CacheValue & { kind: "APP_PAGE" };
+
+      // rscData should be byte-for-byte identical
+      expect(Buffer.isBuffer(retrieved.rscData)).toBe(true);
+      expect(retrieved.rscData).toEqual(binaryData);
+
+      // segmentData buffer should be byte-for-byte identical
+      const segBuf = retrieved.segmentData?.get("/binary-segment");
+      expect(Buffer.isBuffer(segBuf)).toBe(true);
+      expect(segBuf).toEqual(Buffer.from([0x00, 0x01, 0xfe, 0xff]));
+    });
+  });
+
+  describe("backward compatibility", () => {
+    test("should force cache miss for old APP_PAGE entries with plain object segmentData", async () => {
+      const handler = new RedisCacheHandler();
+
+      // Simulate an old entry stored before the Map serialization fix.
+      // JSON.stringify(new Map([...])) produces "{}", so segmentData is
+      // a plain empty object after deserialization.
+      const oldEntry = {
+        lastModified: Date.now(),
+        lifespan: null,
+        tags: [],
+        value: {
+          kind: "APP_PAGE",
+          html: "<html>old format</html>",
+          rscData: null,
+          headers: null,
+          postponed: null,
+          status: 200,
+          segmentData: {},
+        },
+      };
+
+      await fakeRedis.set("nextjs:cache:old-app-page", JSON.stringify(oldEntry));
+      const result = await handler.get("old-app-page");
+
+      // Should return null (cache miss) instead of corrupt data
+      expect(result).toBeNull();
+
+      // The old entry should have been deleted from Redis
+      const rawData = await fakeRedis.get("nextjs:cache:old-app-page");
+      expect(rawData).toBeNull();
     });
   });
 });
