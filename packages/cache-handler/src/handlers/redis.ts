@@ -44,7 +44,11 @@ function jsonReviver(_key: string, value: unknown): unknown {
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
 
-    if (obj.__serialized_type === "Map" && Array.isArray(obj.entries)) {
+    if (
+      obj.__serialized_type === "Map" &&
+      Array.isArray(obj.entries) &&
+      obj.entries.every((e) => Array.isArray(e) && e.length === 2)
+    ) {
       return new Map(obj.entries as [unknown, unknown][]);
     }
 
