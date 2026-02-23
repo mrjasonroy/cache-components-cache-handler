@@ -13,6 +13,21 @@ export const IMPLICIT_TAG_PREFIX = "_N_T_";
  */
 export type CacheValue =
   | {
+      kind: "APP_PAGE";
+      html: string;
+      rscData: Buffer | undefined;
+      headers: Record<string, string | string[]> | undefined;
+      postponed: string | undefined;
+      status: number | undefined;
+      segmentData: Map<string, Buffer> | undefined;
+    }
+  | {
+      kind: "APP_ROUTE";
+      body: Buffer;
+      status: number;
+      headers: Record<string, string | string[]>;
+    }
+  | {
       kind: "ROUTE";
       html: string;
       pageData: Record<string, unknown>;
@@ -27,6 +42,13 @@ export type CacheValue =
       headers?: Record<string, string[]>;
     }
   | {
+      kind: "PAGES";
+      html: string;
+      pageData: Record<string, unknown>;
+      status?: number;
+      headers?: Record<string, string[]>;
+    }
+  | {
       kind: "FETCH";
       data: {
         headers: Record<string, string>;
@@ -35,6 +57,10 @@ export type CacheValue =
         url: string;
       };
       revalidate: number | false;
+    }
+  | {
+      kind: "REDIRECT";
+      props: Record<string, unknown>;
     }
   | {
       kind: "IMAGE";

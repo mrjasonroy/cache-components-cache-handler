@@ -10,6 +10,56 @@ import type {
   CacheValue,
 } from "../types.js";
 
+/**
+ * Custom JSON replacer that serializes Map and Buffer instances.
+ * - Maps become `{ __serialized_type: "Map", entries: [...] }`
+ * - Buffers become `{ __serialized_type: "Buffer", data: "<base64>" }`
+ *
+ * This is needed because Next.js 16 APP_PAGE entries store `segmentData`
+ * as a Map<string, Buffer> and `rscData` as a Buffer, neither of which
+ * survive a plain JSON.stringify round-trip.
+ */
+function jsonReplacer(_key: string, value: unknown): unknown {
+  if (value instanceof Map) {
+    return {
+      __serialized_type: "Map",
+      entries: Array.from(value.entries()),
+    };
+  }
+  if (Buffer.isBuffer(value)) {
+    return {
+      __serialized_type: "Buffer",
+      data: value.toString("base64"),
+    };
+  }
+  return value;
+}
+
+/**
+ * Custom JSON reviver that restores Map and Buffer instances.
+ * Also handles backward-compat with Node's native Buffer JSON
+ * representation `{ type: "Buffer", data: [byte, ...] }`.
+ */
+function jsonReviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+
+    if (obj.__serialized_type === "Map" && Array.isArray(obj.entries)) {
+      return new Map(obj.entries as [unknown, unknown][]);
+    }
+
+    if (obj.__serialized_type === "Buffer" && typeof obj.data === "string") {
+      return Buffer.from(obj.data, "base64");
+    }
+
+    // Backward compat: Node's Buffer.toJSON() format
+    if (obj.type === "Buffer" && Array.isArray(obj.data)) {
+      return Buffer.from(obj.data as number[]);
+    }
+  }
+  return value;
+}
+
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
    * Redis connection options (ioredis)
@@ -132,8 +182,8 @@ export class RedisCacheHandler implements CacheHandler {
         return null;
       }
 
-      // Parse the stored entry
-      const entry: CacheHandlerValue = JSON.parse(data);
+      // Parse the stored entry (reviver restores Map/Buffer instances)
+      const entry: CacheHandlerValue = JSON.parse(data, jsonReviver);
 
       // Check if expired based on lifespan
       if (entry.lifespan && isExpired(entry.lifespan)) {
@@ -186,7 +236,7 @@ export class RedisCacheHandler implements CacheHandler {
         value,
       };
 
-      const serialized = JSON.stringify(entry);
+      const serialized = JSON.stringify(entry, jsonReplacer);
 
       // Determine TTL for Redis
       let ttl: number | undefined;
