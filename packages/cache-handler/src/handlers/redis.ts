@@ -105,17 +105,22 @@ export class RedisCacheHandler implements CacheHandler {
   private didCreateClient = false;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
-    // Initialize Redis connection
-    if (options.redis instanceof Redis) {
-      // Use existing Redis client instance
-      this.redis = options.redis;
+    // Initialize Redis connection - detect existing client via duck typing
+    // (instanceof can break across package versions or bundler setups)
+    if (
+      options.redis &&
+      typeof options.redis === "object" &&
+      "get" in options.redis &&
+      "set" in options.redis &&
+      "del" in options.redis &&
+      typeof (options.redis as Redis).get === "function"
+    ) {
+      this.redis = options.redis as Redis;
     } else if (typeof options.redis === "string") {
-      // Create new client from URL string
       this.redis = new Redis(options.redis);
       this.didCreateClient = true;
     } else {
-      // Create new client from RedisOptions or default config
-      this.redis = new Redis(options.redis || {});
+      this.redis = new Redis((options.redis as RedisOptions) || {});
       this.didCreateClient = true;
     }
 
@@ -124,8 +129,8 @@ export class RedisCacheHandler implements CacheHandler {
     this.defaultTTL = options.defaultTTL;
     this.debug = options.debug ?? false;
 
-    // Handle Redis connection errors (only add listener if we created the client)
-    if (!(options.redis instanceof Redis)) {
+    // Only attach error listener for clients we created
+    if (this.didCreateClient) {
       this.redis.on("error", (err) => {
         console.error("[RedisCacheHandler] Redis connection error:", err);
       });
