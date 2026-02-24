@@ -1,5 +1,6 @@
 import Redis, { type RedisOptions } from "ioredis";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
+import { jsonReplacer, jsonReviver } from "../helpers/serialization.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -132,8 +133,8 @@ export class RedisCacheHandler implements CacheHandler {
         return null;
       }
 
-      // Parse the stored entry
-      const entry: CacheHandlerValue = JSON.parse(data);
+      // Parse the stored entry (reviver restores Map/Buffer instances)
+      const entry: CacheHandlerValue = JSON.parse(data, jsonReviver);
 
       // Check if expired based on lifespan
       if (entry.lifespan && isExpired(entry.lifespan)) {
@@ -155,6 +156,21 @@ export class RedisCacheHandler implements CacheHandler {
           await this.delete(key);
           return null;
         }
+      }
+
+      // Invalidate old APP_PAGE entries where segmentData was stored as a
+      // plain object (pre-fix serialization). Next.js expects a Map and would
+      // crash on .get() if we returned a plain object.
+      if (
+        entry.value &&
+        (entry.value as Record<string, unknown>).kind === "APP_PAGE" &&
+        (entry.value as Record<string, unknown>).segmentData !== undefined &&
+        (entry.value as Record<string, unknown>).segmentData !== null &&
+        !((entry.value as Record<string, unknown>).segmentData instanceof Map)
+      ) {
+        this.log("GET", cacheKey, "STALE (old APP_PAGE format without Map serialization)");
+        await this.delete(key);
+        return null;
       }
 
       this.log("GET", cacheKey, "HIT");
@@ -186,7 +202,7 @@ export class RedisCacheHandler implements CacheHandler {
         value,
       };
 
-      const serialized = JSON.stringify(entry);
+      const serialized = JSON.stringify(entry, jsonReplacer);
 
       // Determine TTL for Redis
       let ttl: number | undefined;

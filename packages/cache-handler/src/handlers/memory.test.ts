@@ -154,7 +154,7 @@ describe("MemoryCacheHandler", () => {
   describe("TTL and expiration", () => {
     test("should expire entries based on revalidate time", async () => {
       const value: CacheValue = {
-        kind: "PAGE",
+        kind: "PAGES",
         html: "<html>test</html>",
         pageData: { test: true },
       };
@@ -197,7 +197,7 @@ describe("MemoryCacheHandler", () => {
       const handlerWithTTL = createMemoryCacheHandler({ defaultTTL: 1 });
 
       const value: CacheValue = {
-        kind: "PAGE",
+        kind: "PAGES",
         html: "<html>test</html>",
         pageData: { test: true },
       };
@@ -244,7 +244,7 @@ describe("MemoryCacheHandler", () => {
 
     test("should handle implicit tags via meta parameter", async () => {
       const value: CacheValue = {
-        kind: "PAGE",
+        kind: "PAGES",
         html: "<html>test</html>",
         pageData: { test: true },
       };

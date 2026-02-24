@@ -197,9 +197,9 @@ describe("CacheHandler return type (Issue #12)", () => {
       }
     });
 
-    test("should return correct structure for PAGE kind", async () => {
+    test("should return correct structure for PAGES kind", async () => {
       const pageValue: CacheValue = {
-        kind: "PAGE",
+        kind: "PAGES",
         html: "<html><body>Test Page</body></html>",
         pageData: { title: "Test" },
       };
@@ -208,32 +208,33 @@ describe("CacheHandler return type (Issue #12)", () => {
       const result = await handler.get("page-key");
 
       expect(result).not.toBeNull();
-      expect(result?.value?.kind).toBe("PAGE");
-      if (result?.value?.kind === "PAGE") {
+      expect(result?.value?.kind).toBe("PAGES");
+      if (result?.value?.kind === "PAGES") {
         expect(result.value.html).toContain("Test Page");
         expect(result.value.pageData).toEqual({ title: "Test" });
       }
     });
 
-    test("should return correct structure for ROUTE kind", async () => {
+    test("should return correct structure for APP_ROUTE kind", async () => {
       const routeValue: CacheValue = {
-        kind: "ROUTE",
-        html: "<div>Route content</div>",
-        pageData: { route: "/test" },
+        kind: "APP_ROUTE",
+        body: Buffer.from("Route content"),
         status: 200,
+        headers: { "content-type": "text/html" },
       };
 
       await handler.set("route-key", routeValue);
       const result = await handler.get("route-key");
 
       expect(result).not.toBeNull();
-      expect(result?.value?.kind).toBe("ROUTE");
+      expect(result?.value?.kind).toBe("APP_ROUTE");
     });
 
     test("should return correct structure for IMAGE kind", async () => {
       const imageValue: CacheValue = {
         kind: "IMAGE",
         etag: "abc123",
+        upstreamEtag: "upstream-abc123",
         buffer: Buffer.from("image data"),
         extension: "png",
       };

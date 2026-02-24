@@ -13,14 +13,22 @@ export const IMPLICIT_TAG_PREFIX = "_N_T_";
  */
 export type CacheValue =
   | {
-      kind: "ROUTE";
+      kind: "APP_PAGE";
       html: string;
-      pageData: Record<string, unknown>;
-      status?: number;
-      headers?: Record<string, string | string[]>;
+      rscData: Buffer | undefined;
+      headers: Record<string, string | string[]> | undefined;
+      postponed: string | undefined;
+      status: number | undefined;
+      segmentData: Map<string, Buffer> | undefined;
     }
   | {
-      kind: "PAGE";
+      kind: "APP_ROUTE";
+      body: Buffer;
+      status: number;
+      headers: Record<string, string | string[]>;
+    }
+  | {
+      kind: "PAGES";
       html: string;
       pageData: Record<string, unknown>;
       status?: number;
@@ -37,8 +45,13 @@ export type CacheValue =
       revalidate: number | false;
     }
   | {
+      kind: "REDIRECT";
+      props: Record<string, unknown>;
+    }
+  | {
       kind: "IMAGE";
       etag: string;
+      upstreamEtag: string;
       buffer: Buffer;
       extension: string;
       isMiss?: boolean;
@@ -143,7 +156,7 @@ export interface CacheHandlerGetMeta {
  */
 export interface CacheHandlerGetResult {
   /**
-   * The actual cache value (ROUTE, PAGE, FETCH, or IMAGE)
+   * The actual cache value (APP_PAGE, APP_ROUTE, PAGES, FETCH, REDIRECT, or IMAGE)
    */
   value: CacheValue | null;
 
