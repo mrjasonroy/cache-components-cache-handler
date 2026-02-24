@@ -10,7 +10,7 @@ import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
 export interface RedisDataCacheHandlerOptions {
   /**
-   * Redis client instance (ioredis compatible)
+   * Redis client instance (node-redis compatible)
    */
   redis: RedisClient;
 
@@ -41,8 +41,8 @@ export interface RedisDataCacheHandlerOptions {
 }
 
 /**
- * Redis client interface (ioredis compatible)
- * Uses ioredis-style SET with "EX" positional args: set(key, value, "EX", seconds)
+ * Redis client interface (node-redis compatible)
+ * Uses node-redis-style SET with options object: set(key, value, { EX: seconds })
  */
 export interface RedisClient {
   get(key: string): Promise<string | null>;
@@ -275,7 +275,7 @@ export function createRedisDataCacheHandler(
         const ttl = entry.expire < 4294967294 ? entry.expire : defaultTTL;
 
         // Store in Redis with TTL
-        await redis.set(key, JSON.stringify(serialized), "EX", Math.ceil(ttl));
+        await redis.set(key, JSON.stringify(serialized), { EX: Math.ceil(ttl) });
 
         log?.("set", cacheKey, "done", { ttl });
       } catch (error) {
