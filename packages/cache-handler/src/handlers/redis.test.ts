@@ -91,6 +91,13 @@ class FakeRedis {
     handlers.push(handler);
     return this;
   }
+
+  public quitCalled = false;
+
+  async quit(): Promise<string> {
+    this.quitCalled = true;
+    return "OK";
+  }
 }
 
 // Mock ioredis to return our FakeRedis
@@ -375,7 +382,7 @@ describe("RedisCacheHandler", () => {
     test("should force cache miss for old APP_PAGE entries with plain object segmentData", async () => {
       const handler = new RedisCacheHandler();
 
-      // Simulate an old entry stored before the Map serialization fix.
+      // Simulate an entry stored before the Map serialization fix.
       // JSON.stringify(new Map([...])) produces "{}", so segmentData is
       // a plain empty object after deserialization.
       const oldEntry = {
@@ -402,6 +409,66 @@ describe("RedisCacheHandler", () => {
       // The old entry should have been deleted from Redis
       const rawData = await fakeRedis.get("nextjs:cache:old-app-page");
       expect(rawData).toBeNull();
+    });
+  });
+
+  describe("existing Redis client support", () => {
+    test("should accept an existing Redis client instance", async () => {
+      // Pass the fake redis directly as an existing client
+      const handler = new RedisCacheHandler({
+        redis: fakeRedis as unknown as import("ioredis").default,
+      });
+
+      const value: CacheValue = {
+        kind: "FETCH",
+        data: {
+          headers: { "content-type": "application/json" },
+          body: '{"shared": true}',
+          status: 200,
+          url: "https://example.com",
+        },
+        revalidate: 60,
+      };
+
+      await handler.set("shared-key", value, { revalidate: false });
+      const result = await handler.get("shared-key");
+
+      expect(result).not.toBeNull();
+      expect(result?.value).toEqual(value);
+    });
+
+    test("should not add error listener for existing client", async () => {
+      const listenersBefore = fakeRedis.listeners.get("error")?.length ?? 0;
+
+      new RedisCacheHandler({ redis: fakeRedis as unknown as import("ioredis").default });
+
+      const listenersAfter = fakeRedis.listeners.get("error")?.length ?? 0;
+      expect(listenersAfter).toBe(listenersBefore);
+    });
+
+    test("should add error listener for internally created client", async () => {
+      // When using default options (no redis client), the mock returns fakeRedis
+      // but the handler thinks it created the client, so it adds an error listener
+      new RedisCacheHandler();
+
+      const errorListeners = fakeRedis.listeners.get("error")?.length ?? 0;
+      expect(errorListeners).toBeGreaterThan(0);
+    });
+
+    test("should not close shared client on close()", async () => {
+      const handler = new RedisCacheHandler({
+        redis: fakeRedis as unknown as import("ioredis").default,
+      });
+
+      await handler.close();
+      expect(fakeRedis.quitCalled).toBe(false);
+    });
+
+    test("should close internally created client on close()", async () => {
+      const handler = new RedisCacheHandler();
+
+      await handler.close();
+      expect(fakeRedis.quitCalled).toBe(true);
     });
   });
 });

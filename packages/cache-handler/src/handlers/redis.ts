@@ -14,9 +14,12 @@ import type {
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
    * Redis connection options (ioredis)
-   * Can be a URL string or RedisOptions object
+   * Can be:
+   * - An existing Redis client instance (ioredis)
+   * - A URL string
+   * - A RedisOptions object
    */
-  redis?: string | RedisOptions;
+  redis?: Redis | string | RedisOptions;
 
   /**
    * Key prefix for all cache entries
@@ -58,11 +61,31 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
  * // In cache-handler.mjs or data-cache-handler.mjs
  * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler/handlers/redis";
  *
+ * // Option 1: Pass a Redis URL or config
  * export default class NextCacheHandler extends RedisCacheHandler {
  *   constructor(options) {
  *     super({
  *       ...options,
  *       redis: process.env.REDIS_URL || "redis://localhost:6379",
+ *       keyPrefix: "nextjs:cache:",
+ *       defaultTTL: 3600
+ *     });
+ *   }
+ * }
+ *
+ * // Option 2: Pass an existing Redis client instance
+ * import Redis from "ioredis";
+ *
+ * const redisClient = new Redis({
+ *   host: "localhost",
+ *   port: 6379,
+ * });
+ *
+ * export default class NextCacheHandler extends RedisCacheHandler {
+ *   constructor(options) {
+ *     super({
+ *       ...options,
+ *       redis: redisClient,
  *       keyPrefix: "nextjs:cache:",
  *       defaultTTL: 3600
  *     });
@@ -78,13 +101,27 @@ export class RedisCacheHandler implements CacheHandler {
   private readonly tagPrefix: string;
   private readonly defaultTTL?: number;
   private readonly debug: boolean;
+  private readonly didCreateClient: boolean;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
-    // Initialize Redis connection
-    if (typeof options.redis === "string") {
+    // Initialize Redis connection - detect existing client via duck typing
+    // (instanceof can break across package versions or bundler setups)
+    if (
+      options.redis &&
+      typeof options.redis === "object" &&
+      "get" in options.redis &&
+      "set" in options.redis &&
+      "del" in options.redis &&
+      typeof (options.redis as Redis).get === "function"
+    ) {
+      this.redis = options.redis as Redis;
+      this.didCreateClient = false;
+    } else if (typeof options.redis === "string") {
       this.redis = new Redis(options.redis);
+      this.didCreateClient = true;
     } else {
-      this.redis = new Redis(options.redis || {});
+      this.redis = new Redis((options.redis as RedisOptions) || {});
+      this.didCreateClient = true;
     }
 
     this.keyPrefix = options.keyPrefix ?? "nextjs:cache:";
@@ -92,10 +129,12 @@ export class RedisCacheHandler implements CacheHandler {
     this.defaultTTL = options.defaultTTL;
     this.debug = options.debug ?? false;
 
-    // Handle Redis connection errors
-    this.redis.on("error", (err) => {
-      console.error("[RedisCacheHandler] Redis connection error:", err);
-    });
+    // Only attach error listener for clients we created
+    if (this.didCreateClient) {
+      this.redis.on("error", (err) => {
+        console.error("[RedisCacheHandler] Redis connection error:", err);
+      });
+    }
 
     if (this.debug) {
       console.log("[RedisCacheHandler] Initialized", {
@@ -289,11 +328,16 @@ export class RedisCacheHandler implements CacheHandler {
   /**
    * Close the Redis connection
    * Call this when shutting down your application
+   * Note: Only closes connections created by this handler, not shared clients
    */
   async close(): Promise<void> {
     try {
-      await this.redis.quit();
-      this.log("Connection closed");
+      if (this.didCreateClient) {
+        await this.redis.quit();
+        this.log("Connection closed");
+      } else {
+        this.log("Skipping close (using shared client)");
+      }
     } catch (error) {
       console.error("[RedisCacheHandler] close error:", error);
     }
