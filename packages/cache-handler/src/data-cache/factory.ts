@@ -24,14 +24,17 @@ function loadIoredis(type: string): typeof import("ioredis").default {
 }
 
 /**
- * Create adapter for ioredis (lowercase methods) to match RedisClient interface (camelCase)
+ * Create adapter for ioredis (lowercase methods) to match RedisClient interface (camelCase).
+ * Translates node-redis-style SET options `{ EX: seconds }` to ioredis positional args.
  */
 function createRedisAdapter(redis: import("ioredis").default): RedisClient {
   return {
     get: (key) => redis.get(key),
-    set: (key, value, exFlag?, ttl?) => {
-      if (exFlag === "EX" && typeof ttl === "number") {
-        return redis.set(key, value, "EX", ttl) as Promise<unknown>;
+    set: (key, value, ...args) => {
+      // node-redis style: set(key, value, { EX: seconds })
+      const opts = args[0] as Record<string, unknown> | undefined;
+      if (opts && typeof opts === "object" && typeof opts.EX === "number") {
+        return redis.set(key, value, "EX", opts.EX) as Promise<unknown>;
       }
       return redis.set(key, value) as Promise<unknown>;
     },

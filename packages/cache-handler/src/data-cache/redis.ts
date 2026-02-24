@@ -41,7 +41,8 @@ export interface RedisDataCacheHandlerOptions {
 }
 
 /**
- * Redis client interface (node-redis)
+ * Redis client interface (node-redis compatible)
+ * Uses node-redis-style SET with options object: set(key, value, { EX: seconds })
  */
 export interface RedisClient {
   get(key: string): Promise<string | null>;
