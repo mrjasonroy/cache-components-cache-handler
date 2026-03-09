@@ -71,7 +71,7 @@ jobs:
 
       - name: Install Playwright browsers
         if: steps.build.outcome == 'success'
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+        run: pnpm setup:e2e
 
       - name: Build e2e app
         id: build_e2e
