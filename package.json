@@ -25,7 +25,8 @@
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "docker:logs": "docker compose logs -f redis",
-    "clean": "turbo clean && rm -rf node_modules"
+    "clean": "turbo clean && rm -rf node_modules",
+    "setup:e2e": "pnpm --filter e2e-test-app exec playwright install --with-deps chromium"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
