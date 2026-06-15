@@ -20,10 +20,14 @@ Thank you for your interest in contributing! This document provides guidelines a
    ```bash
    pnpm install
    ```
-4. **Create a branch** for your work:
-   ```bash
-   git checkout -b feature/my-new-feature
-   ```
+4. **Setup e2e testing**:
+```bash
+  pnpm setup:e2e
+```
+5. **Create a branch** for your work:
+```bash
+  git checkout -b feature/my-new-feature
+```
 
 ## Development Workflow
 
@@ -55,7 +59,7 @@ pnpm test
 pnpm test:e2e
 
 # Or run everything at once
-pnpm lint && pnpm typecheck && pnpm test
+pnpm lint && pnpm typecheck && pnpm test && pnpm test:e2e
 ```
 
 ### Commit Messages
