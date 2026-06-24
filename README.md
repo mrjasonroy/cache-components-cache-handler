@@ -108,6 +108,28 @@ export default createCacheHandler({
 });
 ```
 
+### Advanced: Bring Your Own Redis Client
+
+To share a connection or use Sentinel/Cluster, pass your own client. The data
+cache handler expects a **node-redis-style** client; node-redis works directly,
+and ioredis is wrapped with `createIoredisAdapter`:
+
+```javascript
+// ioredis (wrap with the adapter)
+import Redis from "ioredis";
+import {
+  createRedisDataCacheHandler,
+  createIoredisAdapter,
+} from "@mrjasonroy/cache-components-cache-handler";
+
+const redis = new Redis(process.env.REDIS_URL);
+export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
+```
+
+The ISR `RedisCacheHandler` likewise accepts an existing ioredis client via its
+`redis` option. See [docs/redis.md](./docs/redis.md) for node-redis, Sentinel,
+and Cluster examples.
+
 ## Usage
 
 ```typescript

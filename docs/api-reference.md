@@ -62,6 +62,31 @@ export default createRedisDataCacheHandler({
 });
 ```
 
+> `redis` must be a **node-redis-style** client. node-redis (`createClient`)
+> works directly; for **ioredis**, wrap it with `createIoredisAdapter` (below).
+
+### `createIoredisAdapter(client)`
+
+Wraps an [ioredis](https://github.com/redis/ioredis) client (or `Cluster`) so it
+satisfies the node-redis-style `RedisClient` contract expected by
+`createRedisDataCacheHandler`. It translates node-redis SET options
+(`{ EX: seconds }`) to ioredis positional args (`"EX", seconds`); without it,
+Redis rejects writes with `ERR syntax error` and TTLs silently fail.
+
+```javascript
+import Redis from "ioredis";
+import {
+  createRedisDataCacheHandler,
+  createIoredisAdapter,
+} from "@mrjasonroy/cache-components-cache-handler";
+
+const redis = new Redis(process.env.REDIS_URL);
+
+export default createRedisDataCacheHandler({
+  redis: createIoredisAdapter(redis),
+});
+```
+
 ## Next.js Cache APIs
 
 These are Next.js built-in APIs that work with this cache handler.
