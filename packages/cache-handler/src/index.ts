@@ -65,6 +65,11 @@ export {
   type RedisClient,
   type RedisDataCacheHandlerOptions,
 } from "./data-cache/redis.js";
+// Adapter for using an ioredis client with the node-redis-style data cache handler
+export {
+  createIoredisAdapter,
+  type IoredisLike,
+} from "./data-cache/ioredis-adapter.js";
 export type {
   DataCacheEntry,
   DataCacheHandler,

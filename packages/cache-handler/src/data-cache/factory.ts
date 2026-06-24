@@ -4,8 +4,9 @@
  */
 
 import { createRequire } from "node:module";
+import { createIoredisAdapter } from "./ioredis-adapter.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
-import { type RedisClient, createRedisDataCacheHandler } from "./redis.js";
+import { createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
 
 const nodeRequire = createRequire(import.meta.url);
@@ -21,27 +22,6 @@ function loadIoredis(type: string): typeof import("ioredis").default {
       `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,
     );
   }
-}
-
-/**
- * Create adapter for ioredis (lowercase methods) to match RedisClient interface (camelCase)
- */
-function createRedisAdapter(redis: import("ioredis").default): RedisClient {
-  return {
-    get: (key) => redis.get(key),
-    set: (key, value, exFlag?, ttl?) => {
-      if (exFlag === "EX" && typeof ttl === "number") {
-        return redis.set(key, value, "EX", ttl) as Promise<unknown>;
-      }
-      return redis.set(key, value) as Promise<unknown>;
-    },
-    del: (...keys) => redis.del(...keys),
-    exists: (...keys) => redis.exists(...keys),
-    ttl: (key) => redis.ttl(key),
-    hGet: (key, field) => redis.hget(key, field),
-    hSet: (key, field, value) => redis.hset(key, field, value) as Promise<unknown>,
-    hGetAll: (key) => redis.hgetall(key),
-  };
 }
 
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
@@ -150,7 +130,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
               ...(tlsEnabled ? { tls: {} } : {}),
             })
           : new Redis(url);
-      const redisAdapter = createRedisAdapter(redis);
+      const redisAdapter = createIoredisAdapter(redis);
 
       return createRedisDataCacheHandler({
         redis: redisAdapter,
@@ -191,7 +171,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         },
       });
 
-      const redisAdapter = createRedisAdapter(redis);
+      const redisAdapter = createIoredisAdapter(redis);
 
       return createRedisDataCacheHandler({
         redis: redisAdapter,

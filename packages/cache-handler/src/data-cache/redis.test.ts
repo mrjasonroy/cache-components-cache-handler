@@ -27,9 +27,10 @@ class FakeRedis {
     this.setCalls.push({ key, args });
 
     let expireAt: number | undefined;
-    // ioredis style: set(key, value, "EX", seconds)
-    if (args[0] === "EX" && typeof args[1] === "number") {
-      expireAt = Date.now() + args[1] * 1000;
+    // node-redis style: set(key, value, { EX: seconds })
+    const opts = args[0] as { EX?: number } | undefined;
+    if (opts && typeof opts === "object" && typeof opts.EX === "number") {
+      expireAt = Date.now() + opts.EX * 1000;
     }
 
     this.store.set(key, { value, expireAt });
@@ -147,7 +148,7 @@ describe("RedisDataCacheHandler", () => {
     expect(redis.setCalls).toHaveLength(1);
     expect(redis.setCalls[0]).toMatchObject({
       key: "nextjs:data-cache:cache-key",
-      args: ["EX", 120],
+      args: [{ EX: 120 }],
     });
 
     const result = await handler.get("cache-key", []);
@@ -231,7 +232,7 @@ describe("RedisDataCacheHandler", () => {
     expect(redis.delCalls).toContainEqual(["nextjs:data-cache:invalidate-key"]);
   });
 
-  test("sets TTL correctly with ioredis style args (fixes #16)", async () => {
+  test("sets TTL correctly with node-redis style options (fixes #16)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(BASE_TIME);
 
@@ -241,11 +242,11 @@ describe("RedisDataCacheHandler", () => {
     const entry = createEntry("ttl-test", { expire: 60, revalidate: 30 });
     await handler.set("ttl-key", Promise.resolve(entry));
 
-    // Verify the set call used ioredis style: "EX", seconds
+    // Verify the set call used node-redis style: { EX: seconds }
     expect(redis.setCalls).toHaveLength(1);
     const setCall = redis.setCalls[0];
     expect(setCall.key).toBe("nextjs:data-cache:ttl-key");
-    expect(setCall.args).toEqual(["EX", 60]);
+    expect(setCall.args).toEqual([{ EX: 60 }]);
   });
 
   test("TTL causes entry to expire after specified time", async () => {
@@ -286,6 +287,6 @@ describe("RedisDataCacheHandler", () => {
     await handler.set("default-ttl-key", Promise.resolve(entry));
 
     expect(redis.setCalls).toHaveLength(1);
-    expect(redis.setCalls[0].args).toEqual(["EX", 3600]);
+    expect(redis.setCalls[0].args).toEqual([{ EX: 3600 }]);
   });
 });
