@@ -1,19 +1,56 @@
 # Redis Configuration
 
-This package uses `ioredis` for Redis connections. Install it as a peer dependency:
+Install a Redis client as a peer dependency:
 
 ```bash
 npm install ioredis
+# or, if you prefer node-redis:
+npm install redis
 ```
 
+## Which client and how to pass it
+
+`createRedisDataCacheHandler` expects a **node-redis-style** `RedisClient` — its
+`set()` takes options as an object (`set(key, value, { EX: seconds })`).
+
+- **node-redis** (`redis`) speaks this natively — pass the client directly.
+- **ioredis** uses positional args (`set(key, value, "EX", seconds)`), so wrap it
+  with `createIoredisAdapter()`. Passing a raw ioredis client will make Redis
+  reject writes with `ERR syntax error` and silently break TTLs.
+
+The zero-config `createCacheHandler({ type: "redis" })` uses ioredis internally
+and applies this adapter for you.
+
 ## Basic Setup (for "use cache" directive)
+
+Using **ioredis** (wrap with `createIoredisAdapter`):
 
 ```javascript
 // data-cache-handler.mjs
 import Redis from "ioredis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import {
+  createRedisDataCacheHandler,
+  createIoredisAdapter,
+} from "@mrjasonroy/cache-components-cache-handler";
 
 const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
+
+export default createRedisDataCacheHandler({
+  redis: createIoredisAdapter(redis),
+  keyPrefix: "myapp:cache:",
+  tagPrefix: "myapp:tags:",
+});
+```
+
+Using **node-redis** (pass the client directly):
+
+```javascript
+// data-cache-handler.mjs
+import { createClient } from "redis";
+import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+const redis = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
+await redis.connect();
 
 export default createRedisDataCacheHandler({
   redis,
@@ -95,7 +132,7 @@ redis.on("ready", () => {
 
 ```javascript
 export default createRedisDataCacheHandler({
-  redis,                          // ioredis client instance
+  redis,                          // node-redis client, or createIoredisAdapter(ioredisClient)
   keyPrefix: "myapp:cache:",      // Namespace for cache keys
   tagPrefix: "myapp:tags:",       // Namespace for cache tags
   defaultTTL: 86400,              // Default TTL in seconds (24 hours)
@@ -134,10 +171,14 @@ docker compose up -d
 
 ### Redis Sentinel (High Availability)
 
-For automatic failover:
+For automatic failover, configure ioredis and wrap it with `createIoredisAdapter`:
 
 ```javascript
 import Redis from "ioredis";
+import {
+  createRedisDataCacheHandler,
+  createIoredisAdapter,
+} from "@mrjasonroy/cache-components-cache-handler";
 
 const redis = new Redis({
   sentinels: [
@@ -147,20 +188,28 @@ const redis = new Redis({
   ],
   name: "mymaster",
 });
+
+export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
 ```
 
 ### Redis Cluster (Horizontal Scaling)
 
-For distributed deployments:
+For distributed deployments (`Cluster` also satisfies `createIoredisAdapter`):
 
 ```javascript
 import { Cluster } from "ioredis";
+import {
+  createRedisDataCacheHandler,
+  createIoredisAdapter,
+} from "@mrjasonroy/cache-components-cache-handler";
 
 const redis = new Cluster([
   { host: "node1", port: 6379 },
   { host: "node2", port: 6379 },
   { host: "node3", port: 6379 },
 ]);
+
+export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
 ```
 
 ### Key Expiration
