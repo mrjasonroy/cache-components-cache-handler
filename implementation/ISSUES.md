@@ -2,7 +2,17 @@
 
 ## ISSUE-1: `revalidateTag(tag, "max")` permanently blocks re-caching for that tag
 
-**Status:** Open · **Severity:** High · **Area:** `data-cache/redis.ts` (tag invalidation)
+**Status:** ✅ Resolved · **Severity:** High · **Area:** `data-cache/redis.ts` (tag invalidation)
+
+**Fix:** `updateTags` now records the revalidation **event time** (`now`) in the
+tag's `stale` field and uses `expired` only as the hard-deletion deadline.
+`get()` treats an entry as affected only when it was created *before* the event
+(`revalidatedAt > entry.timestamp`), so entries cached *after* a revalidation are
+served normally; affected entries are served stale (`revalidate = -1`) until the
+deadline, then deleted. `getExpiration` returns the event time per the Next.js
+contract. Covered by tests in `data-cache/redis.test.ts`
+(`re-caches a tag after revalidateTag with a future expire`,
+`getExpiration returns the latest revalidation event timestamp`).
 
 ### Summary
 
