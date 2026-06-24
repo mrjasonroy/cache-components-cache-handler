@@ -289,4 +289,28 @@ describe("RedisDataCacheHandler", () => {
     expect(redis.setCalls).toHaveLength(1);
     expect(redis.setCalls[0].args).toEqual([{ EX: 3600 }]);
   });
+
+  // Documents ISSUE-1 (implementation/ISSUES.md): once a tag is invalidated with
+  // a future expire — what `revalidateTag(tag, "max")` triggers — `get()` treats
+  // the far-future `expired` deadline as the invalidation moment and deletes any
+  // entry whose timestamp precedes it, so the tag can never be re-cached.
+  // Skipped until the tag-invalidation comparison is fixed.
+  test.skip("re-caches a tag after revalidateTag with a future expire", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis, defaultTTL: 86400 });
+
+    await handler.set("k1", Promise.resolve(createEntry("v1", { tags: ["T"] })));
+    expect(await handler.get("k1", [])).toBeTruthy();
+
+    // Simulate revalidateTag("T", "max") -> a far-future expire.
+    await handler.updateTags(["T"], { expire: 31_536_000 });
+
+    // A new entry written after the invalidation must be cacheable again.
+    await handler.set("k2", Promise.resolve(createEntry("v2", { tags: ["T"] })));
+    const result = await handler.get("k2", []);
+    if (!result) {
+      throw new Error("expected the re-cached entry to be served");
+    }
+    expect(await readStream(result.value)).toBe("v2");
+  });
 });
