@@ -12,7 +12,7 @@ let handler;
 if (cacheType === "redis") {
   // Redis/Valkey handler (using ioredis for consistency)
   const Redis = (await import("ioredis")).default;
-  const { createRedisDataCacheHandler } = await import(
+  const { createRedisDataCacheHandler, createIoredisAdapter } = await import(
     "@mrjasonroy/cache-components-cache-handler"
   );
 
@@ -27,17 +27,9 @@ if (cacheType === "redis") {
     console.log("[Redis] Connected successfully to", url);
   });
 
-  // Wrap ioredis to provide node-redis compatible API
-  const redis = {
-    get: (key) => ioredisClient.get(key),
-    set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-    del: (...keys) => ioredisClient.del(...keys),
-    exists: (...keys) => ioredisClient.exists(...keys),
-    ttl: (key) => ioredisClient.ttl(key),
-    hGet: (key, field) => ioredisClient.hget(key, field),
-    hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-    hGetAll: (key) => ioredisClient.hgetall(key),
-  };
+  // Adapt the ioredis client to the node-redis-style RedisClient contract
+  // (translates SET { EX } options to ioredis positional args)
+  const redis = createIoredisAdapter(ioredisClient);
 
   handler = createRedisDataCacheHandler({
     redis,
@@ -49,7 +41,7 @@ if (cacheType === "redis") {
 } else if (cacheType === "elasticache") {
   // ElastiCache handler (password-based auth only)
   const Redis = (await import("ioredis")).default;
-  const { createRedisDataCacheHandler } = await import(
+  const { createRedisDataCacheHandler, createIoredisAdapter } = await import(
     "@mrjasonroy/cache-components-cache-handler"
   );
 
@@ -93,17 +85,9 @@ if (cacheType === "redis") {
     console.log("[ElastiCache] Connected successfully to", endpoint);
   });
 
-  // Wrap ioredis to provide node-redis compatible API
-  const redis = {
-    get: (key) => ioredisClient.get(key),
-    set: (key, value, ...args) => ioredisClient.set(key, value, ...args),
-    del: (...keys) => ioredisClient.del(...keys),
-    exists: (...keys) => ioredisClient.exists(...keys),
-    ttl: (key) => ioredisClient.ttl(key),
-    hGet: (key, field) => ioredisClient.hget(key, field),
-    hSet: (key, field, value) => ioredisClient.hset(key, field, value),
-    hGetAll: (key) => ioredisClient.hgetall(key),
-  };
+  // Adapt the ioredis client to the node-redis-style RedisClient contract
+  // (translates SET { EX } options to ioredis positional args)
+  const redis = createIoredisAdapter(ioredisClient);
 
   handler = createRedisDataCacheHandler({
     redis,
