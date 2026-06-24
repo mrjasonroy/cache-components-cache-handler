@@ -52,6 +52,17 @@ jobs:
           git tag v${{ steps.version.outputs.version }}
           git push origin v${{ steps.version.outputs.version }}
 
+      - name: Trigger publish workflow
+        if: steps.tag_check.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag pushed by GITHUB_TOKEN does not trigger publish.yml's `push`
+          # event, so dispatch it explicitly (workflow_dispatch is exempt from the
+          # anti-recursion rule and runs even when invoked with GITHUB_TOKEN).
+          gh workflow run publish.yml -f tag="v${{ steps.version.outputs.version }}"
+          echo "🚀 Dispatched publish workflow for v${{ steps.version.outputs.version }}"
+
       - name: Summary
         run: |
           if [ "${{ steps.tag_check.outputs.exists }}" = "true" ]; then
