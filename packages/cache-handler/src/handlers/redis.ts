@@ -102,7 +102,7 @@ export class RedisCacheHandler implements CacheHandler {
   private readonly tagPrefix: string;
   private readonly defaultTTL?: number;
   private readonly debug: boolean;
-  private didCreateClient = false;
+  private readonly didCreateClient: boolean;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     // Initialize Redis connection - detect existing client via duck typing
@@ -117,6 +117,7 @@ export class RedisCacheHandler implements CacheHandler {
       typeof (options.redis as Redis).on === "function"
     ) {
       this.redis = options.redis as Redis;
+      this.didCreateClient = false;
     } else if (typeof options.redis === "string") {
       this.redis = new Redis(options.redis);
       this.didCreateClient = true;
