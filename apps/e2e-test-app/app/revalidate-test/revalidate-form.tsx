@@ -2,13 +2,13 @@
 
 import { revalidateTestTag, updateTestTag } from "./actions";
 
-export function RevalidateForms() {
+export function RevalidateForms({ tag }: { tag?: string }) {
   return (
     <div>
       <h3>Test Actions:</h3>
       <form
         action={async () => {
-          await revalidateTestTag();
+          await revalidateTestTag(tag);
           window.location.reload();
         }}
       >
@@ -19,7 +19,7 @@ export function RevalidateForms() {
 
       <form
         action={async () => {
-          await updateTestTag();
+          await updateTestTag(tag);
           window.location.reload();
         }}
       >
