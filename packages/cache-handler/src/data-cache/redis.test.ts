@@ -290,27 +290,52 @@ describe("RedisDataCacheHandler", () => {
     expect(redis.setCalls[0].args).toEqual([{ EX: 3600 }]);
   });
 
-  // Documents ISSUE-1 (implementation/ISSUES.md): once a tag is invalidated with
-  // a future expire — what `revalidateTag(tag, "max")` triggers — `get()` treats
-  // the far-future `expired` deadline as the invalidation moment and deletes any
-  // entry whose timestamp precedes it, so the tag can never be re-cached.
-  // Skipped until the tag-invalidation comparison is fixed.
-  test.skip("re-caches a tag after revalidateTag with a future expire", async () => {
+  // ISSUE-1 (implementation/ISSUES.md): a tag invalidated with a future expire —
+  // what `revalidateTag(tag, "max")` triggers — must still allow re-caching. The
+  // invalidation only affects entries created *before* the revalidation event.
+  test("re-caches a tag after revalidateTag with a future expire (fixes ISSUE-1)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
     const redis = new FakeRedis();
     const handler = createRedisDataCacheHandler({ redis, defaultTTL: 86400 });
 
-    await handler.set("k1", Promise.resolve(createEntry("v1", { tags: ["T"] })));
-    expect(await handler.get("k1", [])).toBeTruthy();
+    // Entry cached before the revalidation.
+    await handler.set("k1", Promise.resolve(createEntry("v1", { tags: ["T"], revalidate: 600 })));
 
-    // Simulate revalidateTag("T", "max") -> a far-future expire.
+    // Simulate revalidateTag("T", "max") -> a far-future expire window.
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 1000));
     await handler.updateTags(["T"], { expire: 31_536_000 });
 
-    // A new entry written after the invalidation must be cacheable again.
-    await handler.set("k2", Promise.resolve(createEntry("v2", { tags: ["T"] })));
-    const result = await handler.get("k2", []);
-    if (!result) {
+    // A new entry written AFTER the revalidation must be cacheable and served.
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 2000));
+    await handler.set("k2", Promise.resolve(createEntry("v2", { tags: ["T"], revalidate: 600 })));
+    const fresh = await handler.get("k2", []);
+    if (!fresh) {
       throw new Error("expected the re-cached entry to be served");
     }
-    expect(await readStream(result.value)).toBe("v2");
+    expect(await readStream(fresh.value)).toBe("v2");
+
+    // The pre-existing entry is served stale (revalidate = -1) within the window,
+    // not hard-deleted.
+    const stale = await handler.get("k1", []);
+    if (!stale) {
+      throw new Error("expected the pre-existing entry to be served stale");
+    }
+    expect(stale.revalidate).toBe(-1);
+  });
+
+  test("getExpiration returns the latest revalidation event timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    expect(await handler.getExpiration(["T"])).toBe(0);
+
+    // The event timestamp is "now", not now + expire.
+    await handler.updateTags(["T"], { expire: 100 });
+    expect(await handler.getExpiration(["T"])).toBe(BASE_TIME.getTime());
   });
 });

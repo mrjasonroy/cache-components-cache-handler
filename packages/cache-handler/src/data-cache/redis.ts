@@ -218,26 +218,25 @@ export function createRedisDataCacheHandler(
           return undefined;
         }
 
-        // Check tag expiration
+        // Check tag invalidation. A revalidation only affects entries created
+        // *before* the event — `stale` records when the tag was revalidated, so
+        // entries cached afterward stay valid (this is what makes a tag
+        // re-cacheable after `revalidateTag(tag, "max")`). `expired`, when set,
+        // is the hard-deletion deadline; before it, the entry is served stale.
         let revalidate = entry.revalidate;
         for (const tag of entry.tags) {
           const tagData = await redis.hGetAll(getTagKey(tag));
+          const revalidatedAt = tagData.stale ? Number.parseInt(tagData.stale, 10) : 0;
+          const expireAt = tagData.expired ? Number.parseInt(tagData.expired, 10) : 0;
 
-          if (tagData.expired) {
-            const expired = Number.parseInt(tagData.expired, 10);
-            if (expired > entry.timestamp) {
+          if (revalidatedAt && revalidatedAt > entry.timestamp) {
+            if (expireAt && Date.now() >= expireAt) {
               log?.("get", cacheKey, "had expired tag", tag);
               await redis.del(key);
               return undefined;
             }
-          }
-
-          if (tagData.stale) {
-            const stale = Number.parseInt(tagData.stale, 10);
-            if (stale > entry.timestamp) {
-              log?.("get", cacheKey, "had stale tag", tag);
-              revalidate = -1;
-            }
+            log?.("get", cacheKey, "had stale tag", tag);
+            revalidate = -1;
           }
         }
 
@@ -291,9 +290,12 @@ export function createRedisDataCacheHandler(
 
     async getExpiration(tags) {
       try {
+        // Per the Next.js contract, this returns the maximum timestamp of a
+        // revalidate *event* for the tags (when they were last revalidated),
+        // not a future deadline.
         const expirations = await Promise.all(
           tags.map(async (tag) => {
-            const data = await redis.hGet(getTagKey(tag), "expired");
+            const data = await redis.hGet(getTagKey(tag), "stale");
             return data ? Number.parseInt(data, 10) : 0;
           }),
         );
@@ -319,19 +321,20 @@ export function createRedisDataCacheHandler(
           tags.map(async (tag) => {
             const key = getTagKey(tag);
 
-            if (durations) {
-              // Mark as stale immediately
-              await redis.hSet(key, "stale", now.toString());
+            // Always record the revalidation event time. Entries created before
+            // `now` are affected; entries cached afterward remain valid.
+            await redis.hSet(key, "stale", now.toString());
 
-              // Set expiration if provided
-              if (durations.expire !== undefined) {
-                const expired = now + durations.expire * 1000;
-                await redis.hSet(key, "expired", expired.toString());
-              }
-            } else {
-              // Immediate expiration (default behavior)
+            if (!durations) {
+              // No durations -> immediate hard expiration.
               await redis.hSet(key, "expired", now.toString());
+            } else if (durations.expire !== undefined) {
+              // Hard-expire affected entries once the expire window elapses;
+              // until then they are served stale.
+              const expired = now + durations.expire * 1000;
+              await redis.hSet(key, "expired", expired.toString());
             }
+            // `durations` without `expire` -> stale only, no hard deadline.
           }),
         );
       } catch (error) {
