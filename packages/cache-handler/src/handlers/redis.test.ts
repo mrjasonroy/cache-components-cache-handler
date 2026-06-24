@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { CacheValue } from "../types.js";
 
 /**
- * In-memory fake Redis for testing the ISR RedisCacheHandler.
+ * In-memory fake Redis for testing the RedisCacheHandler.
  * Mimics the ioredis API surface used by the handler.
  */
 class FakeRedis {
@@ -97,6 +97,10 @@ class FakeRedis {
   async quit(): Promise<string> {
     this.quitCalled = true;
     return "OK";
+  }
+
+  listenerCount(event: string): number {
+    return this.listeners.get(event)?.length ?? 0;
   }
 }
 
@@ -413,9 +417,17 @@ describe("RedisCacheHandler", () => {
   });
 
   describe("existing Redis client support", () => {
+    // Use a separate FakeRedis instance for external-client tests
+    // so we can distinguish it from the mock constructor's fakeRedis
+    let externalClient: FakeRedis;
+
+    beforeEach(() => {
+      externalClient = new FakeRedis();
+    });
+
     test("should accept an existing Redis client instance", async () => {
       const handler = new RedisCacheHandler({
-        redis: fakeRedis as unknown as import("ioredis").default,
+        redis: externalClient as unknown as import("ioredis").default,
       });
 
       const value: CacheValue = {
@@ -434,38 +446,69 @@ describe("RedisCacheHandler", () => {
 
       expect(result).not.toBeNull();
       expect(result?.value).toEqual(value);
+      // Verify data is stored in the external client, not the mock
+      expect(await externalClient.get("nextjs:cache:shared-key")).not.toBeNull();
     });
 
-    test("should not add error listener for existing client", async () => {
-      const listenersBefore = fakeRedis.listeners.get("error")?.length ?? 0;
+    test("should add defensive error listener for external client with no listeners", async () => {
+      expect(externalClient.listenerCount("error")).toBe(0);
 
       new RedisCacheHandler({
-        redis: fakeRedis as unknown as import("ioredis").default,
+        redis: externalClient as unknown as import("ioredis").default,
       });
 
-      const listenersAfter = fakeRedis.listeners.get("error")?.length ?? 0;
-      expect(listenersAfter).toBe(listenersBefore);
+      // Should add a defensive listener to prevent process crashes
+      expect(externalClient.listenerCount("error")).toBe(1);
+    });
+
+    test("should not add error listener for external client that already has one", async () => {
+      externalClient.on("error", () => {});
+      expect(externalClient.listenerCount("error")).toBe(1);
+
+      new RedisCacheHandler({
+        redis: externalClient as unknown as import("ioredis").default,
+      });
+
+      // Should not add another listener
+      expect(externalClient.listenerCount("error")).toBe(1);
     });
 
     test("should add error listener for internally created client", async () => {
       new RedisCacheHandler();
 
-      const errorListeners = fakeRedis.listeners.get("error")?.length ?? 0;
+      const errorListeners = fakeRedis.listenerCount("error");
       expect(errorListeners).toBeGreaterThan(0);
     });
 
     test("should not close shared client on close()", async () => {
       const handler = new RedisCacheHandler({
-        redis: fakeRedis as unknown as import("ioredis").default,
+        redis: externalClient as unknown as import("ioredis").default,
       });
 
       await handler.close();
-      expect(fakeRedis.quitCalled).toBe(false);
+      expect(externalClient.quitCalled).toBe(false);
     });
 
     test("should close internally created client on close()", async () => {
       const handler = new RedisCacheHandler();
 
+      await handler.close();
+      expect(fakeRedis.quitCalled).toBe(true);
+    });
+
+    test("should not treat a plain object with get/set/del as a Redis client", async () => {
+      const notRedis = {
+        get: () => {},
+        set: () => {},
+        del: () => {},
+      };
+
+      // Missing pipeline and on — should fall through to new Redis()
+      const handler = new RedisCacheHandler({
+        redis: notRedis as unknown as import("ioredis").default,
+      });
+
+      // Should have created its own client (fakeRedis via mock)
       await handler.close();
       expect(fakeRedis.quitCalled).toBe(true);
     });

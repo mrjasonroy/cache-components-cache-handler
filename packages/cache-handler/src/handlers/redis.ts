@@ -13,7 +13,7 @@ import type {
 
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   /**
-   * Redis connection options (ioredis)
+   * Redis connection configuration or existing client (ioredis)
    * Can be:
    * - A Redis client instance (ioredis)
    * - A URL string
@@ -110,10 +110,11 @@ export class RedisCacheHandler implements CacheHandler {
     if (
       options.redis &&
       typeof options.redis === "object" &&
-      "get" in options.redis &&
-      "set" in options.redis &&
-      "del" in options.redis &&
-      typeof (options.redis as Redis).get === "function"
+      typeof (options.redis as Redis).get === "function" &&
+      typeof (options.redis as Redis).set === "function" &&
+      typeof (options.redis as Redis).del === "function" &&
+      typeof (options.redis as Redis).pipeline === "function" &&
+      typeof (options.redis as Redis).on === "function"
     ) {
       this.redis = options.redis as Redis;
     } else if (typeof options.redis === "string") {
@@ -129,10 +130,16 @@ export class RedisCacheHandler implements CacheHandler {
     this.defaultTTL = options.defaultTTL;
     this.debug = options.debug ?? false;
 
-    // Only attach error listener for clients we created
+    // Attach error listener for clients we created; for external clients,
+    // add a defensive listener only if the caller forgot to add one
+    // (an EventEmitter with no error listener will crash the process)
     if (this.didCreateClient) {
       this.redis.on("error", (err) => {
         console.error("[RedisCacheHandler] Redis connection error:", err);
+      });
+    } else if (this.redis.listenerCount("error") === 0) {
+      this.redis.on("error", (err) => {
+        console.error("[RedisCacheHandler] Redis connection error (shared client):", err);
       });
     }
 
