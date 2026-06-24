@@ -7,6 +7,15 @@ on:
       - "v*.*.*-alpha.*"
       - "v*.*.*-beta.*"
       - "v*.*.*-rc.*"
+  # Allow publishing a tag explicitly. Tags pushed by the default GITHUB_TOKEN
+  # (e.g. from tag-on-version-merge.yml) do not trigger the `push` event above,
+  # so that workflow dispatches this one instead.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish (e.g. v16.2.9)"
+        required: true
+        type: string
 
 jobs:
   publish:
@@ -18,14 +27,21 @@ jobs:
       contents: write # Required for creating releases
       id-token: write # Required for npm provenance and trusted publishing
 
+    env:
+      # The tag being published, from the push ref or the manual dispatch input.
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # For workflow_dispatch, check out the tag (not the default branch).
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Verify git tag matches package version
         run: |
-          # Extract version from git tag (v16.0.0-alpha.0 -> 16.0.0-alpha.0)
-          GIT_TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          # Extract version from the tag (v16.0.0-alpha.0 -> 16.0.0-alpha.0)
+          GIT_TAG_VERSION="${TAG#v}"
 
           # Get version from package.json
           PACKAGE_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
@@ -96,11 +112,9 @@ jobs:
           npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
 
       - name: Create GitHub Release
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
           VERSION="${TAG#v}"
           DIST_TAG="${{ steps.dist_tag.outputs.tag }}"
 
@@ -123,7 +137,9 @@ jobs:
             -f tag_name="$TAG" \
             --jq '.body')
 
-          # Create release notes with installation instructions + auto-generated notes
+          # Create release notes with installation instructions + auto-generated notes.
+          # The generated notes include a "New Contributors" section that @-mentions
+          # first-time contributors; the thank-you below makes the acknowledgement explicit.
           RELEASE_NOTES=$(cat <<EOF
           ## Installation
 
@@ -136,14 +152,22 @@ jobs:
           ---
 
           $GENERATED_NOTES
+
+          ---
+
+          💜 Thank you to everyone who contributed to this release!
           EOF
           )
 
-          # Create release
-          gh release create "$TAG" \
-            --title "$TITLE" \
-            --notes "$RELEASE_NOTES" \
-            $PRERELEASE_FLAG
-
-          echo "✅ Created GitHub release for $TAG"
+          # Create the release (idempotent: update notes if it already exists, e.g. on re-run)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes "$RELEASE_NOTES"
+            echo "✅ Updated existing GitHub release for $TAG"
+          else
+            gh release create "$TAG" \
+              --title "$TITLE" \
+              --notes "$RELEASE_NOTES" \
+              $PRERELEASE_FLAG
+            echo "✅ Created GitHub release for $TAG"
+          fi
           echo "🔗 https://github.com/${{ github.repository }}/releases/tag/$TAG"
