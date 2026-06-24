@@ -107,7 +107,7 @@ jobs:
         run: pnpm build
 
       - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+        run: pnpm setup:e2e
 
       - name: Build e2e app
         env:
@@ -169,7 +169,7 @@ jobs:
         run: pnpm build
 
       - name: Install Playwright browsers
-        run: pnpm --filter e2e-test-app exec playwright install --with-deps chromium
+        run: pnpm setup:e2e
 
       - name: Build e2e app with ElastiCache handler
         env:
