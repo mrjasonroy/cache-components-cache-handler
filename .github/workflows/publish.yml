@@ -109,10 +109,18 @@ jobs:
           echo "✅ Published @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION"
           echo "📦 npm dist-tag: $DIST_TAG"
 
-          # Wait a moment for npm to propagate
-          sleep 5
-
-          npm view @mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION
+          # Poll until the new version is queryable; registry propagation can lag
+          # well past a few seconds. The publish step already succeeded, so a slow
+          # read must NOT fail the job (that would skip the GitHub Release step).
+          for i in $(seq 1 12); do
+            if npm view "@mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION" version >/dev/null 2>&1; then
+              echo "✅ Verified on npm (attempt $i)"
+              npm view "@mrjasonroy/cache-components-cache-handler@$PACKAGE_VERSION"
+              break
+            fi
+            echo "… not visible yet, retrying ($i/12)"
+            sleep 10
+          done
 
       - name: Create GitHub Release
         env:
