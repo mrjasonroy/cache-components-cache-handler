@@ -33,6 +33,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Use the release PAT so the catch-up PR triggers CI and its merge fires
+          # tag-on-version-merge (a GITHUB_TOKEN-opened PR runs no CI and a bot-merge
+          # triggers nothing — GitHub's anti-recursion rule).
+          token: ${{ secrets.RELEASE_PAT || github.token }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -42,9 +47,6 @@ jobs:
         with:
           node-version: "22"
           cache: "pnpm"
-          registry-url: "https://registry.npmjs.org"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: pnpm install
@@ -162,7 +164,8 @@ jobs:
       - name: Create PR and enable auto-merge
         if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true
         env:
-          GH_TOKEN: ${{ github.token }}
+          # PAT so the PR triggers CI and the merge fires tag-on-version-merge.
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
         run: |
           VERSION="${{ steps.versions.outputs.new_pkg_version }}"
           BRANCH_NAME="catch-up-$VERSION"
@@ -197,7 +200,7 @@ jobs:
             --head $BRANCH_NAME
 
           # Enable auto-merge
-          gh pr merge $BRANCH_NAME --auto --squash
+          gh pr merge $BRANCH_NAME --auto --squash --delete-branch
 
           echo "✅ Created PR and enabled auto-merge"
           echo "🔗 PR will be merged automatically once status checks pass"
