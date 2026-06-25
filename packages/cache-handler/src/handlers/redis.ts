@@ -47,49 +47,37 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
 }
 
 /**
- * Redis cache handler for Next.js 16+ with Cache Components support
+ * Redis cache handler for Next.js ISR / incremental cache (`cacheHandler`).
  *
  * Features:
  * - Persistent caching across server restarts
  * - Tag-based revalidation with Redis Sets
  * - TTL support with automatic expiration
  * - Compatible with Redis, ElastiCache, and Valkey
- * - Connection pooling via ioredis
+ *
+ * **Important:** Next.js calls `new CacheHandler()` on every request for
+ * `cacheHandler`. Exporting this class directly (or extending it without a
+ * singleton) runs `new Redis(...)` in the constructor each time, which leaks
+ * connections and causes `write EPIPE` errors under load.
  *
  * @example
- * ```typescript
- * // In cache-handler.mjs or data-cache-handler.mjs
- * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler/handlers/redis";
+ * ```javascript
+ * // cache-handler.mjs
+ * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
  *
- * // Option 1: Pass a Redis URL or config
- * export default class NextCacheHandler extends RedisCacheHandler {
+ * /** @type {RedisCacheHandler | undefined} *\/
+ * let sharedHandler;
+ *
+ * export default class CacheHandler {
  *   constructor(options) {
- *     super({
- *       ...options,
- *       redis: process.env.REDIS_URL || "redis://localhost:6379",
- *       keyPrefix: "nextjs:cache:",
- *       defaultTTL: 3600
- *     });
- *   }
- * }
- *
- * // Option 2: Pass an existing Redis client instance
- * import Redis from "ioredis";
- *
- * const redisClient = new Redis({
- *   host: "localhost",
- *   port: 6379,
- *   // ... other options
- * });
- *
- * export default class NextCacheHandler extends RedisCacheHandler {
- *   constructor(options) {
- *     super({
- *       ...options,
- *       redis: redisClient, // Pass existing client
- *       keyPrefix: "nextjs:cache:",
- *       defaultTTL: 3600
- *     });
+ *     if (!sharedHandler) {
+ *       sharedHandler = new RedisCacheHandler({
+ *         ...options,
+ *         redis: process.env.REDIS_URL || "redis://localhost:6379",
+ *         keyPrefix: "nextjs:cache:",
+ *       });
+ *     }
+ *     return sharedHandler;
  *   }
  * }
  * ```
