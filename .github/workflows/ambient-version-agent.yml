@@ -53,8 +53,22 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check configuration
+        id: cfg
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Skip cleanly (no failed runs) until the agent is configured.
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::ANTHROPIC_API_KEY not set — ambient agent is dormant. See docs/ambient-agent.md."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Find target PRs
         id: targets
+        if: steps.cfg.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
