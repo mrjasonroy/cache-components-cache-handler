@@ -65,6 +65,10 @@ describe("createCacheHandler factory", () => {
     Reflect.deleteProperty(process.env, "REDIS_URL");
     Reflect.deleteProperty(process.env, "VALKEY_URL");
     Reflect.deleteProperty(process.env, "REDIS_PASSWORD");
+    Reflect.deleteProperty(process.env, "ELASTICACHE_ENDPOINT");
+    Reflect.deleteProperty(process.env, "ELASTICACHE_PORT");
+    Reflect.deleteProperty(process.env, "ELASTICACHE_TLS");
+    Reflect.deleteProperty(process.env, "ELASTICACHE_AUTH_TOKEN");
   });
 
   test("creates memory handler when type is memory", () => {
@@ -109,5 +113,90 @@ describe("createCacheHandler factory", () => {
     });
 
     expect(redisConstructorMock).toHaveBeenCalledWith("redis://no-auth");
+  });
+
+  // ElastiCache differs from plain Redis only in how it maps env vars to the ioredis
+  // config object (host/port instead of a URL, TLS on by default, auth-token password,
+  // connect timeout + retry). These assert that mapping so the AWS-specific glue can't
+  // silently break — the matching live round-trip over TLS + auth is the e2e-elasticache
+  // CI job.
+  test("maps ELASTICACHE_* env vars to the ioredis config object", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster.cache.amazonaws.com";
+    process.env.ELASTICACHE_PORT = "6380";
+    process.env.ELASTICACHE_AUTH_TOKEN = "env-token";
+
+    createCacheHandler({ type: "elasticache" });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "my-cluster.cache.amazonaws.com",
+        port: 6380,
+        tls: {},
+        password: "env-token",
+        connectTimeout: 10000,
+        retryStrategy: expect.any(Function),
+      }),
+    );
+
+    // Verify the backoff itself, not just that a function was passed: linear
+    // 200ms * attempt, then give up (null) after 3 attempts.
+    const config = redisConstructorMock.mock.calls[0][0] as {
+      retryStrategy: (times: number) => number | null;
+    };
+    expect(config.retryStrategy(1)).toBe(200);
+    expect(config.retryStrategy(3)).toBe(600);
+    expect(config.retryStrategy(4)).toBeNull();
+  });
+
+  test("explicit options override ElastiCache env vars", () => {
+    process.env.ELASTICACHE_ENDPOINT = "env-host";
+    process.env.ELASTICACHE_AUTH_TOKEN = "env-token";
+
+    createCacheHandler({
+      type: "elasticache",
+      endpoint: "opt-host",
+      port: 7000,
+      password: "opt-token",
+    });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "opt-host",
+        port: 7000,
+        password: "opt-token",
+      }),
+    );
+  });
+
+  test("defaults ElastiCache port to 6379 and TLS on", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster";
+
+    createCacheHandler({ type: "elasticache" });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ port: 6379, tls: {} }),
+    );
+  });
+
+  test("disables TLS when ELASTICACHE_TLS is 'false'", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster";
+    process.env.ELASTICACHE_TLS = "false";
+
+    createCacheHandler({ type: "elasticache" });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
+  });
+
+  test("disables TLS when options.tls is false (overrides the on-by-default)", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster";
+
+    createCacheHandler({ type: "elasticache", tls: false });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
+  });
+
+  test("throws when no ElastiCache endpoint is configured", () => {
+    expect(() => createCacheHandler({ type: "elasticache" })).toThrow(/endpoint is required/i);
+    expect(redisConstructorMock).not.toHaveBeenCalled();
   });
 });

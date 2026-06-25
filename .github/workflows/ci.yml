@@ -137,21 +137,54 @@ jobs:
   e2e-elasticache:
     runs-on: ubuntu-latest
     needs: unit-tests
-    # Test ElastiCache handler code path using Redis container
-    # This validates the ElastiCache configuration without requiring actual AWS infrastructure
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    # Exercises the ElastiCache handler against the two things that actually differ from a
+    # plain Redis container on a real cluster: in-transit TLS and an auth token. No AWS is
+    # needed — a self-signed CA trusted via NODE_EXTRA_CA_CERTS lets the factory's `tls: {}`
+    # (default certificate verification) succeed against a local Redis whose cert covers
+    # localhost, while `requirepass` stands in for the ElastiCache auth token. The old
+    # plaintext container (TLS off, no auth) only proved the switch branch, never TLS/AUTH.
+    env:
+      ELASTICACHE_AUTH_TOKEN: ci-elasticache-auth-token-0123456789
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Generate TLS certificates (self-signed CA + server cert, SAN=localhost)
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/.tls"
+          cd "$GITHUB_WORKSPACE/.tls"
+          openssl genrsa -out ca.key 2048
+          openssl req -x509 -new -nodes -key ca.key -sha256 -days 1 \
+            -subj "/CN=cache-handler-test-ca" -out ca.crt
+          openssl genrsa -out redis.key 2048
+          openssl req -new -key redis.key -subj "/CN=localhost" -out redis.csr
+          openssl x509 -req -in redis.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+            -days 1 -sha256 -out redis.crt \
+            -extfile <(printf "subjectAltName=DNS:localhost,IP:127.0.0.1")
+          chmod 644 ca.crt ca.key redis.crt redis.key
+
+      - name: Start Redis with TLS + auth token
+        run: |
+          docker run -d --name redis-tls -p 6379:6379 \
+            -v "$GITHUB_WORKSPACE/.tls:/tls:ro" \
+            redis:7-alpine \
+            redis-server \
+              --port 0 \
+              --tls-port 6379 \
+              --tls-cert-file /tls/redis.crt \
+              --tls-key-file /tls/redis.key \
+              --tls-ca-cert-file /tls/ca.crt \
+              --tls-auth-clients no \
+              --requirepass "$ELASTICACHE_AUTH_TOKEN"
+          echo "Waiting for Redis (TLS + auth) to accept connections..."
+          for i in $(seq 1 30); do
+            if docker exec redis-tls redis-cli --tls --cacert /tls/ca.crt \
+                -a "$ELASTICACHE_AUTH_TOKEN" ping 2>/dev/null | grep -q PONG; then
+              echo "Redis is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready"; docker logs redis-tls; exit 1
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -171,22 +204,24 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm setup:e2e
 
-      - name: Build e2e app with ElastiCache handler
+      - name: Build e2e app with ElastiCache handler (TLS + auth)
         env:
           CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
-          ELASTICACHE_TLS: "false"
+          ELASTICACHE_TLS: "true"
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/ca.crt
         run: |
           cd apps/e2e-test-app
           pnpm build
 
-      - name: Run e2e tests with ElastiCache handler
+      - name: Run e2e tests with ElastiCache handler (TLS + auth)
         env:
           CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
-          ELASTICACHE_TLS: "false"
+          ELASTICACHE_TLS: "true"
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/.tls/ca.crt
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
