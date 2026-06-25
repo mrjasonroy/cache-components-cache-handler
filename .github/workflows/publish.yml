@@ -69,11 +69,13 @@ jobs:
           node-version: "22"
           cache: "pnpm"
           registry-url: "https://registry.npmjs.org"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: pnpm install
+
+      - name: Upgrade npm for trusted publishing (OIDC)
+        # Trusted publishing requires npm >= 11.5.1; Node 22 ships an older npm.
+        run: npm install -g npm@latest
 
       - name: Build packages
         run: pnpm build
@@ -93,11 +95,12 @@ jobs:
           fi
           echo "Publishing with tag: $(cat $GITHUB_OUTPUT | grep tag= | cut -d= -f2)"
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC trusted publishing)
         working-directory: packages/cache-handler
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --tag ${{ steps.dist_tag.outputs.tag }}
+        # No token: authentication uses the workflow's OIDC identity, which must
+        # be configured as a trusted publisher for this package on npmjs.com.
+        # Provenance is attested automatically.
+        run: npm publish --access public --tag ${{ steps.dist_tag.outputs.tag }} --provenance
 
       - name: Verify published
         run: |
