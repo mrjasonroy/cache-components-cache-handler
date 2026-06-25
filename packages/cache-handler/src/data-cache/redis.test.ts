@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { createRedisDataCacheHandler } from "./redis.js";
+import { type RedisClient, createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheEntry } from "./types.js";
 
 class FakeRedis {
@@ -337,5 +337,97 @@ describe("RedisDataCacheHandler", () => {
     // The event timestamp is "now", not now + expire.
     await handler.updateTags(["T"], { expire: 100 });
     expect(await handler.getExpiration(["T"])).toBe(BASE_TIME.getTime());
+  });
+});
+
+describe("RedisDataCacheHandler cluster safety", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Redis Cluster and ElastiCache (cluster-mode enabled) shard keys across hash
+  // slots and reject any command that spans more than one slot with a CROSSSLOT
+  // error. The handler stays cluster-compatible only by issuing exclusively
+  // single-key commands — no `del(k1, k2)`, `mget`, multi-key transactions, etc.
+  // This records every command across the full handler surface (including both
+  // tag-driven and TTL-driven deletion paths) and asserts none targets more than
+  // one key, so a future multi-key change can't silently break cluster users.
+  test("only ever issues single-key commands", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const commands: Array<{ method: string; keys: string[] }> = [];
+    const backing = new FakeRedis();
+
+    // Delegate behavior to FakeRedis; record the key(s) each command receives.
+    const redis: RedisClient = {
+      get: (key) => {
+        commands.push({ method: "get", keys: [key] });
+        return backing.get(key);
+      },
+      set: (key, value, ...args) => {
+        commands.push({ method: "set", keys: [key] });
+        return backing.set(key, value, ...args);
+      },
+      del: (...keys) => {
+        commands.push({ method: "del", keys });
+        return backing.del(...keys);
+      },
+      exists: (...keys) => {
+        commands.push({ method: "exists", keys });
+        return backing.exists(...keys);
+      },
+      ttl: (key) => {
+        commands.push({ method: "ttl", keys: [key] });
+        return backing.ttl(key);
+      },
+      hGet: (key, field) => {
+        commands.push({ method: "hGet", keys: [key] });
+        return backing.hGet(key, field);
+      },
+      hSet: (key, field, value) => {
+        commands.push({ method: "hSet", keys: [key] });
+        return backing.hSet(key, field, value);
+      },
+      hGetAll: (key) => {
+        commands.push({ method: "hGetAll", keys: [key] });
+        return backing.hGetAll(key);
+      },
+    };
+
+    const handler = createRedisDataCacheHandler({ redis });
+
+    // Exercise the full surface, with multiple tags so multi-key ops would show.
+    await handler.set(
+      "k1",
+      Promise.resolve(
+        createEntry("v1", { tags: ["t1", "t2"], timestamp: BASE_TIME.getTime(), revalidate: 600 }),
+      ),
+    );
+    await handler.get("k1", []); // read + per-tag hGetAll checks
+    await handler.updateTags(["t1", "t2"], { expire: 100 }); // per-tag hSet
+    await handler.getExpiration(["t1", "t2"]); // per-tag hGet
+
+    // Tag-driven deletion path: revalidate a tag with immediate hard expiry, then
+    // read the now-invalid entry so the handler issues del(key).
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 1000));
+    await handler.updateTags(["t1"]);
+    await handler.get("k1", []);
+
+    // TTL-driven deletion path: an entry past its revalidate window is deleted on get.
+    await handler.set(
+      "k2",
+      Promise.resolve(
+        createEntry("v2", { timestamp: BASE_TIME.getTime(), expire: 600, revalidate: 1 }),
+      ),
+    );
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 5000));
+    await handler.get("k2", []);
+
+    // Both deletion paths must have run (otherwise the assertion is vacuous)...
+    expect(commands.some((c) => c.method === "del")).toBe(true);
+    // ...and every command issued must target exactly one key.
+    const multiKey = commands.filter((c) => c.keys.length !== 1);
+    expect(multiKey).toEqual([]);
   });
 });

@@ -212,6 +212,14 @@ const redis = new Cluster([
 export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
 ```
 
+**Cluster-mode is safe by design.** Redis Cluster and ElastiCache (cluster-mode
+enabled) shard keys across hash slots and reject any command spanning more than
+one slot with a `CROSSSLOT` error. This handler only ever issues **single-key
+commands** — no multi-key `del`/`mget`/transactions — so cluster mode works
+without hash tags or extra configuration. That invariant is enforced by a test
+(`redis.test.ts` → "only ever issues single-key commands"), so it can't
+regress silently.
+
 ### Key Expiration
 
 Keys are automatically expired based on cache lifetime settings. Monitor Redis memory usage.
@@ -247,6 +255,12 @@ export default createCacheHandler({
   tagPrefix: "prod:tags:",
 });
 ```
+
+This covers **cluster-mode-disabled** ElastiCache (a single primary with
+replicas), which behaves like single-node Redis from the client. For
+**cluster-mode-enabled** ElastiCache (sharded), use the ioredis `Cluster` client
+shown in [Redis Cluster](#redis-cluster-horizontal-scaling) above — the handler
+is slot-safe either way.
 
 ## Valkey
 
