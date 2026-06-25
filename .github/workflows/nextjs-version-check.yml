@@ -32,6 +32,13 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Use the release PAT so the branch push + PR are authored by a real
+          # identity. A PR opened by GITHUB_TOKEN does NOT trigger CI (ci.yml's
+          # required checks never run) and a bot-merge does NOT fire the post-merge
+          # tag/publish chain — both are GitHub's anti-recursion rule. Falls back to
+          # GITHUB_TOKEN when RELEASE_PAT is unset (PR opens, but you merge by hand).
+          token: ${{ secrets.RELEASE_PAT || github.token }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -201,7 +208,8 @@ jobs:
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         id: create_pr
         env:
-          GH_TOKEN: ${{ github.token }}
+          # PAT so the PR triggers ci.yml (the required checks that gate the merge).
+          GH_TOKEN: ${{ secrets.RELEASE_PAT || github.token }}
         run: |
           MEMORY_STATUS="${{ steps.test_memory.outcome }}"
           REDIS_STATUS="${{ steps.test_redis.outcome }}"
@@ -240,19 +248,26 @@ jobs:
           echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
           echo "all_tests_passed=$ALL_TESTS_PASSED" >> $GITHUB_OUTPUT
 
-      - name: Hand off to the ambient agent
+      - name: Enable auto-merge
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
         run: |
-          # The ambient agent (Claude Code, ambient-version-agent.yml) reviews this PR:
-          # runs the full suite, writes tests for any new cache behavior, then approves +
-          # merges if clean or flags it for a human. We dispatch it explicitly because a
-          # PR opened by GITHUB_TOKEN does not trigger pull_request workflows, and
-          # workflow_dispatch is exempt from that anti-recursion rule.
-          PR_NUMBER=$(gh pr view nextjs-${{ steps.check_version.outputs.latest_version }} --json number --jq .number)
-          if gh workflow run ambient-version-agent.yml -f pr_number="$PR_NUMBER"; then
-            echo "🤖 Dispatched ambient agent for PR #$PR_NUMBER"
-          else
-            echo "⚠️ Could not dispatch the agent; its scheduled run will pick this PR up."
+          BRANCH="nextjs-${{ steps.check_version.outputs.latest_version }}"
+
+          # No agent, no human: the PR ships itself once the required checks pass
+          # (lint-and-typecheck, unit-tests, and test-summary — which is green only if
+          # the full e2e matrix passes: memory, redis, valkey, elasticache). The e2e
+          # suite IS the reviewer.
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::RELEASE_PAT not set — PR opened, but auto-merge is off."
+            echo "Add a RELEASE_PAT secret (Contents + Pull requests: write) for"
+            echo "hands-off releases, or merge $BRANCH yourself once CI is green."
+            echo "See docs/auto-release.md."
+            exit 0
           fi
+
+          # Auto-merge must be enabled by the PAT (a real identity): a merge performed
+          # via GITHUB_TOKEN would not fire tag-on-version-merge.yml.
+          gh pr merge "$BRANCH" --squash --auto --delete-branch
+          echo "🚀 Auto-merge enabled for $BRANCH — it ships the moment CI is green."
