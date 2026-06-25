@@ -424,8 +424,14 @@ describe("RedisDataCacheHandler cluster safety", () => {
     vi.setSystemTime(new Date(BASE_TIME.getTime() + 5000));
     await handler.get("k2", []);
 
-    // Both deletion paths must have run (otherwise the assertion is vacuous)...
-    expect(commands.some((c) => c.method === "del")).toBe(true);
+    // Both deletion paths must have run (otherwise the assertion is vacuous),
+    // and each must delete exactly the one expected key — tag-driven del of k1,
+    // then TTL-driven del of k2.
+    const delCommands = commands.filter((c) => c.method === "del");
+    expect(delCommands).toEqual([
+      { method: "del", keys: ["nextjs:data-cache:k1"] },
+      { method: "del", keys: ["nextjs:data-cache:k2"] },
+    ]);
     // ...and every command issued must target exactly one key.
     const multiKey = commands.filter((c) => c.keys.length !== 1);
     expect(multiKey).toEqual([]);

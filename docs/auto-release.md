@@ -54,18 +54,26 @@ CI is green — the tag and publish still fire automatically from your merge.
 
 `main` requires the status checks `lint-and-typecheck`, `unit-tests`, and
 `test-summary`, and does **not** require an approving review — the checks are the
-gate, and no bot can give itself an approval. Required conversation resolution
-stays on (only matters when a human leaves review comments). Auto-merge and
-delete-branch-on-merge are enabled at the repo level.
+gate, and no bot can give itself an approval. **Required conversation resolution
+is off**: an auto-reviewer (e.g. `gemini-code-assist`) leaves review threads on
+every PR, and with conversation resolution required those unresolved threads
+would block auto-merge — wedging the hands-off bump loop on every release. The
+e2e status checks are the real gate. Auto-merge and delete-branch-on-merge are
+enabled at the repo level.
 
-To re-add a human approval gate later:
+To re-add a human approval gate later (the `required_pull_request_reviews`
+sub-fields are included because the GitHub API rejects a partial object):
 
 ```bash
 gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'JSON'
 { "required_status_checks": { "strict": false,
     "contexts": ["lint-and-typecheck", "unit-tests", "test-summary"] },
   "enforce_admins": false,
-  "required_pull_request_reviews": { "required_approving_review_count": 1 },
-  "restrictions": null, "required_conversation_resolution": true }
+  "required_pull_request_reviews": {
+    "dismiss_stale_reviews": false,
+    "require_code_owner_reviews": false,
+    "required_approving_review_count": 1
+  },
+  "restrictions": null, "required_conversation_resolution": false }
 JSON
 ```
