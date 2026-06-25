@@ -137,6 +137,15 @@ describe("createCacheHandler factory", () => {
         retryStrategy: expect.any(Function),
       }),
     );
+
+    // Verify the backoff itself, not just that a function was passed: linear
+    // 200ms * attempt, then give up (null) after 3 attempts.
+    const config = redisConstructorMock.mock.calls[0][0] as {
+      retryStrategy: (times: number) => number | null;
+    };
+    expect(config.retryStrategy(1)).toBe(200);
+    expect(config.retryStrategy(3)).toBe(600);
+    expect(config.retryStrategy(4)).toBeNull();
   });
 
   test("explicit options override ElastiCache env vars", () => {
@@ -174,6 +183,14 @@ describe("createCacheHandler factory", () => {
     process.env.ELASTICACHE_TLS = "false";
 
     createCacheHandler({ type: "elasticache" });
+
+    expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
+  });
+
+  test("disables TLS when options.tls is false (overrides the on-by-default)", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster";
+
+    createCacheHandler({ type: "elasticache", tls: false });
 
     expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
   });
