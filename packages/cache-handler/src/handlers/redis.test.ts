@@ -421,6 +421,10 @@ describe("RedisCacheHandler", () => {
   });
 
   describe("TTL on set", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     test("should store entry with setex when defaultTTL is configured", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2024-01-02T03:04:05.000Z"));
