@@ -102,6 +102,10 @@ class FakeRedis {
   listenerCount(event: string): number {
     return this.listeners.get(event)?.length ?? 0;
   }
+
+  getStored(key: string): { value: string; ttl?: number } | undefined {
+    return this.store.get(key);
+  }
 }
 
 // Mock ioredis to return our FakeRedis
@@ -413,6 +417,33 @@ describe("RedisCacheHandler", () => {
       // The old entry should have been deleted from Redis
       const rawData = await fakeRedis.get("nextjs:cache:old-app-page");
       expect(rawData).toBeNull();
+    });
+  });
+
+  describe("TTL on set", () => {
+    test("should store entry with setex when defaultTTL is configured", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2024-01-02T03:04:05.000Z"));
+
+      const handler = new RedisCacheHandler({ defaultTTL: 3600 });
+
+      const value: CacheValue = {
+        kind: "FETCH",
+        data: {
+          headers: { "content-type": "application/json" },
+          body: '{"ttl": true}',
+          status: 200,
+          url: "https://example.com",
+        },
+        revalidate: 3600,
+      };
+
+      await handler.set("ttl-key", value);
+
+      const stored = fakeRedis.getStored("nextjs:cache:ttl-key");
+      expect(stored).toBeDefined();
+      expect(stored?.ttl).toBeGreaterThan(0);
+      expect(stored?.ttl).toBeLessThanOrEqual(3600);
     });
   });
 
