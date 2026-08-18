@@ -224,20 +224,37 @@ export function createRedisDataCacheHandler(
         // re-cacheable after `revalidateTag(tag, "max")`). `expired`, when set,
         // is the hard-deletion deadline; before it, the entry is served stale.
         let revalidate = entry.revalidate;
-        for (const tag of entry.tags) {
-          const tagData = await redis.hGetAll(getTagKey(tag));
+        const tagResults = await Promise.all(
+          entry.tags.map((tag) => redis.hGetAll(getTagKey(tag))),
+        );
+
+        let hasStaleTag = false;
+        let expiredTag: string | undefined;
+
+        for (let i = 0; i < entry.tags.length; i++) {
+          const tag = entry.tags[i];
+          const tagData = tagResults[i];
           const revalidatedAt = tagData.stale ? Number.parseInt(tagData.stale, 10) : 0;
           const expireAt = tagData.expired ? Number.parseInt(tagData.expired, 10) : 0;
 
           if (revalidatedAt && revalidatedAt > entry.timestamp) {
             if (expireAt && Date.now() >= expireAt) {
-              log?.("get", cacheKey, "had expired tag", tag);
-              await redis.del(key);
-              return undefined;
+              expiredTag = tag;
+              break;
             }
-            log?.("get", cacheKey, "had stale tag", tag);
-            revalidate = -1;
+            hasStaleTag = true;
           }
+        }
+
+        if (expiredTag) {
+          log?.("get", cacheKey, "had expired tag", expiredTag);
+          await redis.del(key);
+          return undefined;
+        }
+
+        if (hasStaleTag) {
+          log?.("get", cacheKey, "had stale tag");
+          revalidate = -1;
         }
 
         // Tee the stream

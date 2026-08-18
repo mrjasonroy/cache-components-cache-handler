@@ -192,17 +192,18 @@ export class RedisCacheHandler implements CacheHandler {
 
       // Check if any tag (explicit or implicit) has been revalidated
       const allTags = [...entry.tags, ...(meta?.implicitTags ?? [])];
+      const revalidatedAts = await Promise.all(
+        allTags.map((tag) => this.redis.get(this.getTagKey(tag))),
+      );
 
-      for (const tag of allTags) {
-        const tagKey = this.getTagKey(tag);
-        const revalidatedAt = await this.redis.get(tagKey);
+      const staleTagIndex = revalidatedAts.findIndex(
+        (revalidatedAt) => revalidatedAt && Number.parseInt(revalidatedAt) > entry.lastModified,
+      );
 
-        // If tag was revalidated after entry was last modified, entry is stale
-        if (revalidatedAt && Number.parseInt(revalidatedAt) > entry.lastModified) {
-          this.log("GET", cacheKey, "STALE (tag revalidated)", tag);
-          await this.delete(key);
-          return null;
-        }
+      if (staleTagIndex !== -1) {
+        this.log("GET", cacheKey, "STALE (tag revalidated)", allTags[staleTagIndex]);
+        await this.delete(key);
+        return null;
       }
 
       // Invalidate old APP_PAGE entries where segmentData was stored as a

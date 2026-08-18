@@ -513,4 +513,58 @@ describe("RedisCacheHandler", () => {
       expect(fakeRedis.quitCalled).toBe(true);
     });
   });
+
+  describe("tag revalidation checks", () => {
+    test("dispatches per-tag staleness checks concurrently, not sequentially", async () => {
+      const handler = new RedisCacheHandler();
+
+      const value: CacheValue = {
+        kind: "FETCH",
+        data: {
+          headers: { "content-type": "application/json" },
+          body: '{"test":true}',
+          status: 200,
+          url: "https://example.com",
+        },
+        revalidate: 60,
+      };
+
+      await handler.set("multi-tag-key", value, { revalidate: false, tags: ["t1", "t2", "t3"] });
+
+      const tagKeys = ["nextjs:tags:t1", "nextjs:tags:t2", "nextjs:tags:t3"];
+      const started: string[] = [];
+      const releases: Array<() => void> = [];
+      const originalGet = fakeRedis.get.bind(fakeRedis);
+
+      // Block any GET for a tag key until explicitly released, so we can
+      // observe how many are in flight at once.
+      fakeRedis.get = async (key: string) => {
+        if (!tagKeys.includes(key)) {
+          return originalGet(key);
+        }
+        started.push(key);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return originalGet(key);
+      };
+
+      const getPromise = handler.get("multi-tag-key");
+
+      // Flush microtasks so every dispatched tag lookup has had a chance to
+      // start, without letting any of the blocked ones resolve.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // A sequential loop would only ever have the first tag lookup in
+      // flight here, since it can't dispatch the next until this one
+      // resolves. All three being in flight proves concurrent dispatch.
+      expect(started.slice().sort()).toEqual(tagKeys.slice().sort());
+
+      for (const release of releases) {
+        release();
+      }
+      const result = await getPromise;
+
+      expect(result).not.toBeNull();
+      expect(result?.value).toEqual(value);
+    });
+  });
 });
