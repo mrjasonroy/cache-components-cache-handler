@@ -65,6 +65,32 @@ describe("serialization helpers", () => {
     });
   });
 
+  describe("nested Buffer (Node toJSON before replacer)", () => {
+    test("serializes rscData as base64, not int-array JSON", () => {
+      const entry = { rscData: Buffer.from('1:"test"') };
+      const serialized = JSON.stringify(entry, jsonReplacer);
+
+      expect(serialized).toContain('"__serialized_type":"Buffer"');
+      expect(serialized).toContain('"data":"MToidGVzdCI="');
+      expect(serialized).not.toContain('"type":"Buffer"');
+      expect(serialized).not.toMatch(/"data":\[\d+,/);
+    });
+
+    test("round-trips rscData nested in an APP_PAGE-like object", () => {
+      const entry = {
+        kind: "APP_PAGE",
+        rscData: Buffer.from("page-rsc-payload"),
+        html: "<html></html>",
+      };
+      const result = roundTrip(entry) as typeof entry;
+
+      expect(Buffer.isBuffer(result.rscData)).toBe(true);
+      expect(result.rscData.toString()).toBe("page-rsc-payload");
+      expect(result.kind).toBe("APP_PAGE");
+      expect(result.html).toBe("<html></html>");
+    });
+  });
+
   describe("Next.js APP_PAGE shape (Map<string, Buffer>)", () => {
     test("round-trips a Map of Buffers (segmentData)", () => {
       const segmentData = new Map<string, Buffer>([
@@ -102,6 +128,13 @@ describe("serialization helpers", () => {
 
     test("does not convert { type: 'Buffer' } with non-numeric data", () => {
       const userValue = { type: "Buffer", data: ["not", "bytes"] };
+      const result = roundTrip(userValue);
+      expect(Buffer.isBuffer(result)).toBe(false);
+      expect(result).toEqual(userValue);
+    });
+
+    test("does not convert { type: 'Buffer' } with invalid byte values", () => {
+      const userValue = { type: "Buffer", data: [1, 256, 3.5] };
       const result = roundTrip(userValue);
       expect(Buffer.isBuffer(result)).toBe(false);
       expect(result).toEqual(userValue);
