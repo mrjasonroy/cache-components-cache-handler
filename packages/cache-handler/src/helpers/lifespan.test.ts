@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { calculateLifespan, isExpired } from "./lifespan.js";
+import { calculateLifespan, isExpired, redisTtlSecondsFromLifespan } from "./lifespan.js";
 
 const MOCK_TIME = new Date("2024-01-02T03:04:05.000Z");
 
@@ -70,5 +70,21 @@ describe("lifespan helpers", () => {
 
     vi.setSystemTime(new Date(MOCK_TIME.getTime() + 2_000));
     expect(isExpired(lifespan)).toBe(true);
+  });
+
+  test("redisTtlSecondsFromLifespan computes positive Redis TTL from lifespan", () => {
+    const lifespan = calculateLifespan(3600, 3600);
+    const ttl = redisTtlSecondsFromLifespan(lifespan);
+
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(3600);
+  });
+
+  test("redisTtlSecondsFromLifespan documents the broken formula always skips writes", () => {
+    const lifespan = calculateLifespan(3600, 3600);
+    expect(lifespan).not.toBeNull();
+
+    const broken = Math.ceil((lifespan.expireAt - Date.now()) / 1000);
+    expect(broken).toBeLessThanOrEqual(0);
   });
 });
