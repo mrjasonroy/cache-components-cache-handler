@@ -6,6 +6,22 @@
  * loses Buffer identity, so custom replacer/reviver functions are needed.
  */
 
+type NodeBufferJson = {
+  type: "Buffer";
+  data: number[];
+};
+
+function isByte(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 255;
+}
+
+function isNodeBufferJson(value: unknown): value is NodeBufferJson {
+  if (!value || typeof value !== "object") return false;
+
+  const obj = value as Record<string, unknown>;
+  return obj.type === "Buffer" && Array.isArray(obj.data) && obj.data.every(isByte);
+}
+
 /**
  * Custom JSON replacer that serializes Map and Buffer instances.
  * - Maps become `{ __serialized_type: "Map", entries: [...] }`
@@ -22,6 +38,14 @@ export function jsonReplacer(_key: string, value: unknown): unknown {
     return {
       __serialized_type: "Buffer",
       data: value.toString("base64"),
+    };
+  }
+  // Node calls Buffer.toJSON() before the replacer — nested Buffers arrive as
+  // `{ type: "Buffer", data: number[] }` instead of a Buffer instance.
+  if (isNodeBufferJson(value)) {
+    return {
+      __serialized_type: "Buffer",
+      data: Buffer.from(value.data).toString("base64"),
     };
   }
   return value;
@@ -51,12 +75,8 @@ export function jsonReviver(_key: string, value: unknown): unknown {
     // Backward compat: Node's Buffer.toJSON() format.
     // Guard with number[] check to avoid false-positives on user data
     // that happens to have { type: "Buffer", data: [...] } shape.
-    if (
-      obj.type === "Buffer" &&
-      Array.isArray(obj.data) &&
-      obj.data.every((n) => typeof n === "number")
-    ) {
-      return Buffer.from(obj.data as number[]);
+    if (isNodeBufferJson(obj)) {
+      return Buffer.from(obj.data);
     }
   }
   return value;
