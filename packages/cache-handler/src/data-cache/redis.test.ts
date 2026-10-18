@@ -8,6 +8,7 @@ class FakeRedis {
 
   public readonly setCalls: Array<{ key: string; args: unknown[] }> = [];
   public readonly delCalls: string[][] = [];
+  public readonly expireCalls: Array<{ key: string; seconds: number }> = [];
 
   async get(key: string): Promise<string | null> {
     const entry = this.store.get(key);
@@ -64,6 +65,11 @@ class FakeRedis {
 
     const ttlMs = entry.expireAt - Date.now();
     return ttlMs > 0 ? Math.ceil(ttlMs / 1000) : -2;
+  }
+
+  async expire(key: string, seconds: number): Promise<number> {
+    this.expireCalls.push({ key, seconds });
+    return this.hashes.has(key) || this.store.has(key) ? 1 : 0;
   }
 
   async hGet(key: string, field: string): Promise<string | null> {
@@ -160,7 +166,10 @@ describe("RedisDataCacheHandler", () => {
     expect(await readStream(result.value)).toBe("hello world");
   });
 
-  test("returns undefined and deletes entries that exceed revalidate window", async () => {
+  // Next's "use cache" wrapper serves an entry past `revalidate` and refreshes it
+  // in the background, up to `expire`. A persistent handler that drops the entry
+  // at `revalidate` turns every later request into a blocking regeneration.
+  test("serves entries past revalidate until expire (stale-while-revalidate)", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(BASE_TIME);
 
@@ -177,8 +186,82 @@ describe("RedisDataCacheHandler", () => {
     vi.setSystemTime(new Date(BASE_TIME.getTime() + 61_000));
 
     const result = await handler.get("stale-key", []);
-    expect(result).toBeUndefined();
-    expect(redis.delCalls).toContainEqual(["nextjs:data-cache:stale-key"]);
+    if (!result) {
+      throw new Error("expected the stale entry to be served until expire");
+    }
+    // Returned untouched: the wrapper compares timestamp + revalidate itself.
+    expect(result.revalidate).toBe(60);
+    expect(result.timestamp).toBe(BASE_TIME.getTime());
+    expect(await readStream(result.value)).toBe("stale");
+    expect(redis.delCalls).toEqual([]);
+  });
+
+  test("treats entries past expire as a miss", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    // Simulate a key whose TTL outlives `expire` (e.g. clock skew between
+    // instances): the handler must still not serve an entry past `expire`.
+    const serialized = JSON.stringify({
+      value: Buffer.from("old").toString("base64"),
+      tags: [],
+      stale: 0,
+      timestamp: BASE_TIME.getTime(),
+      expire: 10,
+      revalidate: 5,
+    });
+    await redis.set("nextjs:data-cache:old-key", serialized);
+
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 11_000));
+    expect(await handler.get("old-key", [])).toBeUndefined();
+  });
+
+  test("returns a fresh stream on every get", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+    await handler.set("k", Promise.resolve(createEntry("twice")));
+
+    const first = await handler.get("k", []);
+    const second = await handler.get("k", []);
+    if (!first || !second) {
+      throw new Error("expected cache entry");
+    }
+    expect(await readStream(first.value)).toBe("twice");
+    expect(await readStream(second.value)).toBe("twice");
+  });
+
+  test("bases the key TTL on the time left until expire, measured from timestamp", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    // The render started 10s before set() ran, so 110s of the 120s are left.
+    const entry = createEntry("late", {
+      expire: 120,
+      revalidate: 60,
+      timestamp: BASE_TIME.getTime() - 10_000,
+    });
+    await handler.set("late-key", Promise.resolve(entry));
+
+    expect(redis.setCalls[0].args).toEqual([{ EX: 110 }]);
+  });
+
+  test("does not store entries that are already expired (expire: 0)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    // Redis rejects `SET ... EX 0`; Next's own handler skips `expire: 0` too.
+    await handler.set("dynamic", Promise.resolve(createEntry("d", { expire: 0, revalidate: 0 })));
+    expect(redis.setCalls).toEqual([]);
+    expect(await handler.get("dynamic", [])).toBeUndefined();
   });
 
   test("marks entries as stale when tags update without expiration", async () => {
@@ -405,6 +488,10 @@ describe("RedisDataCacheHandler cluster safety", () => {
         commands.push({ method: "ttl", keys: [key] });
         return backing.ttl(key);
       },
+      expire: (key, seconds) => {
+        commands.push({ method: "expire", keys: [key] });
+        return backing.expire(key, seconds);
+      },
       hGet: (key, field) => {
         commands.push({ method: "hGet", keys: [key] });
         return backing.hGet(key, field);
@@ -438,7 +525,8 @@ describe("RedisDataCacheHandler cluster safety", () => {
     await handler.updateTags(["t1"]);
     await handler.get("k1", []);
 
-    // TTL-driven deletion path: an entry past its revalidate window is deleted on get.
+    // Stale and expired reads: past revalidate the entry is served, past expire
+    // it is a miss. Neither may issue a multi-key command.
     await handler.set(
       "k2",
       Promise.resolve(
@@ -447,15 +535,15 @@ describe("RedisDataCacheHandler cluster safety", () => {
     );
     vi.setSystemTime(new Date(BASE_TIME.getTime() + 5000));
     await handler.get("k2", []);
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 601_000));
+    await handler.get("k2", []);
 
-    // Both deletion paths must have run (otherwise the assertion is vacuous),
-    // and each must delete exactly the one expected key — tag-driven del of k1,
-    // then TTL-driven del of k2.
+    // The deletion path must have run (otherwise the assertion is vacuous), and
+    // must delete exactly the one expected key.
     const delCommands = commands.filter((c) => c.method === "del");
-    expect(delCommands).toEqual([
-      { method: "del", keys: ["nextjs:data-cache:k1"] },
-      { method: "del", keys: ["nextjs:data-cache:k2"] },
-    ]);
+    expect(delCommands).toEqual([{ method: "del", keys: ["nextjs:data-cache:k1"] }]);
+    // Tag records are given a TTL one key at a time.
+    expect(commands.some((c) => c.method === "expire")).toBe(true);
     // ...and every command issued must target exactly one key.
     const multiKey = commands.filter((c) => c.keys.length !== 1);
     expect(multiKey).toEqual([]);
@@ -516,5 +604,209 @@ describe("RedisDataCacheHandler tag revalidation checks", () => {
       throw new Error("expected cache entry");
     }
     expect(await readStream(result.value)).toBe("v1");
+  });
+});
+
+describe("RedisDataCacheHandler error visibility", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function failingRedis(): RedisClient {
+    const fail = () => Promise.reject(new Error("ECONNREFUSED"));
+    return {
+      get: fail,
+      set: fail,
+      del: fail,
+      exists: fail,
+      ttl: fail,
+      expire: fail,
+      hGet: fail,
+      hSet: fail,
+      hGetAll: fail,
+    };
+  }
+
+  // A wrong REDIS_URL in production must not mean "no caching and no logs".
+  test("logs Redis errors with console.error even when debug is off", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = createRedisDataCacheHandler({ redis: failingRedis() });
+
+    // get degrades to a miss instead of throwing...
+    expect(await handler.get("k", [])).toBeUndefined();
+    // ...and set, getExpiration and updateTags don't throw either.
+    await handler.set("k", Promise.resolve(createEntry("v")));
+    expect(await handler.getExpiration(["t"])).toBe(0);
+    await handler.updateTags(["t"]);
+
+    const operations = errorSpy.mock.calls.map((call) => String(call[0]));
+    for (const op of ["get", "set", "getExpiration", "updateTags"]) {
+      expect(operations.some((message) => message.includes(` ${op} failed`))).toBe(true);
+    }
+    for (const call of errorSpy.mock.calls) {
+      expect(call[1]).toBeInstanceOf(Error);
+    }
+  });
+
+  test("rate-limits error logs per operation so an outage cannot flood the logs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = createRedisDataCacheHandler({
+      redis: failingRedis(),
+      errorLogIntervalMs: 60_000,
+    });
+
+    for (let i = 0; i < 50; i++) {
+      await handler.get(`k${i}`, []);
+    }
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+
+    // A different operation has its own budget.
+    await handler.set("k", Promise.resolve(createEntry("v")));
+    expect(errorSpy).toHaveBeenCalledTimes(2);
+
+    // After the interval, the next error is logged with a count of what was dropped.
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 60_000));
+    await handler.get("k", []);
+    expect(errorSpy).toHaveBeenCalledTimes(3);
+    expect(String(errorSpy.mock.calls[2][0])).toContain("49 similar errors suppressed");
+  });
+
+  test("does not report a failed render (rejected pendingEntry) as a Redis error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    await handler.set("k", Promise.reject(new Error("render failed")));
+    expect(redis.setCalls).toEqual([]);
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("RedisDataCacheHandler pending sets", () => {
+  // types.d.ts: "If a `get` for the same cache key is called, before the pending
+  // entry is complete, the cache handler must wait for the `set` operation to
+  // finish, before returning the entry, instead of returning undefined."
+  test("get waits for an in-flight set of the same key", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    let resolveEntry: (entry: DataCacheEntry) => void = () => {};
+    const pendingEntry = new Promise<DataCacheEntry>((resolve) => {
+      resolveEntry = resolve;
+    });
+
+    const setPromise = handler.set("k", pendingEntry);
+    const getPromise = handler.get("k", []);
+
+    let settled = false;
+    void getPromise.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
+
+    resolveEntry(createEntry("rendered once"));
+    await setPromise;
+    const result = await getPromise;
+    if (!result) {
+      throw new Error("expected get to return the entry the pending set stored");
+    }
+    expect(await readStream(result.value)).toBe("rendered once");
+  });
+
+  test("a failed pending set releases waiting gets", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    const setPromise = handler.set("k", Promise.reject(new Error("render failed")));
+    const result = await handler.get("k", []);
+    await setPromise;
+    expect(result).toBeUndefined();
+
+    // ...and does not leave the key blocked for later readers.
+    await handler.set("k", Promise.resolve(createEntry("v2")));
+    const later = await handler.get("k", []);
+    if (!later) {
+      throw new Error("expected cache entry");
+    }
+    expect(await readStream(later.value)).toBe("v2");
+  });
+
+  test("does not wait on a pending set for a different key", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    void handler.set("slow", new Promise<DataCacheEntry>(() => {}));
+    expect(await handler.get("other", [])).toBeUndefined();
+  });
+});
+
+describe("RedisDataCacheHandler tag record expiry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  test("gives every revalidated tag record a TTL", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis, tagTTL: 1000 });
+
+    await handler.updateTags(["a", "b"], { expire: 60 });
+    await handler.updateTags(["c"]);
+
+    expect(redis.expireCalls).toEqual([
+      { key: "nextjs:tags:a", seconds: 1000 },
+      { key: "nextjs:tags:b", seconds: 1000 },
+      { key: "nextjs:tags:c", seconds: 1000 },
+    ]);
+  });
+
+  test("defaults the tag TTL to longer than cacheLife('max')", async () => {
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    await handler.updateTags(["a"]);
+    // cacheLife("max") has expire = 365 days; the default must exceed it.
+    expect(redis.expireCalls[0].seconds).toBeGreaterThan(365 * 24 * 60 * 60);
+  });
+
+  // A tag record must outlive every entry it can invalidate, or a pre-revalidation
+  // entry would be served as fresh after the record disappears. Capping entry
+  // lifetimes at tagTTL (measured from the entry's timestamp, which precedes any
+  // revalidation that affects it) guarantees that.
+  test("caps entry key TTLs at tagTTL", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis, tagTTL: 1000, defaultTTL: 5000 });
+
+    await handler.set("long", Promise.resolve(createEntry("v", { expire: 2000 })));
+    await handler.set("infinite", Promise.resolve(createEntry("v", { expire: 4294967294 })));
+
+    expect(redis.setCalls.map((call) => call.args)).toEqual([[{ EX: 1000 }], [{ EX: 1000 }]]);
+  });
+
+  test("warns once when the client cannot set a TTL on tag records", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const backing = new FakeRedis();
+    const redis: RedisClient = {
+      get: (key) => backing.get(key),
+      set: (key, value, ...args) => backing.set(key, value, ...args),
+      del: (...keys) => backing.del(...keys),
+      exists: (...keys) => backing.exists(...keys),
+      ttl: (key) => backing.ttl(key),
+      hGet: (key, field) => backing.hGet(key, field),
+      hSet: (key, field, value) => backing.hSet(key, field, value),
+      hGetAll: (key) => backing.hGetAll(key),
+    };
+    const handler = createRedisDataCacheHandler({ redis });
+
+    await handler.updateTags(["a"]);
+    await handler.updateTags(["b"]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });

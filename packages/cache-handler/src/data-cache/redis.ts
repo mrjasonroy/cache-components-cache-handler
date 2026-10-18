@@ -4,9 +4,41 @@
  *
  * This handler stores cache entries in Redis, allowing multiple
  * Next.js instances to share the same cache.
+ *
+ * Contract notes (see `next/dist/server/lib/cache-handlers/types.d.ts`):
+ *
+ * - Entries are returned until `expire`, not `revalidate`. Next's "use cache"
+ *   wrapper serves an entry that is past `revalidate` and regenerates it in the
+ *   background (stale-while-revalidate). Next's built-in in-memory handler
+ *   deliberately drops entries at `revalidate` in production, because warming an
+ *   in-memory entry that is likely to be evicted is not worth it; a shared,
+ *   persistent store is the case stale-while-revalidate is designed for.
+ * - The key TTL is the time left until `timestamp + expire`, so Redis evicts the
+ *   entry exactly when it stops being servable.
+ * - A `get` waits for an in-flight `set` of the same key in this process, so
+ *   concurrent requests don't each render the same entry.
+ * - Errors never throw out of the handler (a cache outage degrades to misses),
+ *   but they are always logged with `console.error`, rate-limited per operation.
+ * - Only single-key commands are issued, so Redis Cluster and ElastiCache in
+ *   cluster mode work (no cross-slot CROSSSLOT errors).
  */
 
+import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
+
+/**
+ * Next's sentinel for "no expiry" (`INFINITE_CACHE` in next/dist/lib/constants).
+ */
+const INFINITE_CACHE = 0xfffffffe;
+
+/**
+ * Default lifetime of tag revalidation records, in seconds: 366 days.
+ *
+ * `cacheLife("max")` has the longest built-in `expire`, 365 days. Entry TTLs are
+ * capped at this value, so it bounds how long any entry can live; one extra day
+ * absorbs clock skew between the Next.js instances that write entries.
+ */
+const DEFAULT_TAG_TTL = 366 * 24 * 60 * 60;
 
 export interface RedisDataCacheHandlerOptions {
   /**
@@ -33,11 +65,30 @@ export interface RedisDataCacheHandlerOptions {
   debug?: boolean;
 
   /**
-   * Default TTL for cache entries in seconds
-   * Used if entry doesn't specify expiration
+   * TTL in seconds for entries without a finite `expire`
+   * (Next's `INFINITE_CACHE`, e.g. the default `cacheLife`)
    * @default 86400 (24 hours)
    */
   defaultTTL?: number;
+
+  /**
+   * TTL in seconds for tag revalidation records, refreshed on every revalidation.
+   *
+   * A tag record must outlive every entry it can invalidate; otherwise an entry
+   * cached before a `revalidateTag` would be served as fresh once the record is
+   * gone. To guarantee that, entry TTLs are capped at this value, measured from
+   * the entry's creation `timestamp`.
+   * @default 31622400 (366 days, longer than `cacheLife("max")`'s 365-day expire)
+   */
+  tagTTL?: number;
+
+  /**
+   * Minimum time in milliseconds between two logged errors of the same operation.
+   * Errors are always logged with `console.error`; this only stops an outage
+   * from producing one log line per request.
+   * @default 60000
+   */
+  errorLogIntervalMs?: number;
 }
 
 /**
@@ -50,6 +101,12 @@ export interface RedisClient {
   del(...keys: string[]): Promise<number>;
   exists(...keys: string[]): Promise<number>;
   ttl(key: string): Promise<number>;
+  /**
+   * Set a key's TTL in seconds. Used to expire tag revalidation records.
+   * node-redis and ioredis (via `createIoredisAdapter`) both provide it. Without
+   * it, tag records never expire and a warning is logged once.
+   */
+  expire?(key: string, seconds: number): Promise<unknown>;
   hGet(key: string, field: string): Promise<string | null>;
   hSet(key: string, field: string, value: string): Promise<unknown>;
   hGetAll(key: string): Promise<Record<string, string>>;
@@ -145,10 +202,21 @@ export function createRedisDataCacheHandler(
     keyPrefix = "nextjs:data-cache:",
     tagPrefix = "nextjs:tags:",
     defaultTTL = 86400,
+    tagTTL = DEFAULT_TAG_TTL,
+    errorLogIntervalMs = DEFAULT_ERROR_LOG_INTERVAL_MS,
     debug = false,
   } = options;
 
   const log = debug ? console.debug.bind(console, "[RedisDataCache]:") : undefined;
+  const reportError = createErrorReporter("[RedisDataCache]:", errorLogIntervalMs);
+
+  /**
+   * In-flight `set` operations by cache key. Holds a promise this handler owns
+   * (never the caller's `pendingEntry`) and is cleared as soon as the set ends.
+   */
+  const pendingSets = new Map<string, Promise<void>>();
+
+  let warnedMissingExpire = false;
 
   /**
    * Get cache key with prefix
@@ -162,6 +230,16 @@ export function createRedisDataCacheHandler(
    */
   function getTagKey(tag: string): string {
     return `${tagPrefix}${tag}`;
+  }
+
+  /**
+   * Seconds the entry should stay in Redis: the time left until it expires,
+   * measured from its creation timestamp and capped at `tagTTL`.
+   */
+  function getEntryTTL(entry: DataCacheEntry): number {
+    const expire = entry.expire >= INFINITE_CACHE ? defaultTTL : entry.expire;
+    const lifetime = Math.min(expire, tagTTL);
+    return Math.ceil((entry.timestamp + lifetime * 1000 - Date.now()) / 1000);
   }
 
   /**
@@ -181,7 +259,7 @@ export function createRedisDataCacheHandler(
   }
 
   /**
-   * Deserialize cache entry from Redis
+   * Deserialize cache entry from Redis. Every call builds a new value stream.
    */
   function deserializeEntry(data: SerializedCacheEntry): DataCacheEntry {
     const buffer = Buffer.from(data.value, "base64");
@@ -196,8 +274,44 @@ export function createRedisDataCacheHandler(
     };
   }
 
+  async function writeEntry(cacheKey: string, pendingEntry: Promise<DataCacheEntry>) {
+    let serialized: SerializedCacheEntry;
+    let ttl: number;
+
+    // A rejected entry or an errored stream is a failed render, which Next
+    // already reports; it is not a cache backend failure.
+    try {
+      const entry = await pendingEntry;
+      ttl = getEntryTTL(entry);
+      if (ttl <= 0) {
+        // Already expired (e.g. `expire: 0`, a dynamic entry Next regenerates on
+        // every read). Redis rejects `EX 0`, and storing it would be wasted.
+        log?.("set", cacheKey, "skipped expired entry");
+        return;
+      }
+      serialized = await serializeEntry(entry);
+    } catch (error) {
+      log?.("set", cacheKey, "entry failed", error);
+      return;
+    }
+
+    try {
+      await redis.set(getCacheKey(cacheKey), JSON.stringify(serialized), { EX: ttl });
+      log?.("set", cacheKey, "done", { ttl });
+    } catch (error) {
+      log?.("set", cacheKey, "failed", error);
+      reportError("set", error);
+    }
+  }
+
   return {
     async get(cacheKey, _softTags) {
+      const pendingSet = pendingSets.get(cacheKey);
+      if (pendingSet) {
+        log?.("get", cacheKey, "pending");
+        await pendingSet;
+      }
+
       const key = getCacheKey(cacheKey);
 
       try {
@@ -209,12 +323,13 @@ export function createRedisDataCacheHandler(
         }
 
         const entry = deserializeEntry(JSON.parse(data));
-        const now = Date.now();
 
-        // Check expiration
-        if (now > entry.timestamp + entry.revalidate * 1000) {
+        // Past `expire` the entry must not be served. The key TTL normally evicts
+        // it first; this guards against clock skew between instances. Past
+        // `revalidate` (but before `expire`) the entry is returned as-is and
+        // Next's wrapper serves it while regenerating in the background.
+        if (Date.now() > entry.timestamp + entry.expire * 1000) {
           log?.("get", cacheKey, "expired");
-          await redis.del(key);
           return undefined;
         }
 
@@ -253,13 +368,11 @@ export function createRedisDataCacheHandler(
         }
 
         if (hasStaleTag) {
+          // A negative revalidate makes Next serve the entry once more and
+          // regenerate it in the background, as its built-in handler does.
           log?.("get", cacheKey, "had stale tag");
           revalidate = -1;
         }
-
-        // Tee the stream
-        const [returnStream, newSaved] = entry.value.tee();
-        entry.value = newSaved;
 
         log?.("get", cacheKey, "found", {
           tags: entry.tags,
@@ -267,35 +380,32 @@ export function createRedisDataCacheHandler(
           revalidate,
         });
 
-        return {
-          ...entry,
-          revalidate,
-          value: returnStream,
-        };
+        return { ...entry, revalidate };
       } catch (error) {
+        // Degrade to a miss so the page still renders, but make it visible.
         log?.("get", cacheKey, "error", error);
+        reportError("get", error);
         return undefined;
       }
     },
 
     async set(cacheKey, pendingEntry) {
-      const key = getCacheKey(cacheKey);
+      log?.("set", cacheKey, "start");
+
+      let resolvePending: () => void = () => {};
+      const pending = new Promise<void>((resolve) => {
+        resolvePending = resolve;
+      });
+      pendingSets.set(cacheKey, pending);
 
       try {
-        log?.("set", cacheKey, "start");
-
-        const entry = await pendingEntry;
-        const serialized = await serializeEntry(entry);
-
-        // Calculate TTL (use expire time or default)
-        const ttl = entry.expire < 4294967294 ? entry.expire : defaultTTL;
-
-        // Store in Redis with TTL
-        await redis.set(key, JSON.stringify(serialized), { EX: Math.ceil(ttl) });
-
-        log?.("set", cacheKey, "done", { ttl });
-      } catch (error) {
-        log?.("set", cacheKey, "failed", error);
+        await writeEntry(cacheKey, pendingEntry);
+      } finally {
+        resolvePending();
+        // A newer set of the same key may have replaced ours; leave it in place.
+        if (pendingSets.get(cacheKey) === pending) {
+          pendingSets.delete(cacheKey);
+        }
       }
     },
 
@@ -324,12 +434,21 @@ export function createRedisDataCacheHandler(
         return expiration;
       } catch (error) {
         log?.("getExpiration", "error", error);
+        reportError("getExpiration", error);
         return 0;
       }
     },
 
     async updateTags(tags, durations) {
       const now = Date.now();
+      const expire = redis.expire?.bind(redis);
+
+      if (!expire && !warnedMissingExpire) {
+        warnedMissingExpire = true;
+        console.warn(
+          "[RedisDataCache]: the Redis client has no expire() method, so tag revalidation records will never expire.",
+        );
+      }
 
       try {
         log?.("updateTags", { tags, timestamp: now, durations });
@@ -352,10 +471,16 @@ export function createRedisDataCacheHandler(
               await redis.hSet(key, "expired", expired.toString());
             }
             // `durations` without `expire` -> stale only, no hard deadline.
+
+            // Every entry this record can affect was created before `now` and
+            // lives at most `tagTTL` from its creation, so after `tagTTL` the
+            // record has nothing left to invalidate.
+            await expire?.(key, tagTTL);
           }),
         );
       } catch (error) {
         log?.("updateTags", "error", error);
+        reportError("updateTags", error);
       }
     },
   };

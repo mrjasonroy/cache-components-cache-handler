@@ -24,6 +24,7 @@ function createFakeIoredis() {
       hget: record("hget", "field-value"),
       hset: record("hset", 1),
       hgetall: record("hgetall", { a: "1" }),
+      expire: record("expire", 1),
     },
   };
 }
@@ -82,5 +83,14 @@ describe("createIoredisAdapter", () => {
 
     expect(calls.find((c) => c.method === "del")?.args).toEqual(["k1", "k2"]);
     expect(calls.find((c) => c.method === "exists")?.args).toEqual(["k1", "k2"]);
+  });
+
+  test("delegates expire (used to give tag records a TTL)", async () => {
+    const { client, calls } = createFakeIoredis();
+    const adapter = createIoredisAdapter(client);
+
+    await adapter.expire?.("nextjs:tags:t", 3600);
+
+    expect(calls).toEqual([{ method: "expire", args: ["nextjs:tags:t", 3600] }]);
   });
 });

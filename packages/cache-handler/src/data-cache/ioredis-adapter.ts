@@ -13,6 +13,7 @@ export interface IoredisLike {
   del(...keys: string[]): Promise<number>;
   exists(...keys: string[]): Promise<number>;
   ttl(key: string): Promise<number>;
+  expire(key: string, seconds: number): Promise<number>;
   hget(key: string, field: string): Promise<string | null>;
   hset(key: string, field: string, value: string): Promise<unknown>;
   hgetall(key: string): Promise<Record<string, string>>;
@@ -58,6 +59,7 @@ export function createIoredisAdapter(redis: IoredisLike): RedisClient {
     del: (...keys) => redis.del(...keys),
     exists: (...keys) => redis.exists(...keys),
     ttl: (key) => redis.ttl(key),
+    expire: (key, seconds) => redis.expire(key, seconds),
     hGet: (key, field) => redis.hget(key, field),
     hSet: (key, field, value) => redis.hset(key, field, value),
     hGetAll: (key) => redis.hgetall(key),
