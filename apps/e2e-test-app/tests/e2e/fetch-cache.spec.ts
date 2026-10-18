@@ -2,7 +2,14 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Fetch Caching Tests", () => {
   test.describe("fetch() WITHOUT use cache (Next.js 16 Behavior)", () => {
-    test("force-cache: does NOT cache with cacheComponents enabled", async ({ page }) => {
+    // Next.js stores force-cache fetches in the ISR cache handler, which it
+    // instantiates per request: the memory handler keeps nothing between
+    // requests, the Redis handler shares the entry.
+    const sharedIsrCache = process.env.CACHE_HANDLER === "redis";
+
+    test(`force-cache: ${sharedIsrCache ? "cached through the shared ISR handler" : "not kept by the per-request memory handler"}`, async ({
+      page,
+    }) => {
       const testId = `force-cache-${Date.now()}`;
 
       // First load
@@ -12,12 +19,14 @@ test.describe("Fetch Caching Tests", () => {
       // Wait to ensure timestamp would be different
       await page.waitForTimeout(100);
 
-      // Second load - In Next.js 16 with cacheComponents, native fetch() is NOT cached
       await page.reload();
       const timestamp2 = await page.locator('[data-testid="timestamp"]').textContent();
 
-      // Should be different (NOT cached) - this is expected behavior in Next.js 16
-      expect(timestamp2).not.toBe(timestamp1);
+      if (sharedIsrCache) {
+        expect(timestamp2).toBe(timestamp1);
+      } else {
+        expect(timestamp2).not.toBe(timestamp1);
+      }
     });
 
     test("no-store: does not cache fetch responses", async ({ page }) => {
