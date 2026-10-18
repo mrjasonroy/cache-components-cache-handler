@@ -6,11 +6,14 @@ import type { LifespanParameters } from "../types.js";
  *
  * @param revalidate - Revalidation period in seconds, or false to disable
  * @param defaultTTL - Default TTL in seconds if revalidate is undefined
+ * @param expireAge - Seconds until the entry expires, when it may be served
+ *   stale past its revalidate period (defaults to the revalidate period)
  * @returns Lifespan parameters or null if no expiration
  */
 export function calculateLifespan(
   revalidate: number | false | undefined,
   defaultTTL?: number,
+  expireAge?: number,
 ): LifespanParameters | null {
   // If revalidate is explicitly false, no expiration
   if (revalidate === false) {
@@ -26,13 +29,14 @@ export function calculateLifespan(
   }
 
   const nowSeconds = Math.floor(Date.now() / 1000);
+  const expireSeconds = Math.max(expireAge ?? ttlSeconds, ttlSeconds);
 
   return {
     lastModifiedAt: nowSeconds,
     staleAt: nowSeconds + ttlSeconds,
-    expireAt: nowSeconds + ttlSeconds,
+    expireAt: nowSeconds + expireSeconds,
     staleAge: ttlSeconds,
-    expireAge: ttlSeconds,
+    expireAge: expireSeconds,
     revalidate,
   };
 }

@@ -1,5 +1,18 @@
 import Redis, { type RedisOptions } from "ioredis";
-import { calculateLifespan, isExpired, redisTtlSecondsFromLifespan } from "../helpers/lifespan.js";
+import {
+  DEFAULT_EXPIRE_FACTOR,
+  createTagRevalidation,
+  decodeTagRevalidation,
+  encodeTagRevalidation,
+  getCacheControl,
+  getEntryLifespan,
+  getEntryTags,
+  getStaleLastModified,
+  getTagFreshness,
+  getTagsToCheck,
+} from "../helpers/isr.js";
+import { isExpired, redisTtlSecondsFromLifespan } from "../helpers/lifespan.js";
+import { type CacheHandlerLogger, RateLimitedWarner, consoleLogger } from "../helpers/logger.js";
 import { jsonReplacer, jsonReviver } from "../helpers/serialization.js";
 import type {
   CacheHandler,
@@ -9,6 +22,7 @@ import type {
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
+  RevalidateTagDurations,
 } from "../types.js";
 
 export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
@@ -40,6 +54,21 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
   defaultTTL?: number;
 
   /**
+   * How long an entry with a revalidate period is kept, as a multiple of that
+   * period, so Next.js can serve it stale while it regenerates. Never longer
+   * than Next.js's `expire` for the entry.
+   * @default 2
+   */
+  expireFactor?: number;
+
+  /**
+   * Where failed Redis operations are reported, each kind at most once a
+   * minute
+   * @default console
+   */
+  logger?: CacheHandlerLogger;
+
+  /**
    * Enable debug logging
    * @default false
    */
@@ -51,7 +80,8 @@ export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
  *
  * Features:
  * - Persistent caching across server restarts
- * - Tag-based revalidation with Redis Sets
+ * - Tag-based revalidation with one timestamp key per revalidated tag
+ * - Stale-while-revalidate: entries outlive their revalidate period
  * - TTL support with automatic expiration
  * - Compatible with Redis, ElastiCache, and Valkey
  * - Connection pooling via ioredis
@@ -101,8 +131,10 @@ export class RedisCacheHandler implements CacheHandler {
   private readonly keyPrefix: string;
   private readonly tagPrefix: string;
   private readonly defaultTTL?: number;
+  private readonly expireFactor: number;
   private readonly debug: boolean;
   private readonly didCreateClient: boolean;
+  private readonly warner: RateLimitedWarner;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     // Initialize Redis connection - detect existing client via duck typing
@@ -129,18 +161,20 @@ export class RedisCacheHandler implements CacheHandler {
     this.keyPrefix = options.keyPrefix ?? "nextjs:cache:";
     this.tagPrefix = options.tagPrefix ?? "nextjs:tags:";
     this.defaultTTL = options.defaultTTL;
+    this.expireFactor = options.expireFactor ?? DEFAULT_EXPIRE_FACTOR;
     this.debug = options.debug ?? false;
+    this.warner = new RateLimitedWarner(
+      options.logger ?? consoleLogger,
+      "[RedisCacheHandler] Redis operation failed",
+    );
 
     // Attach error listener for clients we created; for external clients,
     // add a defensive listener only if the caller forgot to add one
-    // (an EventEmitter with no error listener will crash the process)
-    if (this.didCreateClient) {
+    // (an EventEmitter with no error listener will crash the process).
+    // ioredis emits one per reconnect attempt, so it is rate limited.
+    if (this.didCreateClient || this.redis.listenerCount("error") === 0) {
       this.redis.on("error", (err) => {
-        console.error("[RedisCacheHandler] Redis connection error:", err);
-      });
-    } else if (this.redis.listenerCount("error") === 0) {
-      this.redis.on("error", (err) => {
-        console.error("[RedisCacheHandler] Redis connection error (shared client):", err);
+        this.warner.warn("connection", err);
       });
     }
 
@@ -190,22 +224,6 @@ export class RedisCacheHandler implements CacheHandler {
         return null;
       }
 
-      // Check if any tag (explicit or implicit) has been revalidated
-      const allTags = [...entry.tags, ...(meta?.implicitTags ?? [])];
-      const revalidatedAts = await Promise.all(
-        allTags.map((tag) => this.redis.get(this.getTagKey(tag))),
-      );
-
-      const staleTagIndex = revalidatedAts.findIndex(
-        (revalidatedAt) => revalidatedAt && Number.parseInt(revalidatedAt) > entry.lastModified,
-      );
-
-      if (staleTagIndex !== -1) {
-        this.log("GET", cacheKey, "STALE (tag revalidated)", allTags[staleTagIndex]);
-        await this.delete(key);
-        return null;
-      }
-
       // Invalidate old APP_PAGE entries where segmentData was stored as a
       // plain object (pre-fix serialization). Next.js expects a Map and would
       // crash on .get() if we returned a plain object.
@@ -221,16 +239,43 @@ export class RedisCacheHandler implements CacheHandler {
         return null;
       }
 
-      this.log("GET", cacheKey, "HIT");
+      // Check every tag (stored, header, soft and implicit) against its
+      // revalidation record. Separate GETs, not MGET, so tag keys in
+      // different cluster slots still work.
+      const tags = getTagsToCheck(entry, meta);
+      const records = await Promise.all(tags.map((tag) => this.redis.get(this.getTagKey(tag))));
+      const now = Date.now();
+      const freshness = getTagFreshness(
+        records.map(decodeTagRevalidation),
+        entry.lastModified,
+        now,
+      );
+
+      let lastModified = entry.lastModified;
+      if (freshness === "stale") {
+        const staleLastModified = getStaleLastModified(entry, meta, now);
+        if (staleLastModified === null) {
+          this.log("GET", cacheKey, "EXPIRED (tag revalidated, no revalidate period)");
+          return null;
+        }
+        this.log("GET", cacheKey, "STALE (tag revalidated)");
+        lastModified = staleLastModified;
+      } else if (freshness === "expired") {
+        this.log("GET", cacheKey, "EXPIRED (tag revalidated)");
+        return null;
+      } else {
+        this.log("GET", cacheKey, "HIT");
+      }
 
       // Return the cache handler result with value and metadata
       return {
         value: entry.value,
-        lastModified: entry.lastModified,
-        age: Date.now() - entry.lastModified,
+        lastModified,
+        age: now - lastModified,
+        ...(entry.cacheControl && { cacheControl: entry.cacheControl }),
       };
     } catch (error) {
-      console.error("[RedisCacheHandler] GET error:", error);
+      this.warner.warn("get", error);
       return null;
     }
   }
@@ -239,15 +284,16 @@ export class RedisCacheHandler implements CacheHandler {
     try {
       const cacheKey = this.getCacheKey(key);
 
-      // Calculate lifespan and TTL
-      const lifespan = calculateLifespan(context?.revalidate, this.defaultTTL);
-      const tags = context?.tags ?? [];
+      const tags = getEntryTags(value, context);
+      const cacheControl = getCacheControl(value, context);
+      const lifespan = getEntryLifespan(cacheControl, this.defaultTTL, this.expireFactor);
 
       const entry: CacheHandlerValue = {
         lastModified: Date.now(),
         lifespan,
         tags,
         value,
+        ...(cacheControl && { cacheControl }),
       };
 
       const serialized = JSON.stringify(entry, jsonReplacer);
@@ -262,64 +308,47 @@ export class RedisCacheHandler implements CacheHandler {
         }
       }
 
-      // Store in Redis with optional TTL
+      // Store in Redis with optional TTL. There is no tag-to-key index: get
+      // checks each tag's revalidation record, so a revalidated entry is
+      // never served and expires on its own TTL.
       if (ttl) {
         await this.redis.setex(cacheKey, ttl, serialized);
-        this.log("SET", cacheKey, `TTL=${ttl}s`, `kind=${value.kind}`);
+        this.log("SET", cacheKey, `TTL=${ttl}s`, `kind=${value?.kind}`, "tags:", tags);
       } else {
         await this.redis.set(cacheKey, serialized);
-        this.log("SET", cacheKey, "NO_TTL", `kind=${value.kind}`);
-      }
-
-      // Track tags -> keys mapping for revalidation
-      if (tags.length > 0) {
-        const pipeline = this.redis.pipeline();
-
-        for (const tag of tags) {
-          const tagKey = this.getTagKey(tag);
-          // Use a set to store all cache keys with this tag
-          pipeline.sadd(`${tagKey}:keys`, cacheKey);
-          // Set expiration on the tag's key set if we have a TTL
-          if (ttl) {
-            pipeline.expire(`${tagKey}:keys`, ttl);
-          }
-        }
-
-        await pipeline.exec();
-        this.log("SET", cacheKey, "tags:", tags);
+        this.log("SET", cacheKey, "NO_TTL", `kind=${value?.kind}`, "tags:", tags);
       }
     } catch (error) {
-      console.error("[RedisCacheHandler] SET error:", error);
+      this.warner.warn("set", error);
     }
   }
 
-  async revalidateTag(tag: string, _profile?: string | { expire?: number }): Promise<void> {
+  /**
+   * Records the revalidation of each tag, one key per tag. Without durations
+   * tagged entries expire now; with them they are served stale (and
+   * regenerated in the background) until `durations.expire` seconds pass.
+   * The record has no TTL: an entry without one may outlive any TTL it got.
+   */
+  async revalidateTag(
+    tags: string | string[],
+    durations?: RevalidateTagDurations | string,
+  ): Promise<void> {
+    const list = typeof tags === "string" ? [tags] : tags;
+    const record = encodeTagRevalidation(createTagRevalidation(durations, Date.now()));
     try {
-      const tagKey = this.getTagKey(tag);
-
-      // Store revalidation timestamp
-      await this.redis.set(tagKey, Date.now().toString());
-      this.log("revalidateTag", tag);
-
-      // Delete all cache keys associated with this tag
-      const keysSetKey = `${tagKey}:keys`;
-      const cacheKeys = await this.redis.smembers(keysSetKey);
-
-      if (cacheKeys.length > 0) {
-        const pipeline = this.redis.pipeline();
-
-        for (const cacheKey of cacheKeys) {
-          pipeline.del(cacheKey);
-        }
-
-        // Clear the tag's keys set
-        pipeline.del(keysSetKey);
-
-        await pipeline.exec();
-        this.log("revalidateTag", tag, `deleted ${cacheKeys.length} entries`);
-      }
+      await Promise.all(
+        list.flatMap((tag) => {
+          const tagKey = this.getTagKey(tag);
+          return [
+            this.redis.set(tagKey, record),
+            // Drop the tag-to-key index older versions kept, without blocking Redis
+            this.redis.unlink(`${tagKey}:keys`),
+          ];
+        }),
+      );
+      this.log("revalidateTag", list, durations);
     } catch (error) {
-      console.error("[RedisCacheHandler] revalidateTag error:", error);
+      this.warner.warn("revalidateTag", error);
     }
   }
 
@@ -329,7 +358,7 @@ export class RedisCacheHandler implements CacheHandler {
       await this.redis.del(cacheKey);
       this.log("DELETE", cacheKey);
     } catch (error) {
-      console.error("[RedisCacheHandler] DELETE error:", error);
+      this.warner.warn("delete", error);
     }
   }
 
@@ -348,7 +377,7 @@ export class RedisCacheHandler implements CacheHandler {
         this.log("Skipping close (using shared client)");
       }
     } catch (error) {
-      console.error("[RedisCacheHandler] close error:", error);
+      this.warner.warn("close", error);
     }
   }
 }

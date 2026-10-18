@@ -95,6 +95,32 @@ export interface LifespanParameters {
 }
 
 /**
+ * Lifetime Next.js gives a page or route handler entry (`ctx.cacheControl`)
+ * All time values are in SECONDS
+ */
+export interface CacheControl {
+  /**
+   * Seconds after which the entry is stale and regenerated in the background,
+   * or false to never revalidate on time
+   */
+  revalidate?: number | false;
+
+  /**
+   * Seconds after which the entry may no longer be served stale
+   */
+  expire?: number;
+}
+
+/**
+ * Second argument of `revalidateTag` in Next.js 16: with durations, tagged
+ * entries become stale now and expire after `expire` seconds; without, they
+ * expire now
+ */
+export interface RevalidateTagDurations {
+  expire?: number;
+}
+
+/**
  * Internal cache handler value with metadata
  * This is what handlers store internally
  */
@@ -118,19 +144,33 @@ export interface CacheHandlerValue {
    * The actual cache value
    */
   value: CacheValue;
+
+  /**
+   * Lifetime Next.js gave the entry, returned from get() so any instance can
+   * serve it with that lifetime (absent on entries from older versions)
+   */
+  cacheControl?: CacheControl;
 }
 
 /**
  * Context provided when setting cache entries
+ * Next.js 16 passes `tags` for fetch entries and `cacheControl` for pages and
+ * route handlers, whose tags are in the `x-next-cache-tags` header instead
  */
 export interface CacheHandlerContext {
   /**
-   * Tags for cache invalidation
+   * Tags for cache invalidation (fetch and unstable_cache entries)
    */
   tags?: string[];
 
   /**
+   * Lifetime of a page or route handler entry
+   */
+  cacheControl?: CacheControl;
+
+  /**
    * Revalidation period in seconds, or false to disable
+   * (for callers that predate `cacheControl`)
    */
   revalidate?: number | false;
 
@@ -138,16 +178,52 @@ export interface CacheHandlerContext {
    * Soft tags (for Next.js internal use)
    */
   softTags?: string[];
+
+  /**
+   * True for fetch and unstable_cache entries
+   */
+  fetchCache?: boolean;
+  fetchUrl?: string;
+  fetchIdx?: number;
+  isImplicitBuildTimeCache?: boolean;
+  isRoutePPREnabled?: boolean;
+  isFallback?: boolean;
 }
 
 /**
- * Metadata passed to get() method
+ * Context passed to get() method
  */
 export interface CacheHandlerGetMeta {
   /**
-   * Implicit tags (system-generated) for this request
+   * Kind of entry being read ("FETCH", "APP_PAGE", "APP_ROUTE", "PAGES")
    */
-  implicitTags: string[];
+  kind?: string;
+
+  /**
+   * Tags of the fetch being read
+   */
+  tags?: string[];
+
+  /**
+   * Implicit (path) tags of the current request, for fetch reads
+   */
+  softTags?: string[];
+
+  /**
+   * Implicit tags (system-generated) for this request
+   * @deprecated Next.js 16 passes these as `softTags`
+   */
+  implicitTags?: string[];
+
+  /**
+   * Revalidate period of the fetch being read
+   */
+  revalidate?: number | false;
+
+  fetchUrl?: string;
+  fetchIdx?: number;
+  isRoutePPREnabled?: boolean;
+  isFallback?: boolean;
 }
 
 /**
@@ -169,6 +245,11 @@ export interface CacheHandlerGetResult {
    * Age of the cache entry in milliseconds
    */
   age?: number;
+
+  /**
+   * Lifetime Next.js gave the entry when it was stored
+   */
+  cacheControl?: CacheControl;
 
   /**
    * Cache state metadata (for debugging)
@@ -198,10 +279,14 @@ export interface CacheHandler {
 
   /**
    * Revalidate cache entries by tag
-   * @param tag - Cache tag to revalidate
-   * @param profile - Optional revalidation profile ("max" or custom profile name) or object with expire time
+   * @param tags - Cache tag, or tags, to revalidate (Next.js 16 passes an array)
+   * @param durations - With durations, entries become stale now and expire
+   *   after `durations.expire` seconds; without, they expire now
    */
-  revalidateTag(tag: string, profile?: string | { expire?: number }): Promise<void>;
+  revalidateTag(
+    tags: string | string[],
+    durations?: RevalidateTagDurations | string,
+  ): Promise<void>;
 
   /**
    * Delete a cache entry by key (optional)

@@ -446,8 +446,9 @@ describe("RedisCacheHandler", () => {
 
       const stored = fakeRedis.getStored("nextjs:cache:ttl-key");
       expect(stored).toBeDefined();
-      expect(stored?.ttl).toBeGreaterThan(0);
-      expect(stored?.ttl).toBeLessThanOrEqual(3600);
+      // Kept for twice the revalidate period (the default expireFactor) so
+      // Next.js can serve it stale while it regenerates
+      expect(stored?.ttl).toBe(7200);
     });
   });
 

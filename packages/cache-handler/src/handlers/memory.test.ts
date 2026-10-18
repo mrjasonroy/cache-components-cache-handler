@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CacheValue } from "../types.js";
 import { type MemoryCacheHandler, createMemoryCacheHandler } from "./memory.js";
 
@@ -152,24 +152,29 @@ describe("MemoryCacheHandler", () => {
   });
 
   describe("TTL and expiration", () => {
-    test("should expire entries based on revalidate time", async () => {
-      const value: CacheValue = {
-        kind: "PAGES",
-        html: "<html>test</html>",
-        pageData: { test: true },
-      };
+    test("should expire entries once they can no longer be served stale", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      // Lifespans are in whole seconds
+      vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+      try {
+        const value: CacheValue = {
+          kind: "PAGES",
+          html: "<html>test</html>",
+          pageData: { test: true },
+        };
 
-      // Set with 1 second TTL
-      await handler.set("test-key", value, { revalidate: 1 });
+        // Stale after 1 second, kept 2 (the default expireFactor) for Next.js to serve stale
+        await handler.set("test-key", value, { revalidate: 1 });
+        expect(await handler.get("test-key")).not.toBeNull();
 
-      // Should exist immediately
-      expect(await handler.get("test-key")).not.toBeNull();
+        vi.advanceTimersByTime(1_500);
+        expect(await handler.get("test-key")).not.toBeNull();
 
-      // Wait for expiration
-      await new Promise((resolve) => setTimeout(resolve, 1100));
-
-      // Should be expired
-      expect(await handler.get("test-key")).toBeNull();
+        vi.advanceTimersByTime(1_000);
+        expect(await handler.get("test-key")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     test("should not expire entries with revalidate: false", async () => {
@@ -298,7 +303,9 @@ describe("MemoryCacheHandler", () => {
       // Entry created before revalidation should be deleted
       expect(await handler.get("test-key")).toBeNull();
 
-      // New entry with same tag should be valid
+      // New entry with same tag should be valid (a write in the same
+      // millisecond as the revalidation counts as before it)
+      await new Promise((resolve) => setTimeout(resolve, 2));
       await handler.set("test-key-2", value, { tags: ["test-tag"] });
       expect(await handler.get("test-key-2")).not.toBeNull();
     });

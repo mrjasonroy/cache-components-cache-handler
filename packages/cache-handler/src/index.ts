@@ -27,6 +27,7 @@ export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
 export { isImplicitTag } from "./helpers/is-implicit-tag.js";
 export { jsonReplacer, jsonReviver } from "./helpers/serialization.js";
 export { calculateLifespan, isExpired } from "./helpers/lifespan.js";
+export type { CacheHandlerLogger } from "./helpers/logger.js";
 export {
   type CacheHandlerConfig,
   createCacheConfig,
@@ -34,13 +35,16 @@ export {
 } from "./helpers/next-config.js";
 // Types
 export type {
+  CacheControl,
   CacheHandler,
   CacheHandlerContext,
   CacheHandlerGetMeta,
+  CacheHandlerGetResult,
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
   LifespanParameters,
+  RevalidateTagDurations,
 } from "./types.js";
 export { IMPLICIT_TAG_PREFIX } from "./types.js";
 

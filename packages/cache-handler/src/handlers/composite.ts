@@ -6,6 +6,7 @@ import type {
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
+  RevalidateTagDurations,
 } from "../types.js";
 
 export interface CompositeHandlerOptions extends CacheHandlerOptions {
@@ -110,10 +111,13 @@ export class CompositeHandler implements CacheHandler {
     }
   }
 
-  async revalidateTag(tag: string, profile?: string | { expire?: number }): Promise<void> {
+  async revalidateTag(
+    tags: string | string[],
+    durations?: RevalidateTagDurations | string,
+  ): Promise<void> {
     // Revalidate on all handlers in parallel with fault tolerance
     const results = await Promise.allSettled(
-      this.handlers.map((handler) => handler.revalidateTag(tag, profile)),
+      this.handlers.map((handler) => handler.revalidateTag(tags, durations)),
     );
 
     // Log failures but don't throw

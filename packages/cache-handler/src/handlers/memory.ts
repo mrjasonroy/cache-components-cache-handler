@@ -1,5 +1,15 @@
-import { isImplicitTag } from "../helpers/is-implicit-tag.js";
-import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
+import {
+  DEFAULT_EXPIRE_FACTOR,
+  type TagRevalidation,
+  createTagRevalidation,
+  getCacheControl,
+  getEntryLifespan,
+  getEntryTags,
+  getStaleLastModified,
+  getTagFreshness,
+  getTagsToCheck,
+} from "../helpers/isr.js";
+import { isExpired } from "../helpers/lifespan.js";
 import { jsonReplacer } from "../helpers/serialization.js";
 import type {
   CacheHandler,
@@ -9,6 +19,7 @@ import type {
   CacheHandlerOptions,
   CacheHandlerValue,
   CacheValue,
+  RevalidateTagDurations,
 } from "../types.js";
 
 export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
@@ -29,6 +40,14 @@ export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
    * @default undefined (no expiration)
    */
   defaultTTL?: number;
+
+  /**
+   * How long an entry with a revalidate period is kept, as a multiple of that
+   * period, so Next.js can serve it stale while it regenerates. Never longer
+   * than Next.js's `expire` for the entry.
+   * @default 2
+   */
+  expireFactor?: number;
 }
 
 /**
@@ -54,10 +73,11 @@ export class MemoryCacheHandler implements CacheHandler {
   public readonly name = "local-lru";
 
   private cache: Map<string, CacheHandlerValue>;
-  private revalidatedTags: Map<string, number>; // tag -> timestamp (milliseconds)
+  private revalidatedTags: Map<string, TagRevalidation>;
   private readonly maxItemsNumber: number;
   private readonly maxItemSizeBytes: number;
   private readonly defaultTTL?: number;
+  private readonly expireFactor: number;
 
   constructor(options: MemoryCacheHandlerOptions = {}) {
     this.cache = new Map();
@@ -65,6 +85,7 @@ export class MemoryCacheHandler implements CacheHandler {
     this.maxItemsNumber = options.maxItemsNumber ?? 1000;
     this.maxItemSizeBytes = options.maxItemSizeBytes ?? 104857600; // 100MB
     this.defaultTTL = options.defaultTTL;
+    this.expireFactor = options.expireFactor ?? DEFAULT_EXPIRE_FACTOR;
   }
 
   async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null> {
@@ -80,17 +101,18 @@ export class MemoryCacheHandler implements CacheHandler {
       return null;
     }
 
-    // Check if any tag (explicit or implicit) has been revalidated
-    const allTags = [...entry.tags, ...(meta?.implicitTags ?? [])];
+    // Check every tag (stored, header, soft and implicit) against its revalidation
+    const records = getTagsToCheck(entry, meta).map((tag) => this.revalidatedTags.get(tag));
+    const now = Date.now();
+    const freshness = getTagFreshness(records, entry.lastModified, now);
 
-    for (const tag of allTags) {
-      const revalidatedAt = this.revalidatedTags.get(tag);
-
-      // If tag was revalidated after entry was last modified, entry is stale
-      if (revalidatedAt && revalidatedAt > entry.lastModified) {
-        await this.delete(key);
-        return null;
-      }
+    let lastModified = entry.lastModified;
+    if (freshness === "stale") {
+      const staleLastModified = getStaleLastModified(entry, meta, now);
+      if (staleLastModified === null) return null;
+      lastModified = staleLastModified;
+    } else if (freshness === "expired") {
+      return null;
     }
 
     // Move to end for LRU (delete and re-add)
@@ -100,8 +122,9 @@ export class MemoryCacheHandler implements CacheHandler {
     // Return the cache handler result with value and metadata
     return {
       value: entry.value,
-      lastModified: entry.lastModified,
-      age: Date.now() - entry.lastModified,
+      lastModified,
+      age: now - lastModified,
+      ...(entry.cacheControl && { cacheControl: entry.cacheControl }),
     };
   }
 
@@ -124,46 +147,45 @@ export class MemoryCacheHandler implements CacheHandler {
       }
     }
 
-    // Calculate lifespan
-    const lifespan = calculateLifespan(context?.revalidate, this.defaultTTL);
+    const cacheControl = getCacheControl(value, context);
+    const lifespan = getEntryLifespan(cacheControl, this.defaultTTL, this.expireFactor);
 
-    // Combine tags (explicit user tags only - implicit tags are passed in get())
-    const tags = context?.tags ?? [];
+    // Tags from ctx.tags (fetch) and the x-next-cache-tags header (pages);
+    // the request's implicit tags are passed to get()
+    const tags = getEntryTags(value, context);
 
     const entry: CacheHandlerValue = {
       lastModified: Date.now(),
       lifespan,
       tags,
       value,
+      ...(cacheControl && { cacheControl }),
     };
 
     this.cache.set(key, entry);
   }
 
-  async revalidateTag(tag: string, _profile?: string | { expire?: number }): Promise<void> {
-    // Store revalidation timestamp
-    // Note: profile parameter is used by Next.js for cache-life configuration
-    // but for memory handler we just invalidate immediately
-    this.revalidatedTags.set(tag, Date.now());
-
-    // For explicit tags (non-implicit), we can directly delete entries
-    if (!isImplicitTag(tag)) {
-      const keysToDelete: string[] = [];
-
-      for (const [key, entry] of this.cache.entries()) {
-        if (entry.tags.includes(tag)) {
-          keysToDelete.push(key);
-        }
-      }
-
-      // Delete all entries with this tag
-      for (const key of keysToDelete) {
-        await this.delete(key);
-      }
+  /**
+   * Records the revalidation of each tag, as Next.js's own tags manifest does:
+   * without durations tagged entries expire now; with them they are served
+   * stale until `durations.expire` seconds pass. get() applies it.
+   */
+  async revalidateTag(
+    tags: string | string[],
+    durations?: RevalidateTagDurations | string,
+  ): Promise<void> {
+    const now = Date.now();
+    const record = createTagRevalidation(durations, now);
+    for (const tag of typeof tags === "string" ? [tags] : tags) {
+      const existing = this.revalidatedTags.get(tag);
+      // An earlier immediate expiry still applies unless these durations set a new one
+      this.revalidatedTags.set(
+        tag,
+        existing && record.expired === undefined
+          ? { ...record, expired: existing.expired }
+          : record,
+      );
     }
-
-    // For implicit tags, we rely on the get() method to check revalidation
-    // This is because implicit tags are passed dynamically in meta.implicitTags
   }
 
   async delete(key: string): Promise<void> {
