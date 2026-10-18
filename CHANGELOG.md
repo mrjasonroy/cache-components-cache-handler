@@ -34,6 +34,10 @@ All notable changes to this project will be documented in this file. This projec
   `revalidateTag` unlinks the set an older version left for that tag; see
   docs/redis.md to remove the rest.
 - A revalidation in the same millisecond as a write now invalidates it.
+- Types: `CacheHandler.revalidateTag` takes `string | string[]` and
+  durations; `CacheHandlerGetMeta.implicitTags` is optional (Next.js 16 passes
+  `softTags`). `CompositeHandler` still calls each child handler with one tag
+  at a time, so handlers written for a single tag keep working.
 
 ### Added
 

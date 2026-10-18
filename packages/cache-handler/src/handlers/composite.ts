@@ -115,9 +115,13 @@ export class CompositeHandler implements CacheHandler {
     tags: string | string[],
     durations?: RevalidateTagDurations | string,
   ): Promise<void> {
-    // Revalidate on all handlers in parallel with fault tolerance
+    // Revalidate on all handlers in parallel with fault tolerance, one tag
+    // per call so handlers written for a single tag keep working
+    const list = typeof tags === "string" ? [tags] : tags;
     const results = await Promise.allSettled(
-      this.handlers.map((handler) => handler.revalidateTag(tags, durations)),
+      this.handlers.map(async (handler) => {
+        for (const tag of list) await handler.revalidateTag(tag, durations);
+      }),
     );
 
     // Log failures but don't throw

@@ -173,11 +173,19 @@ export function getTagFreshness(
 }
 
 /**
+ * How far past its revalidate period a tag-stale entry is reported, so Next.js
+ * still sees it as stale when its monotonic clock (`performance.now()`) runs
+ * behind `Date.now()`.
+ */
+const STALE_MARGIN_MS = 60_000;
+
+/**
  * Next.js decides staleness itself, from `lastModified` and the revalidate
  * period, and has no other way to hear that a handler's tag made an entry
  * stale. Returns a `lastModified` far enough back that Next.js treats the
- * entry as stale and regenerates it in the background, or null when the entry
- * has no revalidate period and so can only be treated as expired.
+ * entry as stale and regenerates it in the background, but not past a page's
+ * `expire` (which would make Next.js block on the render), or null when the
+ * entry has no revalidate period and so can only be treated as expired.
  */
 export function getStaleLastModified(
   entry: CacheHandlerValue,
@@ -189,5 +197,10 @@ export function getStaleLastModified(
       ? meta?.revalidate || entry.value.revalidate
       : entry.cacheControl?.revalidate;
   if (typeof revalidate !== "number" || revalidate <= 0) return null;
-  return Math.min(entry.lastModified, now - revalidate * 1000 - 1);
+  const expire = entry.value.kind === "FETCH" ? undefined : entry.cacheControl?.expire;
+  const margin =
+    typeof expire === "number"
+      ? Math.max(1, Math.min(STALE_MARGIN_MS, (expire - revalidate) * 1000 - 1))
+      : STALE_MARGIN_MS;
+  return Math.min(entry.lastModified, now - revalidate * 1000 - margin);
 }

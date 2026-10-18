@@ -286,6 +286,25 @@ describe("RedisCacheHandler storage", () => {
     expect(await handler.get("/blog", PAGE_GET)).toBeNull();
   });
 
+  test("(e) durations without an expire keep an earlier immediate expiry", async () => {
+    const handler = new RedisCacheHandler();
+    await handler.set("/blog", appPage(PAGE_TAGS), PAGE_SET);
+    vi.setSystemTime(NOW + 1_000);
+    await handler.revalidateTag(["posts"]);
+    vi.setSystemTime(NOW + 2_000);
+    await handler.revalidateTag(["posts"], {});
+    expect(await handler.get("/blog", PAGE_GET)).toBeNull();
+  });
+
+  test("(d) revalidateTag succeeds when the server has no UNLINK", async () => {
+    const handler = new RedisCacheHandler({ logger: { warn: vi.fn() } });
+    fakeRedis.unlink = async () => {
+      throw new Error("ERR unknown command 'unlink'");
+    };
+    await handler.revalidateTag(["posts"]);
+    expect(fakeRedis.getStored("nextjs:tags:posts")).toBeDefined();
+  });
+
   test("(d) a revalidation with durations still invalidates on an older reader", () => {
     // Older readers parse the record with Number.parseInt, which keeps the
     // leading revalidation time, so they expire the entry: safe in a mixed

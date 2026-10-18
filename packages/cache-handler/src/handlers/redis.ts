@@ -1,6 +1,7 @@
 import Redis, { type RedisOptions } from "ioredis";
 import {
   DEFAULT_EXPIRE_FACTOR,
+  type TagRevalidation,
   createTagRevalidation,
   decodeTagRevalidation,
   encodeTagRevalidation,
@@ -334,22 +335,28 @@ export class RedisCacheHandler implements CacheHandler {
     durations?: RevalidateTagDurations | string,
   ): Promise<void> {
     const list = typeof tags === "string" ? [tags] : tags;
-    const record = encodeTagRevalidation(createTagRevalidation(durations, Date.now()));
+    const record = createTagRevalidation(durations, Date.now());
     try {
-      await Promise.all(
-        list.flatMap((tag) => {
-          const tagKey = this.getTagKey(tag);
-          return [
-            this.redis.set(tagKey, record),
-            // Drop the tag-to-key index older versions kept, without blocking Redis
-            this.redis.unlink(`${tagKey}:keys`),
-          ];
-        }),
-      );
+      await Promise.all(list.map((tag) => this.writeTagRevalidation(tag, record)));
       this.log("revalidateTag", list, durations);
     } catch (error) {
       this.warner.warn("revalidateTag", error);
     }
+    // Drop the tag-to-key index older versions kept, without blocking Redis.
+    // Best effort: a server without UNLINK just keeps the old set.
+    await Promise.allSettled(list.map((tag) => this.redis.unlink(`${this.getTagKey(tag)}:keys`)));
+  }
+
+  private async writeTagRevalidation(tag: string, record: TagRevalidation): Promise<void> {
+    const tagKey = this.getTagKey(tag);
+    let merged = record;
+    if (record.expired === undefined) {
+      // As Next.js's tags manifest does, durations without an expire keep an
+      // earlier expiry of the tag (not atomic, but only this rare case reads)
+      const existing = decodeTagRevalidation(await this.redis.get(tagKey));
+      merged = { ...record, expired: existing?.expired };
+    }
+    await this.redis.set(tagKey, encodeTagRevalidation(merged));
   }
 
   async delete(key: string): Promise<void> {
