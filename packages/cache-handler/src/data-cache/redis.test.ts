@@ -408,6 +408,32 @@ describe("RedisDataCacheHandler", () => {
     expect(stale.revalidate).toBe(-1);
   });
 
+  test("an expiry from before the entry was cached does not delete it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    // revalidateTag("T") with no durations: stale = expired = R0.
+    await handler.updateTags(["T"]);
+
+    // Entry re-cached after R0.
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 1000));
+    await handler.set("k", Promise.resolve(createEntry("v", { tags: ["T"], revalidate: 600 })));
+
+    // A stale-only revalidation (no expire) moves `stale` past the entry but leaves `expired` at R0.
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 2000));
+    await handler.updateTags(["T"], {});
+
+    const result = await handler.get("k", []);
+    if (!result) {
+      throw new Error("expected the entry to be served stale, not deleted");
+    }
+    expect(result.revalidate).toBe(-1);
+    expect(redis.delCalls).not.toContainEqual(["nextjs:data-cache:k"]);
+  });
+
   test("hard-expired tag wins over a merely-stale tag in the same entry", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(BASE_TIME);

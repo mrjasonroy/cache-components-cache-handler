@@ -58,10 +58,11 @@ function resilientClientOptions(commandTimeout: number): RedisOptions {
  * "error" listener ioredis prints "Unhandled error event" on every reconnect
  * attempt; this keeps the errors visible but rate-limited.
  */
-function reportClientErrors(redis: {
-  on(event: "error", listener: (error: Error) => void): unknown;
-}) {
-  const reportError = createErrorReporter("[RedisDataCache]:");
+function reportClientErrors(
+  redis: { on(event: "error", listener: (error: Error) => void): unknown },
+  errorLogIntervalMs?: number,
+) {
+  const reportError = createErrorReporter("[RedisDataCache]:", errorLogIntervalMs);
   redis.on("error", (error) => reportError("connection", error));
 }
 
@@ -134,6 +135,26 @@ export interface CacheHandlerOptions {
    * @default 2000
    */
   commandTimeout?: number;
+
+  /**
+   * TTL in seconds for entries without a finite `expire` (redis/valkey/elasticache)
+   * @default 86400 (24 hours)
+   */
+  defaultTTL?: number;
+
+  /**
+   * TTL in seconds for tag revalidation records (redis/valkey/elasticache).
+   * Entry TTLs are capped at this value so a tag record always outlives its entries.
+   * @default 31622400 (366 days)
+   */
+  tagTTL?: number;
+
+  /**
+   * Minimum time in milliseconds between two logged errors of the same operation
+   * (redis/valkey/elasticache)
+   * @default 60000
+   */
+  errorLogIntervalMs?: number;
 }
 
 /**
@@ -177,13 +198,16 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         ...(password ? { password } : {}),
         ...(tlsEnabled ? { tls: {} } : {}),
       });
-      reportClientErrors(redis);
+      reportClientErrors(redis, options.errorLogIntervalMs);
       const redisAdapter = createIoredisAdapter(redis);
 
       return createRedisDataCacheHandler({
         redis: redisAdapter,
         keyPrefix: options.keyPrefix,
         tagPrefix: options.tagPrefix,
+        defaultTTL: options.defaultTTL,
+        tagTTL: options.tagTTL,
+        errorLogIntervalMs: options.errorLogIntervalMs,
         debug,
       });
     }
@@ -215,7 +239,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         password,
         connectTimeout: 10000,
       });
-      reportClientErrors(redis);
+      reportClientErrors(redis, options.errorLogIntervalMs);
 
       const redisAdapter = createIoredisAdapter(redis);
 
@@ -223,6 +247,9 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         redis: redisAdapter,
         keyPrefix: options.keyPrefix,
         tagPrefix: options.tagPrefix,
+        defaultTTL: options.defaultTTL,
+        tagTTL: options.tagTTL,
+        errorLogIntervalMs: options.errorLogIntervalMs,
         debug,
       });
     }

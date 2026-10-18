@@ -174,6 +174,9 @@ function bufferToStream(buffer: Buffer): ReadableStream<Uint8Array> {
  *   url: process.env.REDIS_URL
  * });
  *
+ * // Without an "error" listener, a dropped connection throws (node-redis) or logs
+ * // "Unhandled error event" (ioredis).
+ * redis.on("error", (error) => console.error("Redis error:", error));
  * await redis.connect();
  *
  * export default createRedisDataCacheHandler({
@@ -353,7 +356,8 @@ export function createRedisDataCacheHandler(
           const expireAt = tagData.expired ? Number.parseInt(tagData.expired, 10) : 0;
 
           if (revalidatedAt && revalidatedAt > entry.timestamp) {
-            if (expireAt && Date.now() >= expireAt) {
+            // Like Next's areTagsExpired: an expiry that predates the entry doesn't apply to it.
+            if (expireAt && expireAt > entry.timestamp && Date.now() >= expireAt) {
               expiredTag = tag;
               break;
             }
