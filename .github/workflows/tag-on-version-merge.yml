@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  actions: write # Required to dispatch publish.yml via `gh workflow run`
 
 jobs:
   create-tag:
