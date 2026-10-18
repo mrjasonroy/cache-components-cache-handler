@@ -69,6 +69,81 @@ export default {
 };
 ```
 
+## ISR Cache Handler (`cacheHandler`)
+
+`RedisCacheHandler` stores what Next.js puts in its incremental cache: rendered
+pages, route handlers, `fetch` and `unstable_cache` data. Register it as
+`cacheHandler` in `next.config` and give it the same Redis as every other
+server, so they share entries and revalidations.
+
+```javascript
+// cache-handler.mjs
+import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import pino from "pino";
+
+const logger = pino();
+
+export default class NextCacheHandler extends RedisCacheHandler {
+  constructor(options) {
+    super({
+      ...options,
+      redis: process.env.REDIS_URL,
+      keyPrefix: "myapp:isr:",
+      tagPrefix: "myapp:isr-tags:",
+      expireFactor: 2, // keep entries 2x their revalidate period (the default)
+      logger: { warn: (message, details) => logger.warn(details, message) },
+    });
+  }
+}
+```
+
+| Option         | Default          | Meaning                                                                                                                                                       |
+| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `redis`        | `localhost:6379` | ioredis client, URL or options                                                                                                                                |
+| `keyPrefix`    | `nextjs:cache:`  | Prefix of entry keys                                                                                                                                          |
+| `tagPrefix`    | `nextjs:tags:`   | Prefix of tag revalidation keys                                                                                                                               |
+| `expireFactor` | `2`              | How long an entry with a revalidate period is kept, as a multiple of that period, so Next.js can serve it stale while it regenerates. Never past its `expire`. |
+| `defaultTTL`   | none             | TTL in seconds for entries Next.js gives no lifetime                                                                                                          |
+| `logger`       | `console`        | Receives failed Redis operations, each kind at most once a minute, with a count of the ones suppressed                                                        |
+
+### Lifetime and stale-while-revalidate
+
+Next.js passes a page's lifetime as `cacheControl` (`revalidate`, `expire`) and
+a fetch's as its `revalidate`. The handler stores the entry with that lifetime
+and returns it from `get`, so a server that did not render the entry still
+serves it with the right lifetime. Redis keeps the entry for
+`expireFactor` x `revalidate` seconds, capped by `expire`: past `revalidate`
+Next.js serves it stale and regenerates it in the background; past the TTL the
+next request renders it.
+
+### Invalidation
+
+Each `revalidateTag` and `revalidatePath` writes one key per tag,
+`<tagPrefix><tag>`, holding when it was revalidated. `get` checks the entry's
+tags (from `ctx.tags` for fetch data, from the `x-next-cache-tags` header for
+pages) and the request's implicit path tags against those keys, so a
+revalidated entry is never served by any server, and Redis drops it on its TTL.
+There is no tag-to-key index, so the key count is one per entry plus one per
+revalidated tag, however many entries share a tag.
+
+`revalidateTag(tag, profile)` (Next.js passes the profile's `expire`) marks
+the tag's entries stale at once and expired after `expire` seconds: Next.js
+serves them stale while it regenerates them. An entry with no revalidate period
+cannot be served stale, so it is regenerated on the next request.
+`revalidateTag(tag)` without a profile, `updateTag` and `revalidatePath` expire
+entries at once.
+
+### Upgrading from 16.4.2 or earlier
+
+Entries and tag keys keep their format, so servers on either version can share
+Redis during a rollout. Earlier versions also kept a set of entry keys per tag,
+`<tagPrefix><tag>:keys`, which nothing reads any more. Each is removed the next
+time its tag is revalidated; to remove the rest at once:
+
+```bash
+redis-cli --scan --pattern "nextjs:tags:*:keys" | xargs -r -n 500 redis-cli unlink
+```
+
 ## Connection Options
 
 ### URL Format (Recommended)

@@ -4,7 +4,45 @@ All notable changes to this project will be documented in this file. This projec
 
 ## [Unreleased]
 
+### Fixed
+
+- The ISR handlers (`RedisCacheHandler`, `MemoryCacheHandler`) now follow the
+  Next.js 16 `cacheHandler` contract:
+  - Page and route handler entries take their tags from the `x-next-cache-tags`
+    header and their lifetime from `ctx.cacheControl`. Before, pages were stored
+    without tags, so `revalidateTag` and `revalidatePath` never invalidated them,
+    and their lifetime came from `defaultTTL`.
+  - `get` checks the request's `ctx.softTags` and the fetch's `ctx.tags`, so
+    `revalidatePath` invalidates fetch data. `meta.implicitTags` still works.
+  - `revalidateTag` accepts the array of tags Next.js passes. Before, it was
+    treated as one tag.
+- `RedisCacheHandler` reports failed operations, and the client's reconnect
+  errors, through a rate-limited logger instead of a `console.error` per call.
+
+### Changed
+
+- Entries are kept `expireFactor` (default 2) times their revalidate period,
+  capped by Next.js's `expire`, instead of exactly their revalidate period, so
+  Next.js can serve them stale while it regenerates them. `get` returns the
+  stored `cacheControl`.
+- `revalidateTag(tags, durations)` honors durations: tagged entries are served
+  stale until `durations.expire` passes. Without durations they expire at once,
+  as before.
+- `RedisCacheHandler` no longer keeps a set of entry keys per tag (`SADD` on
+  every write, never pruned; `SMEMBERS` and `DEL` on revalidate). `get` already
+  checked each tag's revalidation time, which is all invalidation needs.
+  `revalidateTag` unlinks the set an older version left for that tag; see
+  docs/redis.md to remove the rest.
+- A revalidation in the same millisecond as a write now invalidates it.
+
 ### Added
+
+- `expireFactor` and `logger` options on the ISR handlers; `CacheControl`,
+  `RevalidateTagDurations`, `CacheHandlerGetResult` and `CacheHandlerLogger`
+  types.
+- The e2e app uses `RedisCacheHandler` for ISR when `CACHE_HANDLER=redis`, and
+  `isr-redis-handler.spec.ts` checks it under `next start`: revalidation from
+  another process, stale-while-revalidate, and one key per entry and tag.
 
 - Unit coverage for the factory's `elasticache` branch — asserts `ELASTICACHE_*` env vars (and explicit options) map to the ioredis config (host/port, TLS-on-by-default, auth-token password, connect timeout, retry) and that a missing endpoint throws.
 
