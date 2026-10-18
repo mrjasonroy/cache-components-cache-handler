@@ -79,12 +79,4 @@ describe("lifespan helpers", () => {
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(3600);
   });
-
-  test("redisTtlSecondsFromLifespan documents the broken formula always skips writes", () => {
-    const lifespan = calculateLifespan(3600, 3600);
-    expect(lifespan).not.toBeNull();
-
-    const broken = Math.ceil((lifespan.expireAt - Date.now()) / 1000);
-    expect(broken).toBeLessThanOrEqual(0);
-  });
 });
