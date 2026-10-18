@@ -102,6 +102,15 @@ describe("ISR handler warning", () => {
       expect(warn).not.toHaveBeenCalled();
     });
 
+    test("does not warn during next build", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("NEXT_PHASE", "phase-production-build");
+
+      createCacheHandler({ type: "redis" });
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
     test("does not warn outside production", () => {
       vi.stubEnv("NODE_ENV", "test");
 

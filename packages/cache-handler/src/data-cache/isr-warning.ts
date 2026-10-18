@@ -25,11 +25,17 @@ export interface IsrWarningOptions {
 let warned = false;
 
 /**
- * Emit {@link ISR_WARNING_MESSAGE} once per process, only when `NODE_ENV` is `"production"`
- * and the caller has not opted out.
+ * Emit {@link ISR_WARNING_MESSAGE} once per process, only when `NODE_ENV` is `"production"`,
+ * outside `next build`, and the caller has not opted out.
  */
 export function warnMissingIsrHandlerOnce(options: IsrWarningOptions = {}): void {
-  if (warned || options.suppressIsrWarning || process.env.NODE_ENV !== "production") {
+  if (
+    warned ||
+    options.suppressIsrWarning ||
+    process.env.NODE_ENV !== "production" ||
+    // `next build` runs every static-generation worker with NODE_ENV=production; warn at runtime only.
+    process.env.NEXT_PHASE === "phase-production-build"
+  ) {
     return;
   }
   warned = true;

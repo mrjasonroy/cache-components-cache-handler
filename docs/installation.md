@@ -43,6 +43,8 @@ That's it! This handles all `"use cache"` directives in your app.
 > This package only provides `cacheHandlers` (plural). Don't set the singular `cacheHandler`
 > option to anything from this package: it was removed in 16.5.0. ISR pages, route handler
 > responses and optimized images use Next's default per-instance cache.
+> **If you run more than one instance, configure your own shared ISR `cacheHandler`** alongside
+> `cacheHandlers`, or those pages won't be shared or revalidated across instances.
 
 ## Redis / Valkey Cache Setup
 

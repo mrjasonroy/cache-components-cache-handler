@@ -106,7 +106,6 @@ export interface CacheHandlerOptions extends IsrWarningOptions {
  */
 export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandler {
   const { type, debug = false } = options;
-  if (type !== "memory") warnMissingIsrHandlerOnce(options);
 
   switch (type) {
     case "memory":
@@ -118,6 +117,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
     case "redis":
     case "valkey": {
       const Redis = loadIoredis(type);
+      warnMissingIsrHandlerOnce(options);
 
       const url =
         options.url || process.env.REDIS_URL || process.env.VALKEY_URL || "redis://localhost:6379";
@@ -144,6 +144,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
 
     case "elasticache": {
       const Redis = loadIoredis(type);
+      warnMissingIsrHandlerOnce(options);
 
       const endpoint = options.endpoint || process.env.ELASTICACHE_ENDPOINT;
       if (!endpoint) {

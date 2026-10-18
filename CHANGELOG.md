@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [16.5.0]
+## [16.5.0] - 2026-10-18
 
 ### Removed (BREAKING)
 

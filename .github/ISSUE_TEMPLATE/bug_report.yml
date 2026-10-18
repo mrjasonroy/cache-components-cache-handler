@@ -86,10 +86,9 @@ body:
       description: Your cache handler configuration
       render: typescript
       placeholder: |
-        // cache-handler.mjs
-        export default createMemoryCacheHandler({
-          maxSize: 1000
-        });
+        // data-cache-handler.mjs
+        import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+        export default createCacheHandler({ type: "redis" });
 
   - type: dropdown
     id: environment

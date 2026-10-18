@@ -155,8 +155,7 @@ jobs:
           # is on 16.4.x), and publishing a lower version would move npm `latest` back.
           NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_version }}"
           CURRENT_PKG_VERSION="${{ steps.check_version.outputs.current_pkg_version }}"
-          HIGHEST=$(printf '%s\n%s\n' "$CURRENT_PKG_VERSION" "$NEW_PKG_VERSION" | sort -V | tail -1)
-          if [ "$HIGHEST" = "$NEW_PKG_VERSION" ]; then
+          if ! node -e 'const p=v=>{const[m,pre]=v.split("-");return[...m.split(".").map(Number),pre?0:1]};const[a,b]=process.argv.slice(1).map(p);for(let i=0;i<4;i++){if(a[i]!==b[i])process.exit(a[i]>b[i]?0:1)}process.exit(1)' "$CURRENT_PKG_VERSION" "$NEW_PKG_VERSION"; then
             cd packages/cache-handler
             npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
             cd ../..
