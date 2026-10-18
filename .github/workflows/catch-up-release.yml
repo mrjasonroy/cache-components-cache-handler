@@ -81,12 +81,10 @@ jobs:
           pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
           cd ../..
 
-          # Update legacy-cache-test if it exists
-          if [ -d "apps/legacy-cache-test" ]; then
-            cd apps/legacy-cache-test
-            pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
-            cd ../..
-          fi
+          # Update redis-example
+          cd apps/redis-example
+          pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
+          cd ../..
 
       - name: Update package version
         if: steps.versions.outputs.needs_update == 'true'

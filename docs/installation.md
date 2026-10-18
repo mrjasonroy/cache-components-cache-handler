@@ -30,7 +30,6 @@ export default createMemoryDataCacheHandler({
 // next.config.js
 export default {
   cacheComponents: true,
-  cacheHandler: "./cache-handler.mjs", // Optional: ISR handler
   cacheHandlers: {
     default: "./data-cache-handler.mjs",
     remote: "./data-cache-handler.mjs",
@@ -40,6 +39,10 @@ export default {
 ```
 
 That's it! This handles all `"use cache"` directives in your app.
+
+> This package only provides `cacheHandlers` (plural). Don't set the singular `cacheHandler`
+> option to anything from this package: it was removed in 16.5.0. ISR pages, route handler
+> responses and optimized images use Next's default per-instance cache.
 
 ## Redis / Valkey Cache Setup
 

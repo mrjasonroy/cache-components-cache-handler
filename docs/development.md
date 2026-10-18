@@ -14,11 +14,10 @@ pnpm build
 ```
 cache-components-cache-handler/
 ├── packages/
-│   ├── cache-handler/          # Core package
-│   └── cache-handler-redis/    # Redis adapter
+│   └── cache-handler/          # The published package ("use cache" data-cache handlers)
 ├── apps/
-│   ├── e2e-test-app/          # E2E test application
-│   └── legacy-cache-test/     # Legacy test application
+│   ├── e2e-test-app/          # E2E test application (Playwright)
+│   └── redis-example/         # Minimal Redis example app
 ├── docs/                       # Documentation
 └── .github/workflows/         # CI/CD
 ```

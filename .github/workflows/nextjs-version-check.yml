@@ -145,12 +145,10 @@ jobs:
           pnpm add next@${{ steps.check_version.outputs.latest_version }}
           cd ../..
 
-          # Update legacy-cache-test if it exists
-          if [ -d "apps/legacy-cache-test" ]; then
-            cd apps/legacy-cache-test
-            pnpm add next@${{ steps.check_version.outputs.latest_version }}
-            cd ../..
-          fi
+          # Update redis-example
+          cd apps/redis-example
+          pnpm add next@${{ steps.check_version.outputs.latest_version }}
+          cd ../..
 
           # Bump package version to match Next.js version
           NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_version }}"

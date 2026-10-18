@@ -5,6 +5,7 @@
 
 import { createRequire } from "node:module";
 import { createIoredisAdapter } from "./ioredis-adapter.js";
+import { type IsrWarningOptions, warnMissingIsrHandlerOnce } from "./isr-warning.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import { createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
@@ -26,7 +27,7 @@ function loadIoredis(type: string): typeof import("ioredis").default {
 
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
 
-export interface CacheHandlerOptions {
+export interface CacheHandlerOptions extends IsrWarningOptions {
   /**
    * Cache backend type
    */
@@ -64,7 +65,7 @@ export interface CacheHandlerOptions {
 
   /**
    * Key prefix for cache entries
-   * @default "nextjs:cache:"
+   * @default "nextjs:data-cache:"
    */
   keyPrefix?: string;
 
@@ -105,6 +106,7 @@ export interface CacheHandlerOptions {
  */
 export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandler {
   const { type, debug = false } = options;
+  if (type !== "memory") warnMissingIsrHandlerOnce(options);
 
   switch (type) {
     case "memory":

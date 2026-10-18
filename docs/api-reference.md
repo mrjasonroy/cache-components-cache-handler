@@ -1,5 +1,28 @@
 # API Reference
 
+Everything this package exports is for Next.js's `cacheHandlers` (plural) config, which backs
+`"use cache"` and `"use cache: remote"`. There is no ISR `cacheHandler` (singular) export; it was
+removed in 16.5.0 (see the README's "Migrating from the ISR handler").
+
+## Zero-config factory
+
+### `createCacheHandler(options)`
+
+Returns a data cache handler for the chosen backend: `"memory"`, `"redis"`, `"valkey"` or
+`"elasticache"`. Redis-family backends load `ioredis` lazily, so memory-only users do not need it
+installed. See [redis.md](./redis.md) for options and environment variables.
+
+For Redis-family backends in production it logs a one-time warning that ISR pages and route
+handlers are not covered by this package (see the README's migration section). Pass
+`suppressIsrWarning: true` to silence it once you have your own shared ISR `cacheHandler`.
+
+```javascript
+// data-cache-handler.mjs
+import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+
+export default createCacheHandler({ type: process.env.REDIS_URL ? "redis" : "memory" });
+```
+
 ## Memory Cache Handler
 
 ### `createMemoryDataCacheHandler(options)`
@@ -37,7 +60,7 @@ Creates a Redis-based cache handler.
 ```typescript
 {
   redis: RedisClientType;     // Connected Redis client (required)
-  keyPrefix?: string;         // Prefix for cache keys (default: "nextjs:cache:")
+  keyPrefix?: string;         // Prefix for cache keys (default: "nextjs:data-cache:")
   tagPrefix?: string;         // Prefix for tag keys (default: "nextjs:tags:")
   defaultTTL?: number;        // Default TTL in seconds (default: 86400)
   debug?: boolean;            // Enable debug logging (default: false)
@@ -86,6 +109,32 @@ export default createRedisDataCacheHandler({
   redis: createIoredisAdapter(redis),
 });
 ```
+
+## next.config helpers
+
+### `createCacheConfig({ dataCacheHandlerPath, disableDefaultMemoryCache? })`
+
+Returns `{ cacheHandlers: { default, remote }, cacheMaxMemorySize }` with both profiles pointing at
+the same handler file. `disableDefaultMemoryCache` defaults to `true` (sets `cacheMaxMemorySize: 0`).
+
+### `createCacheConfigWithProfiles({ defaultDataCacheHandlerPath, remoteDataCacheHandlerPath, disableDefaultMemoryCache? })`
+
+Same, with separate handler files for `"use cache"` and `"use cache: remote"`.
+
+```javascript
+// next.config.mjs
+import { resolve } from "node:path";
+import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
+
+export default {
+  cacheComponents: true,
+  ...createCacheConfig({
+    dataCacheHandlerPath: resolve(process.cwd(), "./data-cache-handler.mjs"),
+  }),
+};
+```
+
+Neither helper sets the ISR `cacheHandler` key; the `isrHandlerPath` option was removed in 16.5.0.
 
 ## Next.js Cache APIs
 

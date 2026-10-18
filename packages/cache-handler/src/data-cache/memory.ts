@@ -218,7 +218,7 @@ function areTagsStale(tags: string[], timestamp: Timestamp): boolean {
  * @example
  * ```typescript
  * // cache-handler.mjs
- * import { createMemoryDataCacheHandler } from '@mrjasonroy/better-nextjs-cache-handler/data-cache';
+ * import { createMemoryDataCacheHandler } from '@mrjasonroy/cache-components-cache-handler';
  *
  * export default createMemoryDataCacheHandler({
  *   maxSize: 100 * 1024 * 1024, // 100MB
