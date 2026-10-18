@@ -7,6 +7,29 @@ on:
   workflow_dispatch: # Allow manual triggering
 
 jobs:
+  # Fails (and emails the owner) when a tagged release never reached npm, so a
+  # broken publish chain can't go unnoticed behind an already-merged PR again.
+  npm-publish-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Compare repo version with npm
+        run: |
+          PKG=$(node -p "require('./packages/cache-handler/package.json').name")
+          REPO=$(node -p "require('./packages/cache-handler/package.json').version")
+          if ! git ls-remote --exit-code --tags origin "refs/tags/v$REPO" >/dev/null; then
+            echo "v$REPO is not tagged yet; nothing to check"
+            exit 0
+          fi
+          if npm view "$PKG@$REPO" version >/dev/null 2>&1; then
+            echo "✅ $PKG@$REPO is on npm"
+          else
+            echo "::error::v$REPO is tagged but $PKG@$REPO is not on npm (latest: $(npm view "$PKG" version)). Run: gh workflow run publish.yml -f tag=v$REPO"
+            exit 1
+          fi
+
   check-nextjs-version:
     runs-on: ubuntu-latest
     permissions:
