@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 
 test.describe("Fetch Caching Tests", () => {
   test.describe("fetch() WITHOUT use cache (Next.js 16 Behavior)", () => {
-    test("force-cache: does NOT cache with cacheComponents enabled", async ({ page }) => {
+    test("force-cache: cached by Next's built-in fetch cache, not this package", async ({
+      page,
+    }) => {
       const testId = `force-cache-${Date.now()}`;
 
       // First load
@@ -12,12 +14,14 @@ test.describe("Fetch Caching Tests", () => {
       // Wait to ensure timestamp would be different
       await page.waitForTimeout(100);
 
-      // Second load - In Next.js 16 with cacheComponents, native fetch() is NOT cached
+      // Second load - a force-cache fetch outside "use cache" goes through the ISR/incremental
+      // cache (`cacheHandler`, singular). This package no longer provides one, so Next's default
+      // per-instance fetch cache (.next/cache/fetch-cache) serves it. The removed ISR handler
+      // silently failed to cache these, which is what this test used to assert.
       await page.reload();
       const timestamp2 = await page.locator('[data-testid="timestamp"]').textContent();
 
-      // Should be different (NOT cached) - this is expected behavior in Next.js 16
-      expect(timestamp2).not.toBe(timestamp1);
+      expect(timestamp2).toBe(timestamp1);
     });
 
     test("no-store: does not cache fetch responses", async ({ page }) => {
