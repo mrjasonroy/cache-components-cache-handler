@@ -325,6 +325,30 @@ describe("RedisDataCacheHandler", () => {
     expect(stale.revalidate).toBe(-1);
   });
 
+  test("hard-expired tag wins over a merely-stale tag in the same entry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BASE_TIME);
+
+    const redis = new FakeRedis();
+    const handler = createRedisDataCacheHandler({ redis });
+
+    const entry = createEntry("v1", {
+      tags: ["stale-tag", "expired-tag"],
+      timestamp: BASE_TIME.getTime(),
+      expire: 600,
+      revalidate: 300,
+    });
+    await handler.set("mixed-key", Promise.resolve(entry));
+
+    vi.setSystemTime(new Date(BASE_TIME.getTime() + 10_000));
+    await handler.updateTags(["stale-tag"], {}); // soft-stale only, no hard deadline
+    await handler.updateTags(["expired-tag"]); // no durations -> immediate hard expiry
+
+    const result = await handler.get("mixed-key", []);
+    expect(result).toBeUndefined();
+    expect(redis.delCalls).toContainEqual(["nextjs:data-cache:mixed-key"]);
+  });
+
   test("getExpiration returns the latest revalidation event timestamp", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(BASE_TIME);
@@ -435,5 +459,62 @@ describe("RedisDataCacheHandler cluster safety", () => {
     // ...and every command issued must target exactly one key.
     const multiKey = commands.filter((c) => c.keys.length !== 1);
     expect(multiKey).toEqual([]);
+  });
+});
+
+describe("RedisDataCacheHandler tag revalidation checks", () => {
+  test("dispatches per-tag staleness checks concurrently, not sequentially", async () => {
+    const backing = new FakeRedis();
+    const tagKeys = ["nextjs:tags:t1", "nextjs:tags:t2", "nextjs:tags:t3"];
+    const started: string[] = [];
+    const releases: Array<() => void> = [];
+
+    // Block hGetAll for a tag key until explicitly released, so we can
+    // observe how many are in flight at once.
+    const redis: RedisClient = {
+      get: (key) => backing.get(key),
+      set: (key, value, ...args) => backing.set(key, value, ...args),
+      del: (...keys) => backing.del(...keys),
+      exists: (...keys) => backing.exists(...keys),
+      ttl: (key) => backing.ttl(key),
+      hGet: (key, field) => backing.hGet(key, field),
+      hSet: (key, field, value) => backing.hSet(key, field, value),
+      hGetAll: async (key) => {
+        if (!tagKeys.includes(key)) {
+          return backing.hGetAll(key);
+        }
+        started.push(key);
+        await new Promise<void>((resolve) => releases.push(resolve));
+        return backing.hGetAll(key);
+      },
+    };
+
+    const handler = createRedisDataCacheHandler({ redis });
+
+    await handler.set(
+      "multi-tag-key",
+      Promise.resolve(createEntry("v1", { tags: ["t1", "t2", "t3"] })),
+    );
+
+    const getPromise = handler.get("multi-tag-key", []);
+
+    // Flush microtasks so every dispatched tag lookup has had a chance to
+    // start, without letting any of the blocked ones resolve.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // A sequential loop would only ever have the first tag lookup in
+    // flight here, since it can't dispatch the next until this one
+    // resolves. All three being in flight proves concurrent dispatch.
+    expect(started.slice().sort()).toEqual(tagKeys.slice().sort());
+
+    for (const release of releases) {
+      release();
+    }
+    const result = await getPromise;
+
+    if (!result) {
+      throw new Error("expected cache entry");
+    }
+    expect(await readStream(result.value)).toBe("v1");
   });
 });
