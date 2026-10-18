@@ -51,3 +51,14 @@ export function isExpired(lifespan: LifespanParameters | null): boolean {
   const nowSeconds = Math.floor(Date.now() / 1000);
   return nowSeconds >= lifespan.expireAt;
 }
+
+/**
+ * Compute remaining Redis EX TTL in seconds from lifespan parameters.
+ * expireAt is epoch seconds (see calculateLifespan).
+ */
+export function redisTtlSecondsFromLifespan(
+  lifespan: LifespanParameters | null,
+): number | undefined {
+  if (!lifespan?.expireAt) return undefined;
+  return lifespan.expireAt - Math.floor(Date.now() / 1000);
+}

@@ -1,5 +1,5 @@
 import Redis, { type RedisOptions } from "ioredis";
-import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
+import { calculateLifespan, isExpired, redisTtlSecondsFromLifespan } from "../helpers/lifespan.js";
 import { jsonReplacer, jsonReviver } from "../helpers/serialization.js";
 import type {
   CacheHandler,
@@ -254,9 +254,8 @@ export class RedisCacheHandler implements CacheHandler {
       // Determine TTL for Redis
       let ttl: number | undefined;
       if (lifespan?.expireAt) {
-        // Use expire time as TTL
-        ttl = Math.ceil((lifespan.expireAt - Date.now()) / 1000);
-        if (ttl <= 0) {
+        ttl = redisTtlSecondsFromLifespan(lifespan);
+        if (!ttl || ttl <= 0) {
           this.log("SET", cacheKey, "SKIP (already expired)");
           return;
         }
