@@ -120,6 +120,28 @@ export default createCacheHandler({
 });
 ```
 
+#### Options
+
+| Option | Default | Applies to | What it does |
+|--------|---------|------------|--------------|
+| `type` | (required) | all | `"memory"`, `"redis"`, `"valkey"` or `"elasticache"` |
+| `url` | `REDIS_URL` / `VALKEY_URL` | redis, valkey | Connection URL |
+| `endpoint` / `port` | `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT`, `6379` | elasticache | Host and port |
+| `tls` | `true` for elasticache, else `false` | redis family | Use TLS |
+| `password` | `ELASTICACHE_AUTH_TOKEN` / `REDIS_PASSWORD` | redis family | Auth token or password |
+| `keyPrefix` | `"nextjs:data-cache:"` | redis family | Prefix for entry keys |
+| `tagPrefix` | `"nextjs:tags:"` | redis family | Prefix for tag records |
+| `commandTimeout` | `2000` (ms) | redis family | A command with no reply in time fails and the read is a cache miss, so a slow or unreachable Redis can't hold up renders |
+| `defaultTTL` | `86400` (s) | redis family | TTL for entries without a finite `expire` |
+| `tagTTL` | `31622400` (s, 366 days) | redis family | TTL for tag revalidation records, refreshed on each revalidation; entry TTLs are capped at it |
+| `errorLogIntervalMs` | `60000` | redis family | Redis errors are always logged, at most once per operation per interval |
+| `suppressIsrWarning` | `false` | redis family | Turns off the one-time production warning about a missing shared ISR `cacheHandler` |
+| `maxSize` | 100 MB | memory | Memory budget |
+| `debug` | `false` | all | Debug logging |
+
+The client created by `createCacheHandler` reconnects forever with backoff capped at 5s and
+fails a command after one retry, so a Redis outage gives cache misses instead of hung requests.
+
 ## Migrating from the ISR handler (16.5.0, breaking)
 
 Versions before 16.5.0 also exported an ISR `cacheHandler` implementation (`MemoryCacheHandler`,

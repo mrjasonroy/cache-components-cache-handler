@@ -130,6 +130,28 @@ jobs:
             echo "branch_exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # A bump PR that already exists is not rebuilt, so without this check a PR
+      # with red CI would be skipped silently every night. Fail the run instead
+      # (GitHub emails the owner) until someone fixes or closes it.
+      - name: Check the existing bump PR
+        if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BRANCH="nextjs-${{ steps.check_version.outputs.latest_version }}"
+          PR=$(gh pr list --head "$BRANCH" --state open --json number,url --jq '.[0]')
+          if [ -z "$PR" ]; then
+            echo "::error::Branch $BRANCH exists but has no open PR, so Next.js ${{ steps.check_version.outputs.latest_version }} will never ship. Delete the branch to let the next run recreate it: git push origin --delete $BRANCH"
+            exit 1
+          fi
+          URL=$(echo "$PR" | jq -r .url)
+          FAILED=$(gh pr checks "$BRANCH" --json name,bucket --jq '[.[] | select(.bucket == "fail") | .name] | join(", ")' || true)
+          if [ -n "$FAILED" ]; then
+            echo "::error::Bump PR $URL has failing checks ($FAILED). It will not auto-merge until they pass."
+            exit 1
+          fi
+          echo "Bump PR $URL is open and has no failing checks; waiting for it to merge."
+
       - name: Create feature branch
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
@@ -204,10 +226,9 @@ jobs:
       - name: Run e2e tests with Redis
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
         run: |
-          # Flush Redis (service container is accessible on localhost)
-          redis-cli -h localhost FLUSHALL
-
-          # Build and test with Redis
+          # The Redis service container starts empty, so there is nothing to flush.
+          # (redis-cli is not installed on the runner; calling it exited 127 and
+          # marked every bump PR "Tests need review".)
           cd apps/e2e-test-app
           CACHE_HANDLER=redis pnpm build
           CACHE_HANDLER=redis pnpm test:e2e
