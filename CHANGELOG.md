@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file. This projec
 ## [Unreleased]
 
 ### Fixed
-- CI: the daily canary/RC test now fails (and opens an issue) when a pre-release breaks; before, only `latest` could fail.
+- CI: the daily canary test now fails (and opens an issue) when a canary breaks; before, only `latest` could fail. The stale `rc` channel (npm still tags 15.0.0-rc.1) is dropped.
 - CI: the Next.js bump workflow no longer calls the missing `redis-cli`, which marked every bump PR "Tests need review".
 - CI: an open bump PR with failing checks, or a leftover bump branch with no PR, now fails the nightly run instead of being skipped silently.
 
