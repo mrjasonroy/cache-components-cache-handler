@@ -15,8 +15,10 @@ const fakeRedis = vi.hoisted(() =>
   })),
 );
 
-vi.mock("node:module", () => ({
-  createRequire: () => (moduleName: string) => {
+// ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
+vi.mock("../shared/node-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/node-require.js")>()),
+  requireModule: (moduleName: string) => {
     if (moduleName === "ioredis") {
       return fakeRedis;
     }

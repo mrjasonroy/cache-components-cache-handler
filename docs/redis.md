@@ -35,6 +35,9 @@ out 3 times in a row is dropped and redialled. What the app does meanwhile is in
 Valkey speaks the Redis protocol. Point `REDIS_URL` or `VALKEY_URL` at it; nothing else changes.
 CI runs the outage suite and the e2e suite on Valkey 8 as well as Redis 7.
 
+Any server needs Redis 6.2 commands and Lua scripting: a revalidation is one single-key `EVALSHA`
+(with `EVAL` the first time) and one `ZADD GT`.
+
 ```bash
 VALKEY_URL=redis://valkey.internal:6379
 ```

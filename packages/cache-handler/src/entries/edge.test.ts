@@ -1,35 +1,32 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 /**
- * Next's stand-in for a Node built-in on the edge runtime (`__import_unsupported`,
- * next/dist/server/web/globals.js): any property read, call or `new` on an export throws.
+ * Turbopack's edge build fails when a Node built-in is LOADED (`Failed to load external module
+ * node:module: TypeError: Native module not found`), at import time, not when it is called. So
+ * importing any of these fails here too: the entries must not reach one, statically or otherwise,
+ * until a handler needs it (never, on the edge runtime).
  */
-const unsupported = vi.hoisted(() => (moduleName: string) => {
-  const fail = () => {
-    throw new Error(`The edge runtime does not support Node.js '${moduleName}' module.`);
-  };
-  const proxy: unknown = new Proxy(() => {}, {
-    get: (_target, prop) => (prop === "then" ? undefined : fail()),
-    construct: fail,
-    apply: fail,
-  });
-  return proxy;
+vi.mock("node:module", () => {
+  throw new Error("Native module not found: node:module");
 });
-
-vi.mock("node:module", () => ({
-  createRequire: unsupported("node:module"),
-  default: unsupported("node:module"),
-}));
-vi.mock("node:fs", () => ({
-  readFileSync: unsupported("node:fs"),
-  default: unsupported("node:fs"),
-}));
-vi.mock("node:path", () => ({
-  isAbsolute: unsupported("node:path"),
-  join: unsupported("node:path"),
-  resolve: unsupported("node:path"),
-  default: unsupported("node:path"),
-}));
+vi.mock("node:fs", () => {
+  throw new Error("Native module not found: node:fs");
+});
+vi.mock("node:path", () => {
+  throw new Error("Native module not found: node:path");
+});
+vi.mock("node:url", () => {
+  throw new Error("Native module not found: node:url");
+});
+vi.mock("node:crypto", () => {
+  throw new Error("Native module not found: node:crypto");
+});
+vi.mock("node:os", () => {
+  throw new Error("Native module not found: node:os");
+});
+vi.mock("ioredis", () => {
+  throw new Error("Native module not found: ioredis");
+});
 
 function stream(text: string): ReadableStream<Uint8Array> {
   return new ReadableStream({
@@ -52,7 +49,7 @@ describe("handler entries on the edge runtime (Next bundles the page handler int
     Reflect.deleteProperty(process.env, "REDIS_URL");
   });
 
-  test("importing the page, remote and default entries calls no Node built-in", async () => {
+  test("importing the page, remote and default entries loads no Node built-in", async () => {
     await expect(import("./page.js")).resolves.toBeDefined();
     await expect(import("./remote.js")).resolves.toBeDefined();
     await expect(import("./default.js")).resolves.toBeDefined();

@@ -119,9 +119,10 @@ pattern:
 - **Values live in per-instance memory**: an LRU of up to 10,000 entries. Like Next's built-in
   handler, a value is dropped once its `revalidate` period has passed, and the next request
   renders it again.
-- **`updateTags` writes the invalidation to Redis**: one `HSET` into the tag hash (a
-  `stale,expired` timestamp record per tag) and one `ZADD` into the tag index, however many tags
-  it carries.
+- **`updateTags` writes the invalidation to Redis**: one script call (`EVALSHA`) that merges it
+  into the tag hash (a `stale,expired` timestamp record per tag) and one `ZADD GT` into the tag
+  index, however many tags it carries. Both only move a record forward, so a write delayed in
+  transit never undoes a newer revalidation from another instance.
 - **`refreshTags` syncs once per request**, at most every 100 ms. Next calls it before the first
   `"use cache"` read. It reads the index for tags updated since the last sync (minus 5 s for clock
   skew), then fetches only those records with one `HMGET` and copies them into local state. While
@@ -370,7 +371,7 @@ Redis command volume, not latency, is what grows with traffic:
 | Page, route handler or cached `fetch` read | 1 `GET` + 1 `HMGET` of every tag that applies (soft tags, `fetch` tags, the entry's tags), in one round trip. The first read of an entry by a process that did not write it is 3 commands in 2 round trips. |
 | `"use cache: remote"` read | 1 `GET` + 1 `HMGET` of the entry's tags and the soft tags, in one round trip (2 round trips the first time a process reads an entry it did not write). |
 | `"use cache"` (memory) read | none. One tag sync per request, at most every 100 ms: 1 `ZRANGEBYSCORE` of the index since the last sync, plus 1 `HMGET` of the tags that changed, if any. |
-| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `HSET` + 1 `ZADD`, however many tags. |
+| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `EVALSHA` (one single-key script) + 1 `ZADD GT`, however many tags. The first one on a server that has not seen the script adds 1 `EVAL`. |
 
 The tag read shares the entry's round trip, so page latency is unchanged; size Redis for the
 command rate. Nothing runs `HGETALL`: an `HMGET` costs in proportion to the tags it reads, not to
@@ -510,6 +511,9 @@ export async function savePost(id: string) {
 | **Valkey** | `VALKEY_URL` or `REDIS_URL`, same URL format |
 | **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on |
 | **Redis Cluster, Sentinel** | Your own ioredis client through a [custom handler](#custom-handlers). `flushCache` scans every master. |
+
+The minimum is Redis 6.2 (or any Valkey): revalidations use `ZADD GT` and a single-key Lua
+script, so the server must allow `EVAL`/`EVALSHA`. CI runs Redis 7 and Valkey 8.
 
 ## How it's tested
 

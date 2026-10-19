@@ -39,12 +39,27 @@ key starts with `<prefix>tags:`, the namespace where 16.5's `RedisCacheHandler` 
 `createCacheHandler` keep `nextjs:tags:<tag>` keys of other types; a tag named `index` would
 otherwise collide.
 
-- `updateTags` is 1 HSET + 1 ZADD, however many tags it carries. Neither key has a TTL.
+- `updateTags` is 1 EVALSHA + 1 `ZADD GT`, however many tags it carries (EVAL instead when the
+  server answers NOSCRIPT). Neither key has a TTL.
+- **Writes are monotonic.** A plain HSET of the whole record let an older write that reached
+  Redis late (delayed on its connection, not failed) replace a newer acknowledged one: A
+  revalidates at T, an entry is cached at T+1, B revalidates at T+2 and is acknowledged, A's HSET
+  lands and restores `T,T`, and an instance started afterwards serves the T+1 entry. Local merges
+  and the replay queue cannot repair Redis. So the record is merged by a script
+  (`shared/tag-update.ts`), ordered by `stale` (the update time): a newer update applies as before;
+  an older one leaves the record, filling only a missing `expired`; in the same millisecond
+  `stale` stays and the earlier `expired` wins. A plain maximum of `expired` was rejected:
+  `revalidateTag(tag, "max")` then an immediate `revalidateTag(tag)` must expire at once, not in a
+  year. The index uses `ZADD GT`, so its score never moves back either. The script exists for
+  monotonic writes, not pruning, and touches only `<prefix>tags`, so it runs on a Cluster; it is
+  not a two-key script over the separately slotted index. This sets the floor at Redis 6.2
+  (`ZADD GT`) with scripting allowed; Valkey has both. The batch send and the outage replay
+  queue use the same path.
 - An update Redis did not take (an error, or Redis down) stays queued in the process and is sent
   with the next update or on reconnect. Concurrent sends share the queue: whichever runs first
-  takes all of it, and one that finds it empty sends nothing (`HSET` with no field is an error). It is re-applied at send time, here and in Redis, so the
-  replayed record is the newest one and can only invalidate more, never bring back an entry a
-  later revalidation on another instance invalidated. Before this a revalidation made during an
+  takes all of it, and one that finds it empty sends nothing (`ZADD` with no member is an
+  error). It is re-applied at send time, here and in Redis, so the replayed update is the newest
+  one and reaches every instance as a new invalidation; the script keeps any record newer still. Before this a revalidation made during an
   outage reached that process only, for good.
 - `refreshTags` reads the index from the last sync point (minus 5 s for clock skew), then HMGETs
   only the tags that changed. Both reads are paged at 1,000. The sync point advances to the sync's
@@ -58,8 +73,8 @@ otherwise collide.
   so a run of equal scores split across pages is read whole. A full page of one score (an update
   of over 1,000 tags) is read with one unbounded `ZRANGEBYSCORE s s`, then stepped past with an
   exclusive `(s`. This is a keyset cursor on the score alone, not on (score, member): a member
-  bound inside one score is not expressible in a single `ZRANGEBYSCORE` without Lua or rank
-  offsets, and the only ties are tags written by one update, which are read whole.
+  bound inside one score is not expressible in a single `ZRANGEBYSCORE` without a read script or
+  rank offsets, and the only ties are tags written by one update, which are read whole.
 - The sync point is the reader's own start time, never the highest score read: a writer whose
   clock runs ahead would otherwise move it past a lagging writer's updates.
 
@@ -70,7 +85,8 @@ its `stale` or `expired` time can still be stored: `check` expires an entry crea
 revalidation plus the longest entry age, and with a larger custom `expire` longer still. An
 earlier round pruned at 366 and then 731 days, which needed a clamp on `expired`, a margin for
 clock skew and per-key Lua compare-and-delete scripts so a prune could not delete a tag another
-instance was revalidating at that moment. Each was a correctness hazard on its own (a pruned
+instance was revalidating at that moment. (The one script left, the monotonic write above,
+deletes nothing.) Each was a correctness hazard on its own (a pruned
 record reads as never-invalidated and brings stale entries back). Not pruning removes all of it.
 
 What it costs: a record exists only for a tag that was revalidated at least once (soft `_N_T_`
@@ -185,7 +201,9 @@ same tag check as any other, so a tag or path revalidated since the build wins. 
 served only after its tag records were read from Redis (while Redis is down, a process that just
 started knows no revalidation, so the build output is a miss), and once it passes the check it is
 written to Redis with `SET NX` so an entry another instance or a render wrote first wins. Without
-Redis it is kept in process memory. The Redis key is build-scoped like every other entry. The build
+Redis it is kept in process memory. Header tags count for `PAGES` as for `APP_PAGE` and `APP_ROUTE`, in Redis
+and from disk, matching `FileSystemCache`'s own check (next@16.4.2's reader returns no `PAGES`
+headers from disk, but the value type and the check allow them). The Redis key is build-scoped like every other entry. The build
 writes no `cacheControl` to `.meta`, so a build-output entry revalidated with `{ expire }` is a miss
 rather than served stale; Next takes its schedule from the prerender manifest as it does for its own
 `FileSystemCache`.
@@ -195,10 +213,17 @@ rather than served stale; Next takes its schedule from the prerender manifest as
 next/dist/build/templates/middleware.js). On the edge runtime `node:module`, `node:fs` and
 `node:path` are stubs whose exports throw when called (`__import_unsupported`,
 next/dist/server/web/globals.js), and `connection.ts` called `createRequire(import.meta.url)` while
-it was evaluated, so the middleware threw and every request was a 500. Now nothing touches a Node
-built-in at import: `require` is created on first use (`shared/node-require.ts`), and `build-id.ts`
-loads `node:fs`/`node:path` when it first reads `BUILD_ID` (`process.getBuiltinModule` where Node
-has it). Under `NEXT_RUNTIME=edge` the page handler's `get` returns `null` and `set`,
+it was evaluated, so the middleware threw and every request was a 500. Deferring the call was not
+enough: Turbopack's edge chunks fail when a `node:` module is LOADED (`Failed to load external
+module node:module: TypeError: Native module not found`, at module evaluation), so a static
+`import { createRequire } from "node:module"` alone still took every request down. Now no module
+in the graph of `entries/page`, `remote` or `default` imports a `node:` specifier or a package:
+built-ins come from `process.getBuiltinModule` on first use (`shared/node-require.ts`, which
+creates `require` from it to load ioredis and Next's `FileSystemCache`). That needs Node 22.3, so
+`engines` is `>=22.3.0` (Next 16 itself needs 20.9; a dynamic `import("node:module")` fallback
+would be async and is the same load Turbopack rejects). `entries/node-imports.test.ts` walks the
+entries' graph as `tsc` emits it and fails on any external import, and `entries/edge.test.ts`
+mocks every `node:` module to throw on import, as Turbopack does. Under `NEXT_RUNTIME=edge` the page handler's `get` returns `null` and `set`,
 `revalidateTag` and `delete` do nothing; the data handlers are the miss handler; Redis is never
 used.
 

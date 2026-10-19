@@ -12,7 +12,8 @@
  * ({@link encodeEntryString}), which {@link decodeEntry} also reads.
  */
 
-const MAGIC = Buffer.from("NCH", "latin1");
+// "NCH". A plain Uint8Array, so importing this module never touches `Buffer` (edge bundles).
+const MAGIC = Uint8Array.of(0x4e, 0x43, 0x48);
 export const FORMAT_VERSION = 2;
 const PREAMBLE_LENGTH = MAGIC.length + 1 + 4;
 
@@ -53,7 +54,7 @@ export function encodeEntry(value: unknown): Buffer {
 
   const headerBytes = Buffer.from(header, "utf8");
   const preamble = Buffer.alloc(PREAMBLE_LENGTH);
-  MAGIC.copy(preamble, 0);
+  preamble.set(MAGIC, 0);
   preamble.writeUInt8(FORMAT_VERSION, MAGIC.length);
   preamble.writeUInt32BE(headerBytes.length, MAGIC.length + 1);
 

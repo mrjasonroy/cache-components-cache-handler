@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- Node.js 22+
+- Node.js 22.3+
 - Next.js 16+ with `cacheComponents: true`
-- Redis 7+, Valkey or AWS ElastiCache for multi-instance deployments. Nothing is needed for dev or
-  a single instance.
+- Redis 7+ (6.2 at the least, with scripting allowed), Valkey or AWS ElastiCache for
+  multi-instance deployments. Nothing is needed for dev or a single instance.
 
 ## Install
 

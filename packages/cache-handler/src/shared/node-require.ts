@@ -1,30 +1,36 @@
 /**
- * Node's `require`, created on first use.
+ * Node built-ins and `require`, reached on first use through `process.getBuiltinModule` (Node
+ * 20.16+, 22.3+), never through an `import`.
  *
  * Next bundles the page `cacheHandler` into the edge middleware too
- * (`OPTIONAL_IMPORT:incrementalCacheHandler` in next/dist/build/templates/middleware.js). There,
- * `node:module`, `node:fs` and `node:path` are stubs that throw when anything on them is called
- * (`__import_unsupported`, next/dist/server/web/globals.js). Calling `createRequire` while the
- * module is evaluated would take every request down with it, so nothing in this package touches a
- * Node built-in until a handler actually needs one, which never happens on the edge runtime.
+ * (`OPTIONAL_IMPORT:incrementalCacheHandler` in next/dist/build/templates/middleware.js). There a
+ * Node built-in fails as soon as it is loaded: Turbopack's edge chunks throw `Failed to load
+ * external module node:module: TypeError: Native module not found` while the module graph is
+ * evaluated, and webpack's stand-ins (`__import_unsupported`) throw on first use. So no module the
+ * handler entries import may import a `node:` specifier, statically or dynamically
+ * (`entries/node-imports.test.ts` checks the graph), and nothing here runs until a handler needs
+ * it, which never happens on the edge runtime.
  */
 
-import { createRequire } from "node:module";
-
 let nodeRequire: NodeJS.Require | undefined;
+
+/**
+ * A Node built-in (`node:fs`, `node:path`, `node:module`).
+ */
+export function nodeBuiltin<T>(id: string): T {
+  const builtin = process.getBuiltinModule?.(id) as T | undefined;
+  if (builtin === undefined) {
+    throw new Error(`Cannot load ${id}: this package needs Node.js 22.3 or later`);
+  }
+  return builtin;
+}
 
 /**
  * `require(id)` relative to this package.
  */
 export function requireModule<T>(id: string): T {
-  nodeRequire ??= createRequire(import.meta.url);
+  nodeRequire ??= nodeBuiltin<typeof import("node:module")>("node:module").createRequire(
+    import.meta.url,
+  );
   return nodeRequire(id) as T;
-}
-
-/**
- * A Node built-in (`node:fs`, `node:path`), through `process.getBuiltinModule` where Node has it
- * (20.16+, 22.3+) and `require` otherwise.
- */
-export function nodeBuiltin<T>(id: string): T {
-  return (process.getBuiltinModule?.(id) as T | undefined) ?? requireModule<T>(id);
 }

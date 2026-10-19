@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const ioredisMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:module", () => ({
-  createRequire: () => (moduleName: string) => {
+// ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
+vi.mock("../shared/node-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/node-require.js")>()),
+  requireModule: (moduleName: string) => {
     if (moduleName === "ioredis") return ioredisMock;
     throw new Error(`Unexpected require for module: ${moduleName}`);
   },
@@ -136,6 +138,30 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(
         getEntryTags({ kind: "APP_ROUTE", headers: { "x-next-cache-tags": ["a", "b"] } }),
       ).toEqual(["a", "b"]);
+    });
+
+    test("a Pages Router value's header tags are stored and checked, across a restart", async () => {
+      expect(
+        getEntryTags({ kind: "PAGES", headers: { "x-next-cache-tags": "products,other" } }),
+      ).toEqual(["products", "other"]);
+
+      const fake = new FakeRedis();
+      await handlerFor(fake).set(
+        "/about",
+        {
+          kind: "PAGES",
+          html: "<html>about</html>",
+          pageData: { title: "about" },
+          headers: { "x-next-cache-tags": "products" },
+          status: 200,
+        },
+        pageCtx,
+      );
+      await new Promise((r) => setTimeout(r, 2));
+      await handlerFor(fake).revalidateTag("products");
+
+      await resetCacheState();
+      expect(await handlerFor(fake).get("/about", { kind: "PAGES" })).toBeNull();
     });
 
     test("revalidateTag without durations expires entries with a header tag at once", async () => {

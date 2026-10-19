@@ -2,8 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const ioredisMock = vi.hoisted(() => vi.fn());
 
-vi.mock("node:module", () => ({
-  createRequire: () => (moduleName: string) => {
+// ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
+vi.mock("./node-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./node-require.js")>()),
+  requireModule: (moduleName: string) => {
     if (moduleName === "ioredis") return ioredisMock;
     throw new Error(`Unexpected require for module: ${moduleName}`);
   },
