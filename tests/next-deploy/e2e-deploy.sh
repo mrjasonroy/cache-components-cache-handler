@@ -11,7 +11,9 @@
 # NEXT_DEPLOY_VARIANT=pkg-16.5.1  the published 16.5.1 from npm, wired the 16.5.1 way.
 # NEXT_DEPLOY_VARIANT=branch      this branch's packed package, wired with withCache.
 # Both handler variants run NEXT_DEPLOY_INSTANCES (default 2) `next start` processes on one Redis
-# behind proxy.mjs.
+# behind proxy.mjs. A fixture that keeps its own cacheHandler/cacheHandlers gets one instance:
+# its handler stores entries in process memory, which round-robin would split, and Next makes no
+# cross-instance promise for such a handler.
 set -euo pipefail
 
 # Keep fd 3 for the URL; send all other output to stderr.
@@ -102,6 +104,13 @@ if ! grep -q "NEXT_SUPPORTS_IMMUTABLE_ASSETS:" .deploy-build.log; then
     echo "DEPLOYMENT_ID: local-$build_id"
     echo "NEXT_SUPPORTS_IMMUTABLE_ASSETS: 0"
   } >>.deploy-build.log
+fi
+
+if [ "$INSTANCES" -gt 1 ] && [ "$(cat .handler-instances 2>/dev/null)" = "1" ]; then
+  INSTANCES=1
+  echo "[next-deploy] the fixture's own cache handler is in the config; running one instance"
+  printf '%s1 instance (fixture handler is per-process)' "$([ -s .handler-notes ] && echo '; ')" \
+    >>.handler-notes
 fi
 
 if [ -n "${NEXT_DEPLOY_NOTES_FILE:-}" ] && [ -s .handler-notes ]; then

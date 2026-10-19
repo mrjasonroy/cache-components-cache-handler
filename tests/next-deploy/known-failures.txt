@@ -1,2 +1,9 @@
 # Suites (lines from suites.txt) that may pass on `baseline` and fail on `branch` without
-# failing the job. Each entry needs a reason and a link to the issue tracking it. Empty to start.
+# failing the job. One per line: `<suite> [<constraint>] <reason with an issue link>`.
+# The optional constraint limits the entry to some Next.js refs (NEXT_REF), e.g.
+# `<16.5.0-canary.10`; `<`, `<=`, `>`, `>=` work. Use it for bugs in Next itself, with the first
+# fixed version, so the entry stops applying once the workflow tests a fixed release.
+
+# Turbopack's edgeCacheHandlersRegistration emits object-literal fragments at statement position,
+# so any non-empty cacheHandlers plus an edge route handler fails the build.
+test/e2e/app-dir/app-static  <16.5.0-canary.10  vercel/next.js#100046: Turbopack edge cacheHandlers registration

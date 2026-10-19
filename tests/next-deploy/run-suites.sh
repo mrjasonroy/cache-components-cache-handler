@@ -11,9 +11,10 @@
 # Test files are dealt round-robin across shards, so a big suite (cache-components has 13
 # files) spreads out. Each shard writes RESULTS_DIR/<variant>-<shard>.tsv with one row per suite
 # part (suite, status, seconds, files, passed, failed, skipped, total) and a final "#complete"
-# row, plus a log per suite part. Test counts come from the jest JSON that run-tests.js writes
-# next to each test file when NEXT_TEST_JOB is set (<file>.results.json, last attempt).
-# A failing suite never fails this script; report.mjs decides.
+# row, plus a log per suite part. Test counts come from the jest JSON that run-tests.js prints
+# into that log for each test file (see count-results.mjs). The last 200 lines of every server
+# and proxy log of a part that did not pass are kept under RESULTS_DIR/server-logs/ (see
+# e2e-cleanup.sh). A failing suite never fails this script; report.mjs decides.
 set -uo pipefail
 
 VARIANT="$1"
@@ -36,6 +37,7 @@ fi
 export NEXT_DEPLOY_VARIANT="$VARIANT"
 export NEXT_DEPLOY_NOTES_FILE="$RESULTS_DIR/$VARIANT-$SHARD.notes.tsv"
 : >"$NEXT_DEPLOY_NOTES_FILE"
+SERVER_LOGS_ROOT="$RESULTS_DIR/server-logs/$VARIANT-shard$SHARD"
 
 # e2e-deploy.sh records every server/proxy process group here too, so anything the harness's
 # cleanup missed (a timed-out suite, a killed jest worker) is stopped before the next suite part
@@ -55,6 +57,9 @@ trap stop_leftover_servers EXIT
 # Harness settings, as in https://nextjs.org/docs/app/api-reference/adapters/testing-adapters
 export NEXT_TEST_MODE=deploy
 export NEXT_TEST_JOB=1
+# Makes run-tests.js print every test file's jest JSON into the log, not only the failed ones'.
+# count-results.mjs reads the counts from there.
+export NEXT_TEST_EMIT_ALL_OUTPUT=1
 # run-tests.js's passed-test cache keys on GITHUB_SHA; on a re-run attempt it would skip tests that
 # passed before and report them as never run.
 export NEXT_TEST_SKIP_RESULT_CACHE=1
@@ -105,6 +110,7 @@ for suite in "${suite_order[@]}"; do
   mapfile -t files < <(printf '%s' "${shard_files[$suite]}")
   log="$RESULTS_DIR/logs/$VARIANT-${suite//\//_}-shard$SHARD.log"
   export NEXT_DEPLOY_CURRENT_SUITE="$suite"
+  export NEXT_DEPLOY_SERVER_LOGS_DIR="$SERVER_LOGS_ROOT/${suite//\//_}"
   for file in "${files[@]}"; do
     rm -f "$NEXT_REPO_DIR/$file.results.json"
   done
@@ -120,23 +126,10 @@ for suite in "${suite_order[@]}"; do
   elapsed=$((SECONDS - started))
   stop_leftover_servers
 
-  # passed, failed, skipped, total summed over this part's jest JSON files.
-  # shellcheck disable=SC2016
-  counts="$(cd "$NEXT_REPO_DIR" && node -e '
-    const fs = require("node:fs");
-    const sum = [0, 0, 0, 0];
-    for (const file of process.argv.slice(1)) {
-      try {
-        const r = JSON.parse(fs.readFileSync(`${file}.results.json`, "utf8"));
-        sum[0] += r.numPassedTests ?? 0;
-        sum[1] += r.numFailedTests ?? 0;
-        sum[2] += (r.numPendingTests ?? 0) + (r.numTodoTests ?? 0);
-        sum[3] += r.numTotalTests ?? 0;
-      } catch {}
-    }
-    console.log(sum.join("\t"));
-  ' "${files[@]}")"
-  IFS=$'\t' read -r passed failed _ _ <<<"$counts"
+  # passed, failed, skipped, total (and test files without results) for this part.
+  counts="$(cd "$NEXT_REPO_DIR" && node "$HERE/count-results.mjs" "$log" "${files[@]}")"
+  IFS=$'\t' read -r passed failed skipped total unknown <<<"$counts"
+  counts="$passed"$'\t'"$failed"$'\t'"$skipped"$'\t'"$total"
 
   # "pass" means at least one test passed and none failed. A clean exit with nothing passed or
   # failed is "skipped": the files are gated off in deploy mode (@force-gate !deploy,
@@ -152,8 +145,14 @@ for suite in "${suite_order[@]}"; do
   fi
   if [ "$status" = fail ] || [ "$status" = timeout ]; then
     tail -n 150 "$log"
+  else
+    # Server logs are kept only for parts worth triaging.
+    rm -rf "$NEXT_DEPLOY_SERVER_LOGS_DIR"
   fi
   echo "::endgroup::"
+  if [ "${unknown:-0}" -gt 0 ]; then
+    echo "::warning::$VARIANT $suite: no jest results for $unknown of ${#files[@]} test files; counts are partial"
+  fi
 
   echo "$VARIANT $suite: $status (${elapsed}s; passed/failed/skipped/total: ${counts//$'\t'//})"
   printf '%s\t%s\t%s\t%s\t%s\n' "$suite" "$status" "$elapsed" "${#files[@]}" "$counts" >>"$RESULTS"

@@ -13,6 +13,12 @@
 //     result can hide a regression.
 // `pkg-16.5.1` is informational. A skipped `branch` (no withCache yet) never fails the job.
 //
+// known-failures.txt lines are `<suite> [<constraint>] <reason>`. The optional constraint limits
+// the entry to some Next.js versions, compared with NEXT_REF: `<16.5.0-canary.10` applies only
+// below that version (`<`, `<=`, `>`, `>=` all work). An entry with a constraint is a bug in
+// Next itself, and its verdict reads "known Next bug". A ref that is not a version (a branch, a
+// sha) matches every constraint.
+//
 // Independently of `branch`, exit 1 when `baseline` looks like a broken harness: fewer than
 // BASELINE_MIN_PASS_RATE (default 0.5) of the baseline tests that ran passed, or none ran. Plain
 // `next start` passes most of these suites, so a low rate means the deploy script or runner is
@@ -36,6 +42,8 @@ if (!resultsDir || !knownFailuresFile || !shards || !outDir) {
 
 const ref = process.env.NEXT_REF ?? "unknown";
 const VARIANTS = ["baseline", "pkg-16.5.1", "branch"];
+// Variants that wire handlers in; their Notes go in the table.
+const HANDLER_VARIANTS = VARIANTS.filter((variant) => variant !== "baseline");
 // Worst part wins; "skipped" only when every part was skipped (the deploy manifest drops files).
 const RANK = { skipped: 0, pass: 1, missing: 2, timeout: 3, fail: 4 };
 
@@ -45,13 +53,46 @@ function readRows(file) {
     .filter((line) => line.trim() !== "");
 }
 
-const known = new Set(
-  existsSync(knownFailuresFile)
-    ? readRows(knownFailuresFile)
-        .filter((line) => !line.startsWith("#"))
-        .map((line) => line.trim().split(/\s+/)[0])
-    : [],
-);
+/** `v16.5.0-canary.10` -> [16, 5, 0, 10]; a release sorts after its prereleases. */
+function parseVersion(text) {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-[a-z]+\.(\d+))?$/.exec(text ?? "");
+  if (!match) return null;
+  const [, major, minor, patch, pre] = match;
+  return [
+    Number(major),
+    Number(minor),
+    Number(patch),
+    pre === undefined ? Number.POSITIVE_INFINITY : Number(pre),
+  ];
+}
+
+function compareVersions(a, b) {
+  for (let i = 0; i < 4; i++) {
+    if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Whether a constraint such as `<16.5.0-canary.10` holds for the ref under test. */
+function refMatches(constraint) {
+  const match = /^(<=|>=|<|>)(.+)$/.exec(constraint);
+  const bound = match && parseVersion(match[2]);
+  if (!bound) throw new Error(`known-failures.txt: bad version constraint ${constraint}`);
+  const current = parseVersion(ref);
+  if (!current) return true;
+  const order = compareVersions(current, bound);
+  return { "<": order < 0, "<=": order <= 0, ">": order > 0, ">=": order >= 0 }[match[1]];
+}
+
+/** suite -> { reason, nextBug } for the entries that apply to this ref. */
+const known = new Map();
+for (const line of existsSync(knownFailuresFile) ? readRows(knownFailuresFile) : []) {
+  if (line.trim().startsWith("#")) continue;
+  const [suite, ...rest] = line.trim().split(/\s+/);
+  const constraint = /^[<>]/.test(rest[0] ?? "") ? rest.shift() : null;
+  if (constraint && !refMatches(constraint)) continue;
+  known.set(suite, { reason: rest.join(" "), nextBug: Boolean(constraint) });
+}
 
 /** variant -> { state: "ran" | "skipped", reason?, incomplete: string[] } */
 const variants = {};
@@ -138,7 +179,8 @@ for (const [suite, bySuite] of [...suites].sort(([a], [b]) => a.localeCompare(b)
     if (known.has(suite)) staleKnown.push(suite);
   } else if (baseline === "pass") {
     if (known.has(suite)) {
-      verdict = "known failure";
+      const { reason, nextBug } = known.get(suite);
+      verdict = `${nextBug ? "known Next bug" : "known failure"}${reason ? ` (${reason})` : ""}`;
     } else {
       verdict = "REGRESSION";
       regressions.push(suite);
@@ -216,7 +258,7 @@ const json = {
   variants: totals,
   harnessBroken,
   regressions,
-  knownFailures: [...known],
+  knownFailures: Object.fromEntries(known),
   suites: report,
 };
 
@@ -226,6 +268,20 @@ function cell(entry) {
     return entry.skipped ? `no tests ran (${entry.skipped} skipped)` : "no tests ran";
   }
   return `${entry.status} ${entry.passed}/${entry.total}${entry.failed ? ` (${entry.failed} failed)` : ""}`;
+}
+
+/** Notes of the handler variants; a note not shared by every variant that ran names its own. */
+function notesCell(row) {
+  const ran = HANDLER_VARIANTS.filter((variant) => variants[variant].state === "ran");
+  const byNote = new Map();
+  for (const variant of ran) {
+    for (const note of row[variant].notes ?? []) {
+      byNote.set(note, [...(byNote.get(note) ?? []), variant]);
+    }
+  }
+  return [...byNote]
+    .map(([note, on]) => (on.length === ran.length ? note : `${note} (${on.join(", ")})`))
+    .join("; ");
 }
 
 const variantLine = (variant) => {
@@ -246,12 +302,11 @@ const lines = [
   "",
   "Cells are `status passed/total`. `pkg-16.5.1` is informational.",
   "",
-  "| Suite | baseline | pkg-16.5.1 | branch | Verdict | Notes |",
-  "|---|---|---|---|---|---|",
+  `| Suite | ${VARIANTS.join(" | ")} | Verdict | Notes |`,
+  `|---|${VARIANTS.map(() => "---|").join("")}---|---|`,
   ...Object.entries(report).map(([suite, row]) => {
-    const notes = [...new Set([...(row["pkg-16.5.1"].notes ?? []), ...(row.branch.notes ?? [])])];
     const verdict = row.verdict === "REGRESSION" ? "**REGRESSION**" : row.verdict;
-    return `| \`${suite}\` | ${cell(row.baseline)} | ${cell(row["pkg-16.5.1"])} | ${cell(row.branch)} | ${verdict} | ${notes.join("; ")} |`;
+    return `| \`${suite}\` | ${VARIANTS.map((v) => cell(row[v])).join(" | ")} | ${verdict} | ${notesCell(row)} |`;
   }),
   "",
 ];
