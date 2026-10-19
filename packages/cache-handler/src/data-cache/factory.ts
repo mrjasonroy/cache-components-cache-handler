@@ -3,29 +3,14 @@
  * Automatically configures handlers based on type and environment variables
  */
 
-import { createRequire } from "node:module";
 import type { RedisOptions } from "ioredis";
+import { loadIoredis } from "../helpers/load-ioredis.js";
 import { createErrorReporter } from "./error-reporter.js";
 import { createIoredisAdapter } from "./ioredis-adapter.js";
 import { type IsrWarningOptions, warnMissingIsrHandlerOnce } from "./isr-warning.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import { createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
-
-const nodeRequire = createRequire(import.meta.url);
-
-/**
- * Lazy load ioredis and return the constructor
- */
-function loadIoredis(type: string): typeof import("ioredis").default {
-  try {
-    return nodeRequire("ioredis");
-  } catch {
-    throw new Error(
-      `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,
-    );
-  }
-}
 
 /**
  * Default per-command timeout for Redis/Valkey/ElastiCache clients, in ms.

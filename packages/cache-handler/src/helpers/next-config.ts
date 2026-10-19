@@ -4,6 +4,12 @@
 
 export interface CacheHandlerConfig {
   /**
+   * Path to an ISR cache handler (for `cacheHandler` in next.config), only when
+   * `isrHandlerPath` was passed
+   */
+  cacheHandler?: string;
+
+  /**
    * Paths to data cache handlers (for `cacheHandlers` in next.config)
    */
   cacheHandlers: {
@@ -46,12 +52,15 @@ export interface CacheHandlerConfig {
  * ```
  */
 export function createCacheConfig(options: {
+  /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath?: string;
   dataCacheHandlerPath: string;
   disableDefaultMemoryCache?: boolean;
 }): CacheHandlerConfig {
-  const { dataCacheHandlerPath, disableDefaultMemoryCache = true } = options;
+  const { isrHandlerPath, dataCacheHandlerPath, disableDefaultMemoryCache = true } = options;
 
   return createCacheConfigWithProfiles({
+    isrHandlerPath,
     defaultDataCacheHandlerPath: dataCacheHandlerPath,
     remoteDataCacheHandlerPath: dataCacheHandlerPath,
     disableDefaultMemoryCache,
@@ -90,17 +99,21 @@ export function createCacheConfig(options: {
  * ```
  */
 export function createCacheConfigWithProfiles(options: {
+  /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath?: string;
   defaultDataCacheHandlerPath: string;
   remoteDataCacheHandlerPath: string;
   disableDefaultMemoryCache?: boolean;
 }): CacheHandlerConfig {
   const {
+    isrHandlerPath,
     defaultDataCacheHandlerPath,
     remoteDataCacheHandlerPath,
     disableDefaultMemoryCache = true,
   } = options;
 
   return {
+    ...(isrHandlerPath ? { cacheHandler: isrHandlerPath } : {}),
     cacheHandlers: {
       // "use cache" uses this (default cache profile)
       default: defaultDataCacheHandlerPath,

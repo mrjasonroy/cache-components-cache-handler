@@ -8,9 +8,10 @@
  */
 
 export const ISR_WARNING_MESSAGE =
-  "@mrjasonroy/cache-components-cache-handler only handles 'use cache'. If you run more than " +
-  "one instance, configure a shared ISR cacheHandler too, or ISR pages and route handlers won't " +
-  "be shared or revalidated across instances. Pass `suppressIsrWarning: true` to silence this.";
+  "@mrjasonroy/cache-components-cache-handler: createCacheHandler only covers 'use cache'. If you " +
+  "run more than one instance, configure a shared ISR cacheHandler too, or ISR pages and route " +
+  "handlers won't be shared or revalidated across instances. Pass `suppressIsrWarning: true` to " +
+  "silence this.";
 
 export interface IsrWarningOptions {
   /**
