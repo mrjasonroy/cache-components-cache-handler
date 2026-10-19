@@ -47,8 +47,10 @@ export interface PageCacheValue {
  * What Next passes to the handler's constructor.
  */
 export interface PageCacheHandlerContext extends CacheHandlerOptions {
-  /** `<distDir>/server`; its parent holds `BUILD_ID`. */
+  /** `<distDir>/server`; its parent holds `BUILD_ID` and it holds the prerendered build output. */
   serverDistDir?: string;
+  /** Next's file system wrapper, used to read the build output through its `FileSystemCache`. */
+  fs?: unknown;
   dev?: boolean;
   fetchCacheKeyPrefix?: string;
   maxMemoryCacheSize?: number;

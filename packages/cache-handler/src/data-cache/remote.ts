@@ -19,6 +19,7 @@
 
 import { getBuildId } from "../shared/build-id.js";
 import { decodeEntry, encodeEntry } from "../shared/codec.js";
+import { isEdgeRuntime } from "../shared/env.js";
 import { dataKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
@@ -29,6 +30,7 @@ import {
   getCacheRuntime,
   isRedisReady,
 } from "../shared/runtime.js";
+import { missHandler } from "./fallback.js";
 import {
   type StoredDataEntry,
   createPendingSets,
@@ -73,6 +75,7 @@ interface InMemoryEntry {
 export function createRemoteCacheHandler(
   options: RemoteCacheHandlerOptions = {},
 ): DataCacheHandler {
+  if (isEdgeRuntime()) return missHandler;
   const runtime = getCacheRuntime(options);
   const { connection, tags, stores } = runtime;
   const memoryFallback = options.memoryFallback ?? true;

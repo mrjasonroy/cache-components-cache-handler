@@ -366,6 +366,18 @@ describe("TagStore", () => {
     expect(await fake.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).toEqual(["a", "b"]);
   });
 
+  test("updates sent together are one batch; the other send finds nothing left and sends nothing", async () => {
+    const fake = new FakeRedis();
+    const tags = storeOn(fake);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const hset = vi.spyOn(fake, "hset");
+    await Promise.all([tags.update(["a"]), tags.update(["b"])]);
+
+    expect(hset).toHaveBeenCalledTimes(1);
+    expect(errors).not.toHaveBeenCalled();
+    expect(await fake.hmget(tagsKey(PREFIX), "a", "b")).not.toContain(null);
+  });
+
   test("an update made during an outage reaches Redis on reconnect, newer than any before", async () => {
     const shared = new FakeRedis();
     const b = new FakeRedis(shared.items);

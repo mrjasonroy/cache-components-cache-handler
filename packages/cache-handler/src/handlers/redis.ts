@@ -16,6 +16,13 @@
  * - A tag revalidated with `durations` (`revalidateTag(tag, "max")`) leaves the entry servable
  *   until `expire`: it is returned with a `lastModified` far enough back that Next serves it and
  *   regenerates it in the background. Without durations the entry is a miss.
+ * - A prerendered route (`APP_PAGE`, `APP_ROUTE`, `PAGES`) missing from the cache is read from
+ *   the build output on disk, which `next build` writes only there, with `lastModified` the build
+ *   time and the same tag check, so a revalidation since the build always wins. It is then written
+ *   to Redis unless another instance got there first. With Redis configured this happens only
+ *   while the tag records could be read from Redis.
+ * - On the edge runtime (Next bundles this handler into the middleware) every read is a miss and
+ *   writes and revalidations do nothing.
  * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
  * - While Redis is down, entries go to process memory for at most 60 s, never read and dropped
  *   once Redis is back. Without Redis (no URL, `next build`, `CACHE_REDIS=off`) everything is in
@@ -27,6 +34,7 @@ import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
 import { decodeEntry, encodeEntry } from "../shared/codec.js";
+import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS, pageKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
@@ -39,6 +47,7 @@ import {
   getCacheRuntime,
   isRedisReady,
 } from "../shared/runtime.js";
+import { readBuildOutput } from "./build-output.js";
 import type {
   PageCacheControl,
   PageCacheGetContext,
@@ -225,6 +234,7 @@ export class RedisCacheHandler {
   private readonly options: RedisCacheHandlerOptions;
   private readonly memoryFallback: boolean;
   private readonly log: ((...args: unknown[]) => void) | undefined;
+  private readonly edge = isEdgeRuntime();
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     registerServerDistDir(options.serverDistDir);
@@ -251,15 +261,20 @@ export class RedisCacheHandler {
    * Without Redis, or while it is down, tags are checked against local state only.
    */
   async get(cacheKey: string, ctx?: PageCacheGetContext): Promise<PageCacheHandlerValue | null> {
+    if (this.edge) return null;
     const { connection, stores } = this.runtime;
     const softTags = ctx?.softTags ?? ctx?.implicitTags ?? [];
     const fetchTags = ctx?.kind === "FETCH" ? (ctx.tags ?? []) : [];
 
     let entry = (stores.page.get(cacheKey) as InMemoryPage | undefined)?.entry;
+    // Whether the tag records that apply are current: always without Redis, and with Redis only
+    // once they have been read from it.
+    let tagsCurrent = !connection;
     if (connection) {
       if (await isRedisReady(this.runtime)) {
         try {
           entry = await this.readWithTags(cacheKey, entry, [...softTags, ...fetchTags]);
+          tagsCurrent = true;
         } catch (error) {
           this.runtime.reportError("get", error);
           return null;
@@ -268,13 +283,19 @@ export class RedisCacheHandler {
         entry = (stores.pageFallback.get(cacheKey) as InMemoryPage | undefined)?.entry;
       }
     }
+    let built = false;
+    if (!entry?.value && tagsCurrent) {
+      entry = await this.readBuildOutput(cacheKey, ctx);
+      built = entry !== undefined;
+    }
     if (!entry?.value) {
       this.log?.("get", cacheKey, "miss");
       return null;
     }
 
     const result = this.toResult(entry, [...entry.tags, ...softTags, ...fetchTags], ctx);
-    this.log?.("get", cacheKey, result ? "hit" : "invalidated");
+    this.log?.("get", cacheKey, result ? (built ? "build output" : "hit") : "invalidated");
+    if (result && built) await this.keepBuildOutput(cacheKey, entry);
     return result;
   }
 
@@ -294,6 +315,61 @@ export class RedisCacheHandler {
       const entry = decodeEntry<StoredPageEntry>(await connection.client.getBuffer(key));
       return entry?.value ? entry : undefined;
     });
+  }
+
+  /**
+   * The prerendered build output of `cacheKey`, if it has one, with the records of its tags read
+   * from Redis. `lastModified` stays the build time, so the tag check that follows rejects it once
+   * any of its tags was revalidated after the build.
+   */
+  private async readBuildOutput(
+    cacheKey: string,
+    ctx: PageCacheGetContext | undefined,
+  ): Promise<StoredPageEntry | undefined> {
+    const found = await readBuildOutput(this.options, cacheKey, ctx, (error) =>
+      this.runtime.reportError("build output", error),
+    );
+    if (!found) return undefined;
+    const entry: StoredPageEntry = {
+      value: found.value,
+      tags: getEntryTags(found.value),
+      lastModified: found.lastModified,
+    };
+    if (found.cacheControl) entry.cacheControl = found.cacheControl;
+    try {
+      await this.runtime.tags.fetch(entry.tags);
+    } catch (error) {
+      this.runtime.reportError("get", error);
+      return undefined;
+    }
+    return entry;
+  }
+
+  /**
+   * Keep a build-output entry that passed the tag check: in Redis (`NX`, so an entry another
+   * instance or a render wrote first wins), or in process memory without Redis. A failed write
+   * only costs the next read another trip to the disk.
+   */
+  private async keepBuildOutput(cacheKey: string, entry: StoredPageEntry): Promise<void> {
+    const { connection, stores } = this.runtime;
+    const lifetime = getEntryLifetime(
+      entry.value,
+      { cacheControl: entry.cacheControl },
+      this.options.defaultTTL,
+    );
+    if (lifetime <= 0) return;
+    const encoded = encodeEntry(entry);
+    if (!connection) {
+      stores.page.set(cacheKey, { entry }, encoded.byteLength, Date.now() + lifetime * 1000);
+      return;
+    }
+    try {
+      const key = this.redisKey(cacheKey);
+      await connection.client.set(key, encoded, "EX", lifetime, "NX");
+      stores.entryTags.set(key, entry.tags, entry.tags.length, null);
+    } catch (error) {
+      this.runtime.reportError("set", error);
+    }
   }
 
   private toResult(
@@ -333,7 +409,7 @@ export class RedisCacheHandler {
     data: PageCacheValue | null,
     ctx?: PageCacheSetContext,
   ): Promise<void> {
-    if (!data) return;
+    if (!data || this.edge) return;
     const { connection, stores } = this.runtime;
     const tags = getEntryTags(data, ctx);
     const lifetime = getEntryLifetime(data, ctx, this.options.defaultTTL);
@@ -385,6 +461,7 @@ export class RedisCacheHandler {
     tags: string | string[],
     durations?: { expire?: number } | string,
   ): Promise<void> {
+    if (this.edge) return;
     const list = Array.isArray(tags) ? tags : [tags];
     // A profile name (16.5 callers) cannot be resolved here; treat it as an immediate expiry.
     const resolved = typeof durations === "object" ? durations : undefined;
@@ -401,6 +478,7 @@ export class RedisCacheHandler {
    * Delete one entry.
    */
   async delete(cacheKey: string): Promise<void> {
+    if (this.edge) return;
     const { connection, stores } = this.runtime;
     stores.page.delete(cacheKey);
     stores.pageFallback.delete(cacheKey);

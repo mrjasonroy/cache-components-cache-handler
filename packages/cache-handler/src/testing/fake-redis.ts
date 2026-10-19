@@ -96,8 +96,9 @@ export class FakeRedis extends EventEmitter {
     return value instanceof Buffer ? value : null;
   }
 
-  async set(key: string, value: string | Buffer, ...args: unknown[]): Promise<"OK"> {
+  async set(key: string, value: string | Buffer, ...args: unknown[]): Promise<"OK" | null> {
     this.run("set");
+    if (args.includes("NX") && this.live(key)) return null;
     const item: Item = { value: Buffer.isBuffer(value) ? value : Buffer.from(value) };
     if (args[0] === "EX") item.expiresAt = Date.now() + Number(args[1]) * 1000;
     this.items.set(key, item);
@@ -128,6 +129,10 @@ export class FakeRedis extends EventEmitter {
 
   async hset(key: string, fields: Record<string, string>): Promise<number> {
     this.run("hset");
+    // As Redis: `HSET key` with no field is an error.
+    if (Object.keys(fields).length === 0) {
+      throw new Error("ERR wrong number of arguments for 'hset' command");
+    }
     let item = this.live(key);
     if (!item || !(item.value instanceof Map)) {
       item = { value: new Map<string, string>() };
@@ -180,6 +185,8 @@ export class FakeRedis extends EventEmitter {
 
   async zadd(key: string, ...scoreMembers: (string | number)[]): Promise<number> {
     this.run("zadd");
+    if (scoreMembers.length === 0)
+      throw new Error("ERR wrong number of arguments for 'zadd' command");
     const zset = this.zset(key, true);
     for (let i = 0; i + 1 < scoreMembers.length; i += 2) {
       zset?.set(String(scoreMembers[i + 1]), Number(scoreMembers[i]));

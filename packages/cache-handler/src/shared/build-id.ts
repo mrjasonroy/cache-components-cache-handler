@@ -14,10 +14,12 @@
  * 3. `.next` under the cwd, which is where `next start` run from the project finds it.
  *
  * Without a readable BUILD_ID (`next dev`, tests) the ID is `development`, as Next's own in dev.
+ *
+ * `node:fs` and `node:path` are loaded on first use, not imported: this module is part of the page
+ * handler, which Next also bundles into the edge middleware (see `./node-require.ts`).
  */
 
-import { readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { nodeBuiltin } from "./node-require.js";
 
 const STATE_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/build-id");
 
@@ -41,9 +43,14 @@ function getState(): BuildIdState {
   return state;
 }
 
+function path(): typeof import("node:path") {
+  return nodeBuiltin<typeof import("node:path")>("node:path");
+}
+
 function readBuildIdFile(distDir: string): string | undefined {
   try {
-    return readFileSync(join(distDir, "BUILD_ID"), "utf8").trim() || undefined;
+    const { readFileSync } = nodeBuiltin<typeof import("node:fs")>("node:fs");
+    return readFileSync(path().join(distDir, "BUILD_ID"), "utf8").trim() || undefined;
   } catch {
     return undefined;
   }
@@ -78,6 +85,7 @@ export function findBuildId(
   env: NodeJS.ProcessEnv = process.env,
   cwd: string = process.cwd(),
 ): string {
+  const { isAbsolute, join, resolve } = path();
   const candidates: string[] = [];
   if (serverDistDir) candidates.push(join(serverDistDir, ".."));
   const standalone = standaloneDistDir(env);

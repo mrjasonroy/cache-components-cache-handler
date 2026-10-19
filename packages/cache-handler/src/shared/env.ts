@@ -39,6 +39,15 @@ export function isBuildPhase(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
+ * True on Next's edge runtime (`NEXT_RUNTIME=edge`), where Next can load the page handler as part
+ * of the middleware bundle. There is no Node there to reach Redis or the disk with, so the
+ * handlers are no-ops: every read is a miss and writes and revalidations do nothing.
+ */
+export function isEdgeRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.NEXT_RUNTIME === "edge";
+}
+
+/**
  * True when `CACHE_REDIS=off` (also `0`, `false`, `no`): use memory everywhere.
  */
 export function isRedisDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -155,9 +164,9 @@ export function resolveEnvConnectionOptions(
 }
 
 /**
- * False inside `next build` and with `CACHE_REDIS=off`: Redis must not be used, even when it is
- * configured.
+ * False inside `next build`, on the edge runtime and with `CACHE_REDIS=off`: Redis must not be
+ * used, even when it is configured.
  */
 export function shouldUseRedis(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !isBuildPhase(env) && !isRedisDisabled(env);
+  return !isBuildPhase(env) && !isEdgeRuntime(env) && !isRedisDisabled(env);
 }

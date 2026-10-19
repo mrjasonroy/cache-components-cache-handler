@@ -41,7 +41,8 @@ otherwise collide.
 
 - `updateTags` is 1 HSET + 1 ZADD, however many tags it carries. Neither key has a TTL.
 - An update Redis did not take (an error, or Redis down) stays queued in the process and is sent
-  with the next update or on reconnect. It is re-applied at send time, here and in Redis, so the
+  with the next update or on reconnect. Concurrent sends share the queue: whichever runs first
+  takes all of it, and one that finds it empty sends nothing (`HSET` with no field is an error). It is re-applied at send time, here and in Redis, so the
   replayed record is the newest one and can only invalidate more, never bring back an entry a
   later revalidation on another instance invalidated. Before this a revalidation made during an
   outage reached that process only, for good.
@@ -170,6 +171,36 @@ not let an invalidated entry through:
 - While Redis is down the page and remote handlers serve from the memory fallback, whose entries
   are dropped on reconnect. An immediate revalidation (`expired === stale`) counts as expired
   whatever the reader's clock says, so a reader whose clock lags never serves it as stale.
+
+**Prerendered build output is served through Next's own `FileSystemCache`.** `next build` writes
+prerendered pages and route handler responses (`APP_PAGE`, `APP_ROUTE`, `PAGES`) to
+`<distDir>/server` only, and a custom `cacheHandler` replaces `FileSystemCache` with no disk
+fallback. So every prerendered route missed on its first request and rendered again at runtime:
+sitemaps and robots came back "runtime", not "buildtime", and Next's cache-components deploy suite
+failed on it. On a miss for those kinds the page handler now reads the build output through
+`FileSystemCache`, constructed from the `fs` and `serverDistDir` Next passes to the handler with
+`flushToDisk: false` and no memory cache, so the file layout is always the running Next's own and
+nothing is written to disk. The entry keeps `lastModified` = the build time and goes through the
+same tag check as any other, so a tag or path revalidated since the build wins. With Redis it is
+served only after its tag records were read from Redis (while Redis is down, a process that just
+started knows no revalidation, so the build output is a miss), and once it passes the check it is
+written to Redis with `SET NX` so an entry another instance or a render wrote first wins. Without
+Redis it is kept in process memory. The Redis key is build-scoped like every other entry. The build
+writes no `cacheControl` to `.meta`, so a build-output entry revalidated with `{ expire }` is a miss
+rather than served stale; Next takes its schedule from the prerender manifest as it does for its own
+`FileSystemCache`.
+
+**The handlers load on the edge runtime and do nothing there.** Next bundles the page
+`cacheHandler` into the edge middleware too (`OPTIONAL_IMPORT:incrementalCacheHandler`,
+next/dist/build/templates/middleware.js). On the edge runtime `node:module`, `node:fs` and
+`node:path` are stubs whose exports throw when called (`__import_unsupported`,
+next/dist/server/web/globals.js), and `connection.ts` called `createRequire(import.meta.url)` while
+it was evaluated, so the middleware threw and every request was a 500. Now nothing touches a Node
+built-in at import: `require` is created on first use (`shared/node-require.ts`), and `build-id.ts`
+loads `node:fs`/`node:path` when it first reads `BUILD_ID` (`process.getBuiltinModule` where Node
+has it). Under `NEXT_RUNTIME=edge` the page handler's `get` returns `null` and `set`,
+`revalidateTag` and `delete` do nothing; the data handlers are the miss handler; Redis is never
+used.
 
 A client the application passes in is never reconfigured, patched, quit or disconnected. The
 package reaches it through a proxy that bounds its own commands by `commandTimeout`. After 3

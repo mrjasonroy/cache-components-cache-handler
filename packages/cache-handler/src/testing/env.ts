@@ -2,6 +2,7 @@
  * Reset the environment and process-wide state the handlers read. Test-only; not built.
  */
 
+import { resetBuildOutputForTests } from "../handlers/build-output.js";
 import { resetBuildIdForTests } from "../shared/build-id.js";
 import { closeAllRedisConnections } from "../shared/connection.js";
 import { clearAllMemoryStores } from "../shared/memory-store.js";
@@ -21,6 +22,7 @@ const CACHE_ENV = [
   "CACHE_DEBUG",
   "NEXT_PHASE",
   "__NEXT_PRIVATE_STANDALONE_CONFIG",
+  "NEXT_RUNTIME",
 ];
 
 export async function resetCacheState(): Promise<void> {
@@ -29,6 +31,7 @@ export async function resetCacheState(): Promise<void> {
   clearAllMemoryStores();
   resetCacheRuntimesForTests();
   resetBuildIdForTests();
+  resetBuildOutputForTests();
 }
 
 /**

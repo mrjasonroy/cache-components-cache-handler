@@ -20,8 +20,10 @@
  * Without Redis it is a plain memory handler.
  */
 
+import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
+import { missHandler } from "./fallback.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "./remote.js";
 import {
   type StoredDataEntry,
@@ -55,6 +57,7 @@ function keepUntil(stored: StoredDataEntry): number {
  * ```
  */
 export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}): DataCacheHandler {
+  if (isEdgeRuntime()) return missHandler;
   const runtime = getCacheRuntime(options);
   const { tags, stores } = runtime;
   const log = createDebugLog("[LocalCache]:", options.debug);

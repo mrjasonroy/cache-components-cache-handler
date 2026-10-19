@@ -23,14 +23,12 @@
  * client.
  */
 
-import { createRequire } from "node:module";
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import {
   DEFAULT_ERROR_LOG_INTERVAL_MS,
   createErrorReporter,
 } from "../data-cache/error-reporter.js";
-
-const nodeRequire = createRequire(import.meta.url);
+import { requireModule } from "./node-require.js";
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connections");
 const TIMEOUT_MESSAGE = "Command timed out";
@@ -200,7 +198,7 @@ function getRegistry(): Registry {
 
 function loadIoredis(): typeof import("ioredis").default {
   try {
-    return nodeRequire("ioredis");
+    return requireModule<typeof import("ioredis").default>("ioredis");
   } catch {
     throw new Error(
       "ioredis is required for the Redis cache handlers. Install it with: npm install ioredis",

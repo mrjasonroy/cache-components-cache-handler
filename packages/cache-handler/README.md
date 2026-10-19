@@ -176,6 +176,13 @@ The page handler implements Next 16's singular `cacheHandler` contract:
   it is a miss either way.
 - **Schedule.** A page's `cacheControl` is stored with it, so an instance that did not render the
   page revalidates it on the page's own schedule.
+- **Prerendered routes are served from the build output.** `next build` writes prerendered pages
+  and route handlers (sitemaps, robots, manifests) to disk only. On a miss the handler reads them
+  through Next's own `FileSystemCache`, checks their tags with `lastModified` = the build time (a
+  tag or path revalidated since the build wins), then writes them to Redis unless an entry is
+  already there. While Redis is down they are not served, because their tags cannot be checked.
+- **Edge middleware.** Next bundles this handler into the middleware too. On the edge runtime it
+  imports without touching Node built-ins and does nothing: every read is a miss.
 - Cached `fetch` entries share the `page:` key namespace.
 
 ## When Redis goes down

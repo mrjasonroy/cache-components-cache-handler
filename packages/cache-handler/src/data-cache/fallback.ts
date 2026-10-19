@@ -63,7 +63,11 @@ export interface FallbackDataCacheHandlerOptions {
   errorLogIntervalMs?: number;
 }
 
-const missHandler: DataCacheHandler = {
+/**
+ * A handler that stores nothing: every read is a miss. Also what the data handlers are on the edge
+ * runtime.
+ */
+export const missHandler: DataCacheHandler = {
   async get() {
     return undefined;
   },

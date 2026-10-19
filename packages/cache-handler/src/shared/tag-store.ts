@@ -246,6 +246,8 @@ export class TagStore {
       return;
     }
 
+    // Another send may have taken the queue while this one waited for the connection.
+    if (this.unsent.size === 0) return;
     const batch = new Map(this.unsent);
     this.unsent.clear();
     const now = Date.now();
