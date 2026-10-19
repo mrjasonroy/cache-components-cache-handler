@@ -189,6 +189,33 @@ describe("createRedisConnection", () => {
     expect(client.disconnect).toHaveBeenCalledTimes(1);
   });
 
+  test("commands resent after a reconnect are not counted again: no drop on every reconnect", async () => {
+    const client = new FakeClient();
+    const connection = createRedisConnection(asRedis(client), { maxConsecutiveTimeouts: 3 });
+    client.becomeReady();
+
+    // Three commands stall at once and time out: one drop.
+    const stalled = [1, 2, 3].map(() => {
+      const promise = Promise.reject(new Error("Command timed out"));
+      promise.catch(() => {});
+      return { promise };
+    });
+    for (const command of stalled) client.sendCommand(command);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(client.disconnect).toHaveBeenCalledTimes(1);
+
+    // ioredis resends unfulfilled commands on "ready" through sendCommand
+    // (autoResendUnfulfilledCommands, ioredis/built/redis/event_handler.js). Their promises were
+    // rejected long ago; they are not new timeouts.
+    for (let reconnect = 0; reconnect < 3; reconnect++) {
+      client.becomeReady();
+      for (const command of stalled) client.sendCommand(command);
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    expect(client.disconnect).toHaveBeenCalledTimes(1);
+    expect(connection.stats()).toEqual({ timeouts: 3, drops: 1 });
+  });
+
   test("errors other than timeouts do not count", async () => {
     const client = new FakeClient();
     createRedisConnection(asRedis(client), { maxConsecutiveTimeouts: 2 });
@@ -307,6 +334,7 @@ describe("getRedisConnection", () => {
     expect(url).toBe("redis://a:6379");
     expect(options).toMatchObject({
       enableOfflineQueue: false,
+      autoResendUnfulfilledCommands: false,
       commandTimeout: 1000,
       socketTimeout: 2000,
       keepAlive: 10_000,
@@ -397,6 +425,7 @@ describe("a client the application passes in", () => {
     for (let i = 0; i < 3; i++) await client.get("k").catch(() => {});
     expect(connection.isReady()).toBe(false);
     expect(app.disconnect).not.toHaveBeenCalled();
+    expect(connection.stats()).toEqual({ timeouts: 3, drops: 1 });
 
     await new Promise((resolve) => setTimeout(resolve, 60));
     expect(connection.isReady()).toBe(true);

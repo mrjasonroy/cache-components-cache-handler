@@ -93,3 +93,13 @@ These are documented in the README; they are listed here so they are not redisco
 - **`flushCache` empties only the calling process's memory.** Other instances keep their local
   `"use cache"` values until `revalidate` or a tag invalidation. A cross-instance flush would need
   a broadcast (for example a reserved tag written on flush).
+
+## ISSUE-3: Connection tuning is not public
+
+**Status:** Open (pending approval) · **Severity:** Low · **Area:** `shared/runtime.ts`, `shared/connection.ts`
+
+`connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts` exist on the internal
+`RedisConnectionOptions` (defaults 2000 ms, 2000 ms, 3) but not on `CacheOptions`, so an
+application cannot change them (the 16.5 `redis: RedisOptions` object reaches only ioredis's own
+`connectTimeout`/`socketTimeout`). Adding them to `CacheOptions` and forwarding them in
+`resolveConnection` is a possible public API addition, pending approval; nobody has asked for it.

@@ -54,7 +54,13 @@ otherwise collide.
   monotonic writes, not pruning, and touches only `<prefix>tags`, so it runs on a Cluster; it is
   not a two-key script over the separately slotted index. This sets the floor at Redis 6.2
   (`ZADD GT`) with scripting allowed; Valkey has both. The batch send and the outage replay
-  queue use the same path.
+  queue use the same path. There is no Cluster CI lane, so Cluster safety rests on a unit
+  assertion that every EVAL/EVALSHA the tag store sends has `numkeys` 1 and names the hash
+  (a CROSSSLOT error is impossible by construction). The two keys stay separate; any future
+  command spanning both would need a shared hash tag, which this design avoids. The script is sent
+  with EVALSHA and falls back to EVAL on NOSCRIPT, since a restart, failover or `SCRIPT FLUSH`
+  empties the server's script cache; both suites flush it and check the write lands and the next
+  one is EVALSHA again.
 - An update Redis did not take (an error, or Redis down) stays queued in the process and is sent
   with the next update or on reconnect. Concurrent sends share the queue: whichever runs first
   takes all of it, and one that finds it empty sends nothing (`ZADD` with no member is an
@@ -233,6 +239,18 @@ timeouts in a row, the connection reports not ready for 2 s, so the handlers use
 fallback. A successful command after that marks it ready again. A reply that arrives after its own
 timeout fired is ignored: it neither resets the count nor marks the connection ready, so a server
 answering every command in 1.5 s against a 1 s timeout is still dropped.
+
+A connection the package opened is dropped (`disconnect(true)`) after `maxConsecutiveTimeouts`
+command timeouts in a row, counted by wrapping `sendCommand`. ioredis kept the timed-out commands
+and resent them through `sendCommand` on the next `ready` (`autoResendUnfulfilledCommands`,
+ioredis/built/redis/event_handler.js). Their promises had already been rejected, so each resend
+counted at once as another timeout: with 3 or more stalled together, every reconnect was dropped
+again, every ~200 ms, and Redis never came back (reproduced with `docker pause` during concurrent
+5 MB GETs). Now the client never resends (its callers have long since had their timeout and
+moved on, and a resent 5 MB GET only adds load to a recovering server), and the wrapper counts
+each command object once. Either alone fixes the flap; both are kept, the second for redirections
+and for applications that turn resending back on through `redisOptions`. `connection.stats()`
+(internal) counts timeouts and drops for tests.
 
 Entries are scoped by build (`<prefix><buildId>:page:` / `:data:`). Tag records are not, so a
 revalidation reaches every build that is still running. `createCacheHandler` keeps its own key

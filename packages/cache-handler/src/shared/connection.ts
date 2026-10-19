@@ -9,6 +9,8 @@
  * A cache must never take the site down with it, so the client:
  * - never queues commands while disconnected (`enableOfflineQueue: false`) and times them out
  *   (`commandTimeout`), so callers can fall back to memory instead of waiting;
+ * - never resends a command after a reconnect (`autoResendUnfulfilledCommands: false`): its
+ *   caller has long since had its timeout and moved on;
  * - reconnects forever with a backoff capped at 5s (`retryStrategy` never returns `null`, which
  *   would end the client for good);
  * - drops a connection that stops answering without closing: `socketTimeout` when a pending
@@ -160,6 +162,31 @@ export interface RedisConnection {
    * Close the client and forget it, so the next request for this server opens a new one.
    */
   close(): Promise<void>;
+
+  /**
+   * Counters since the connection was created, for tests and diagnostics. Internal.
+   * @internal
+   */
+  stats(): ConnectionStats;
+}
+
+/**
+ * What a connection has seen of the server's health.
+ * @internal
+ */
+export interface ConnectionStats {
+  /** Commands of the package's that timed out (`commandTimeout`), each counted once. */
+  readonly timeouts: number;
+  /**
+   * Times the connection was given up on after `maxConsecutiveTimeouts` timeouts in a row:
+   * dropped and redialled (a client the package opened), or marked not ready (an application's).
+   */
+  readonly drops: number;
+}
+
+interface MutableStats {
+  timeouts: number;
+  drops: number;
 }
 
 /**
@@ -234,21 +261,36 @@ function stableStringify(value: unknown): string {
  * without closing the socket, so a stalled server would otherwise stay `ready` and cost every
  * cached call its full timeout. `disconnect(true)` makes the client not ready at once and
  * reconnects with the usual backoff.
+ *
+ * Each command is watched once. ioredis can send a command object again (on reconnect, when
+ * `autoResendUnfulfilledCommands` is on, or on a Cluster redirection), and its promise may have
+ * been rejected long before: counting it again turned every reconnect into a fresh run of
+ * "timeouts" and dropped the connection again, forever.
  */
-function dropConnectionOnTimeouts(client: Redis, max: number, onDrop: () => void): void {
+function dropConnectionOnTimeouts(
+  client: Redis,
+  max: number,
+  stats: MutableStats,
+  onDrop: () => void,
+): void {
   let timeouts = 0;
+  const watched = new WeakSet<object>();
   const sendCommand = client.sendCommand.bind(client);
   client.sendCommand = ((command, stream) => {
     const result = sendCommand(command, stream);
+    if (watched.has(command)) return result;
+    watched.add(command);
     command.promise.then(
       () => {
         timeouts = 0;
       },
       (error: Error | undefined) => {
         if (error?.message !== TIMEOUT_MESSAGE) return;
+        stats.timeouts += 1;
         timeouts += 1;
         if (timeouts < max) return;
         timeouts = 0;
+        stats.drops += 1;
         onDrop();
         client.disconnect(true);
       },
@@ -266,6 +308,7 @@ function buildClient(options: RedisConnectionOptions): Redis {
     keepAlive: options.keepAlive ?? DEFAULT_KEEP_ALIVE_MS,
     maxRetriesPerRequest: 1,
     enableOfflineQueue: false,
+    autoResendUnfulfilledCommands: false,
     retryStrategy: (times: number) => Math.min(times * 200, 5000),
     ...(options.password ? { password: options.password } : {}),
     ...(options.tls ? { tls: {} } : {}),
@@ -300,6 +343,7 @@ interface UnownedHealth {
 function watchUnownedClient(
   client: RedisClientLike,
   options: { commandTimeout: number; max: number; cooldownMs: number },
+  stats: MutableStats,
   onUnhealthy: () => void,
   onRecover: () => void,
 ): { proxy: RedisClientLike; health: UnownedHealth } {
@@ -316,10 +360,12 @@ function watchUnownedClient(
       }
       return;
     }
+    stats.timeouts += 1;
     timeouts += 1;
     if (timeouts < options.max) return;
     // One more timeout after the cooldown marks it again at once.
     timeouts = options.max - 1;
+    stats.drops += 1;
     unhealthyUntil = Date.now() + options.cooldownMs;
     if (!marked) onUnhealthy();
     marked = true;
@@ -390,6 +436,7 @@ export function createRedisConnection(
   const initialConnectWaitMs = options.initialConnectWaitMs ?? DEFAULT_INITIAL_CONNECT_WAIT_MS;
   const maxTimeouts = options.maxConsecutiveTimeouts ?? DEFAULT_MAX_CONSECUTIVE_TIMEOUTS;
   const readyListeners = new Set<() => void>();
+  const stats: MutableStats = { timeouts: 0, drops: 0 };
 
   // Log each change of state once. Never the URL: it can carry credentials.
   let state: "connecting" | "up" | "down" = client.status === "ready" ? "up" : "connecting";
@@ -411,7 +458,7 @@ export function createRedisConnection(
   let commandClient = client;
   let health: UnownedHealth = { healthy: () => true };
   if (owned) {
-    dropConnectionOnTimeouts(client as Redis, maxTimeouts, () => {
+    dropConnectionOnTimeouts(client as Redis, maxTimeouts, stats, () => {
       console.warn("[RedisCache]: Redis stopped answering, reconnecting and serving from memory");
     });
   } else {
@@ -422,6 +469,7 @@ export function createRedisConnection(
         max: maxTimeouts,
         cooldownMs: options.unownedCooldownMs ?? DEFAULT_UNOWNED_COOLDOWN_MS,
       },
+      stats,
       () => {
         console.warn("[RedisCache]: Redis stopped answering, serving from memory");
       },
@@ -470,6 +518,7 @@ export function createRedisConnection(
       if (!owned) return;
       await client.quit().catch(() => client.disconnect());
     },
+    stats: () => ({ ...stats }),
   };
 }
 
