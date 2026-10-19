@@ -5,18 +5,22 @@
  * (https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination):
  *
  * - values stay in a per-process LRU and, like Next's built-in handler, are dropped at
- *   `revalidate` (warming an in-memory entry that may be evicted is not worth it);
+ *   `revalidate` (warming an in-memory entry that may be evicted is not worth it), and never kept
+ *   past the longest entry age (365 days);
  * - `updateTags` writes the invalidation to local state and to Redis (tag record plus the
- *   recent-invalidations log);
+ *   tag index);
  * - `refreshTags`, which Next runs once per request before the first read, syncs invalidations
  *   made by other instances since the last sync into local state;
- * - `getExpiration` and the tag check in `get` read local state only, never Redis.
+ * - `getExpiration` and the tag check in `get` read local state only, never Redis. With Redis
+ *   configured, `get` misses until a sync has completed since the connection was (re)established,
+ *   so a failed or skipped sync cannot serve a value another instance invalidated.
  *
  * So `revalidateTag` on one instance also invalidates every other instance's memory copy. During
  * a Redis outage only local tags apply; the next `refreshTags` after reconnecting catches up.
  * Without Redis it is a plain memory handler.
  */
 
+import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "./remote.js";
 import {
@@ -31,6 +35,13 @@ import type { DataCacheHandler } from "./types.js";
  * Options of {@link createLocalCacheHandler}.
  */
 export interface LocalCacheHandlerOptions extends CacheOptions {}
+
+/**
+ * When a value is dropped, in ms: at `revalidate`, and never past the longest entry age.
+ */
+function keepUntil(stored: StoredDataEntry): number {
+  return stored.timestamp + Math.min(stored.revalidate, MAX_ENTRY_AGE_SECONDS) * 1000;
+}
 
 /**
  * Create the `"use cache"` handler: memory values with tag invalidation shared across instances
@@ -52,10 +63,14 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
   return {
     async get(cacheKey) {
       await pendingSets.wait(cacheKey);
+      // Until a sync has completed since Redis (re)connected, local state may lack another
+      // instance's invalidation of this value.
+      if (!tags.isSynced()) {
+        log?.("get", cacheKey, "miss (tags not synced)");
+        return undefined;
+      }
       const stored = stores.local.get(cacheKey) as StoredDataEntry | undefined;
-      const entry = stored
-        ? toDataCacheEntry(stored, tags, stored.timestamp + stored.revalidate * 1000)
-        : undefined;
+      const entry = stored ? toDataCacheEntry(stored, tags, keepUntil(stored)) : undefined;
       log?.("get", cacheKey, entry ? "hit" : "miss");
       return entry;
     },
@@ -64,7 +79,7 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
       await pendingSets.track(cacheKey, async () => {
         const stored = await readPendingEntry(pendingEntry);
         if (!stored) return;
-        const until = stored.timestamp + stored.revalidate * 1000;
+        const until = keepUntil(stored);
         if (until <= Date.now()) return;
         stores.local.set(cacheKey, stored, stored.value.byteLength, until);
         log?.("set", cacheKey);

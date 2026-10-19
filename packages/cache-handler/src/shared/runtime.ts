@@ -102,10 +102,10 @@ export interface RuntimeStores {
   /** `"use cache"` values of the local handler. */
   local: MemoryStore<unknown>;
   /**
-   * The tag list last seen for each page entry's Redis key, so the next `get` reads those tag
-   * records in the same round trip as the entry.
+   * The tag list last seen for each page or remote entry's Redis key, so the next `get` reads
+   * those tag records in the same round trip as the entry.
    */
-  pageTags: MemoryStore<string[]>;
+  entryTags: MemoryStore<string[]>;
 }
 
 /**
@@ -188,7 +188,7 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
     data: new MemoryStore(),
     dataFallback: new MemoryStore(),
     local: new MemoryStore({ maxEntries: 10_000 }),
-    pageTags: new MemoryStore({ maxEntries: 10_000, maxBytes: 8 * 1024 * 1024 }),
+    entryTags: new MemoryStore({ maxEntries: 10_000, maxBytes: 8 * 1024 * 1024 }),
   };
   // Outage entries are never read once Redis is back; dropping them frees the memory.
   connection?.onReady(() => {

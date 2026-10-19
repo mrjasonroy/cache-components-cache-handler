@@ -406,4 +406,33 @@ describe("a client the application passes in", () => {
     expect(app.quit).not.toHaveBeenCalled();
     expect(app.disconnect).not.toHaveBeenCalled();
   });
+
+  test("a reply that arrives after its timeout neither resets the count nor marks it recovered", async () => {
+    vi.useFakeTimers();
+    const app = new AppClient();
+    // A server that answers every command, but only after 1.5 s.
+    app.get.mockImplementation(
+      (key: string) => new Promise((resolve) => setTimeout(() => resolve(key), 1_500)),
+    );
+    const connection = createRedisConnection(app as unknown as Redis, {
+      owned: false,
+      commandTimeout: 1_000,
+      unownedCooldownMs: 60_000,
+    });
+    const onReady = vi.fn();
+    connection.onReady(onReady);
+    const client = connection.client as unknown as AppClient;
+
+    // Three commands in a row each time out; the earlier ones' late replies land in between.
+    for (let i = 0; i < 3; i++) {
+      const pending = client.get("k").catch(() => "timed out");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await pending).toBe("timed out");
+    }
+    expect(connection.isReady()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(connection.isReady()).toBe(false);
+    expect(onReady).not.toHaveBeenCalled();
+  });
 });

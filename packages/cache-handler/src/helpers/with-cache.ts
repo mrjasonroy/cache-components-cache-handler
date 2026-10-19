@@ -19,6 +19,7 @@ export interface WithCacheOptions {
 
   /**
    * Set `cacheHandler` (pages, route handlers and cached `fetch`) and `cacheMaxMemorySize: 0`.
+   * With `false`, a `cacheHandler` already in your config is kept.
    * @default true
    */
   pages?: boolean;
@@ -68,7 +69,8 @@ export type NextConfigFunction<T extends object> = (
  * applies `withCache` to its result. An explicit `cacheMaxMemorySize` is kept, with a warning
  * when it is not 0 (Next's own page LRU would then serve entries other instances revalidated).
  *
- * Throws if the config already sets `cacheHandler` or `cacheHandlers`.
+ * Throws if the config already sets `cacheHandlers`, or `cacheHandler` unless `pages: false`
+ * (then your own `cacheHandler` is kept as it is).
  *
  * @example
  * ```js
@@ -103,13 +105,14 @@ function applyCache<T extends object>(
   options: WithCacheOptions,
 ): T & WithCacheConfig {
   const config = nextConfig as T & Partial<WithCacheConfig>;
-  if (config.cacheHandler !== undefined || config.cacheHandlers !== undefined) {
+  const { useCache = "memory", pages = true, handlers = {} } = options;
+  // With `pages: false` the page handler is the user's own business, so their cacheHandler stays.
+  if ((pages && config.cacheHandler !== undefined) || config.cacheHandlers !== undefined) {
     throw new Error(
       "withCache: the Next config already sets cacheHandler or cacheHandlers. Remove them, or pass your own files with withCache(config, { handlers: { page, default, remote } }).",
     );
   }
 
-  const { useCache = "memory", pages = true, handlers = {} } = options;
   const remote = handlers.remote ? resolvePath(handlers.remote) : entryPath("remote");
   const defaultHandler = handlers.default
     ? resolvePath(handlers.default)

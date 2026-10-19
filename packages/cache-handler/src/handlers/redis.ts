@@ -7,7 +7,7 @@
  *
  * - Entries live under `<prefix><buildId>:page:<key>` in the binary v2 format, for
  *   `1.5 × revalidate` capped at `expire` (`expire`, or `defaultTTL`, without a revalidate period;
- *   never more than the tag TTL).
+ *   never more than the longest entry age, 365 days, which reads enforce too).
  * - Tags (the `x-next-cache-tags` header, `fetch` tags and soft tags) are checked against Redis on
  *   every `get`, in the same round trip as the entry (see {@link RedisCacheHandler.get}), so a
  *   revalidation on any instance is seen by the next read. Next reads this handler before it
@@ -27,7 +27,8 @@ import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
 import { decodeEntry, encodeEntry } from "../shared/codec.js";
-import { TAG_TTL_SECONDS, pageKey } from "../shared/keys.js";
+import { MAX_ENTRY_AGE_SECONDS, pageKey } from "../shared/keys.js";
+import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
   type CacheRuntime,
@@ -73,8 +74,8 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
   tagPrefix?: string;
 
   /**
-   * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 366 days).
-   * @default 31622400 (366 days)
+   * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 365 days).
+   * @default 31536000 (365 days)
    */
   defaultTTL?: number;
 
@@ -148,12 +149,12 @@ function getRevalidate(
 
 /**
  * Seconds the stored entry is kept: `1.5 × revalidate` capped at `expire`; `expire` without a
- * revalidate period; `fallback` with neither. Never more than the tag TTL.
+ * revalidate period; `fallback` with neither. Never more than the longest entry age.
  */
 export function getEntryLifetime(
   data: PageCacheValue,
   ctx: PageCacheSetContext | undefined,
-  fallback: number = TAG_TTL_SECONDS,
+  fallback: number = MAX_ENTRY_AGE_SECONDS,
 ): number {
   const expire = ctx?.cacheControl?.expire;
   const revalidate = getRevalidate(data, ctx);
@@ -166,7 +167,7 @@ export function getEntryLifetime(
   } else {
     lifetime = fallback;
   }
-  return Math.min(lifetime, TAG_TTL_SECONDS);
+  return Math.min(lifetime, MAX_ENTRY_AGE_SECONDS);
 }
 
 /**
@@ -281,30 +282,18 @@ export class RedisCacheHandler {
    * Read the entry from Redis (unless it is held in memory) together with the tag records that
    * apply to it, merging them into the tag store.
    */
-  private async readWithTags(
+  private readWithTags(
     cacheKey: string,
     inMemory: StoredPageEntry | undefined,
     requestTags: string[],
   ): Promise<StoredPageEntry | undefined> {
-    const { connection, stores, tags } = this.runtime;
-    if (!connection) return inMemory;
+    const { connection } = this.runtime;
+    if (!connection) return Promise.resolve(inMemory);
     const key = this.redisKey(cacheKey);
-    const known = inMemory?.tags ?? stores.pageTags.get(key) ?? [];
-    const fetched = new Set([...requestTags, ...known]);
-
-    let entry = inMemory;
-    if (inMemory) {
-      await tags.fetch(fetched);
-    } else {
-      const [raw] = await Promise.all([connection.client.getBuffer(key), tags.fetch(fetched)]);
-      entry = decodeEntry<StoredPageEntry>(raw);
-    }
-    if (!entry?.value) return undefined;
-
-    const missing = entry.tags.filter((tag) => !fetched.has(tag));
-    if (missing.length > 0) await tags.fetch(missing);
-    if (!inMemory) stores.pageTags.set(key, entry.tags, entry.tags.length, null);
-    return entry;
+    return readWithTags(this.runtime, key, inMemory, requestTags, async () => {
+      const entry = decodeEntry<StoredPageEntry>(await connection.client.getBuffer(key));
+      return entry?.value ? entry : undefined;
+    });
   }
 
   private toResult(
@@ -312,7 +301,10 @@ export class RedisCacheHandler {
     allTags: string[],
     ctx: PageCacheGetContext | undefined,
   ): PageCacheHandlerValue | null {
-    const state = this.runtime.tags.check(allTags, entry.lastModified, Date.now());
+    const now = Date.now();
+    // No entry is served past the longest entry age, whatever TTL it was written with.
+    if (now - entry.lastModified >= MAX_ENTRY_AGE_SECONDS * 1000) return null;
+    const state = this.runtime.tags.check(allTags, entry.lastModified, now);
     if (state === "expired") return null;
 
     let lastModified = entry.lastModified;
@@ -370,7 +362,7 @@ export class RedisCacheHandler {
         encoded = encodeEntry(entry);
         const key = this.redisKey(cacheKey);
         await connection.client.set(key, encoded, "EX", lifetime);
-        stores.pageTags.set(key, tags, tags.length, null);
+        stores.entryTags.set(key, tags, tags.length, null);
         this.log?.("set", cacheKey, "redis", { tags, lifetime });
         return;
       } catch (error) {

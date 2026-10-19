@@ -8,6 +8,10 @@
  * <prefix>tag-index             sorted set of the same tags, scored by last update time (ms)
  * ```
  *
+ * The two tag keys have no TTL and are never pruned: a tag record must outlive every entry it can
+ * invalidate. Run Redis with `noeviction` or a `volatile-*` policy (entries have TTLs, tag keys do
+ * not); under an `allkeys-*` policy an evicted tag hash brings every invalidated entry back.
+ *
  * Nothing here starts with `<prefix>tags:`: 16.5's `RedisCacheHandler` and `createCacheHandler`
  * write `nextjs:tags:<tag>` keys of other types, and a tag named `index` must not collide.
  *
@@ -16,11 +20,12 @@
  */
 
 /**
- * Lifetime of tag records and of the tag index, in seconds: 366 days. `cacheLife("max")`
- * has the longest built-in `expire` (365 days) and entry TTLs are capped at this value, so a
- * record always outlives the entries it can invalidate; the extra day absorbs clock skew.
+ * Longest any cached value is kept or served, in seconds: 365 days, `cacheLife("max")`'s
+ * `expire`. Every store caps an entry's age at this on write and on read, whatever its profile
+ * or `defaultTTL` says. Tag records are never deleted, so this is not what keeps an invalidated
+ * value from coming back; it bounds memory and keeps an entry from living forever.
  */
-export const TAG_TTL_SECONDS = 366 * 24 * 60 * 60;
+export const MAX_ENTRY_AGE_SECONDS = 365 * 24 * 60 * 60;
 
 /**
  * Key of a page, route or fetch entry.

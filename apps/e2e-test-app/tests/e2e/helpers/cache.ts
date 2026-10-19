@@ -57,6 +57,22 @@ export async function scanKeys(pattern: string): Promise<string[]> {
   });
 }
 
+/**
+ * A tag's record as the handlers store it: the field of the `<prefix>tags` hash
+ * (`"<stale>,<expired>"`, ms) and its score in the `<prefix>tag-index` sorted set.
+ */
+export async function readTagRecord(
+  tag: string,
+): Promise<{ record: string | null; indexScore: string | null }> {
+  return withRedis(async (redis) => {
+    const [record, indexScore] = await Promise.all([
+      redis.hget(`${KEY_PREFIX}tags`, tag),
+      redis.zscore(`${KEY_PREFIX}tag-index`, tag),
+    ]);
+    return { record, indexScore };
+  });
+}
+
 export function docker(...args: string[]): void {
   execFileSync("docker", args, { stdio: "inherit" });
 }
@@ -102,7 +118,17 @@ export async function waitForChange(
   return current;
 }
 
-export async function revalidate(base: string, body: { tag?: string; path?: string }) {
+/**
+ * How the revalidate route calls `revalidateTag` (see app/api/e2e/revalidate/route.ts):
+ * `"expire-0"` (the default) passes `{ expire: 0 }`, `"none"` passes no profile (no durations reach
+ * the handlers: an immediate miss) and `"max"` passes `"max"` (stale-while-revalidate).
+ */
+export type RevalidateProfile = "expire-0" | "none" | "max";
+
+export async function revalidate(
+  base: string,
+  body: { tag?: string; path?: string; profile?: RevalidateProfile },
+) {
   const response = await fetch(`${base}/api/e2e/revalidate`, {
     method: "POST",
     headers: { "content-type": "application/json" },

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { encodeEntry } from "../shared/codec.js";
+import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
@@ -161,5 +163,74 @@ describe("createRemoteCacheHandler", () => {
     const got = handler.get("k", []);
     await set;
     expect(await read(await got)).toBe("x");
+  });
+
+  test("an entry is never kept or served past the longest entry age", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const days = 86_400;
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    await handler.set("k", entry("x", { revalidate: 400 * days, expire: 500 * days }));
+    expect(fake.ttlOf(KEY)).toBe(MAX_ENTRY_AGE_SECONDS);
+
+    // An entry written with a longer TTL (an older version) is still not served past it.
+    await fake.set(
+      KEY,
+      encodeEntry({
+        value: new TextEncoder().encode("old"),
+        tags: ["products"],
+        stale: 30,
+        timestamp: Date.now(),
+        expire: 500 * days,
+        revalidate: 400 * days,
+      }),
+      "EX",
+      500 * days,
+    );
+    vi.setSystemTime(Date.now() + MAX_ENTRY_AGE_SECONDS * 1000 - 1_000);
+    expect(await read(await handler.get("k", []))).toBe("old");
+    vi.setSystemTime(Date.now() + 1_000);
+    expect(await handler.get("k", [])).toBeUndefined();
+  });
+
+  test("memory entries are capped at the longest entry age too", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const days = 86_400;
+    const handler = createRemoteCacheHandler({ buildId: "b1" });
+    await handler.set("k", entry("x", { revalidate: 400 * days, expire: 500 * days }));
+    vi.setSystemTime(Date.now() + MAX_ENTRY_AGE_SECONDS * 1000);
+    expect(await handler.get("k", [])).toBeUndefined();
+  });
+
+  test("a revalidation on another instance is seen without refreshTags; a tag-read error is a miss", async () => {
+    const shared = new FakeRedis();
+    const a = createRemoteCacheHandler({ client: asClient(shared), buildId: "b1" });
+    const reader = new FakeRedis(shared.items);
+    const b = createRemoteCacheHandler({ client: asClient(reader), buildId: "b1" });
+    await a.set("k", entry("x"));
+    expect(await read(await b.get("k", []))).toBe("x");
+
+    // b's tag sync is skipped or failing; its next get still reads the tag records.
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await a.updateTags(["products"]);
+    expect(await b.get("k", [])).toBeUndefined();
+
+    await a.set("k2", entry("y", { tags: ["other"] }));
+    vi.spyOn(reader, "hmget").mockRejectedValueOnce(new Error("MOVED"));
+    expect(await b.get("k2", [])).toBeUndefined();
+    expect(await read(await b.get("k2", []))).toBe("y");
+  });
+
+  test("soft tag records are read with the entry, for getExpiration", async () => {
+    const shared = new FakeRedis();
+    const a = createRemoteCacheHandler({ client: asClient(shared), buildId: "b1" });
+    const b = createRemoteCacheHandler({
+      client: asClient(new FakeRedis(shared.items)),
+      buildId: "b1",
+    });
+    await a.set("k", entry("x"));
+    await a.updateTags(["_N_T_/shop"]);
+    await b.get("k", ["_N_T_/shop"]);
+    expect(await b.getExpiration(["_N_T_/shop"])).toBeGreaterThan(0);
   });
 });

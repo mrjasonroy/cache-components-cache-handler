@@ -50,12 +50,34 @@ export async function scanKeys(
 }
 
 /**
- * Delete every key matching `pattern` with UNLINK and return how many were deleted. On a Cluster,
- * keys of one node can sit in different slots, so they are unlinked one per command, pipelined.
+ * Outcome of {@link unlinkMatching}.
  */
-export async function unlinkMatching(client: RedisClientLike, pattern: string): Promise<number> {
+export interface UnlinkResult {
+  /** Keys deleted. */
+  deleted: number;
+  /** Matching keys that could not be deleted (a Cluster slot migration that never settled). */
+  failed: number;
+}
+
+/** A Cluster `-MOVED` / `-ASK` reply: the key's slot is migrating or has moved to another node. */
+function isRedirection(error: unknown): boolean {
+  return error instanceof Error && /^(MOVED|ASK) /.test(error.message);
+}
+
+/**
+ * Delete every key matching `pattern` with UNLINK. On a Cluster, keys of one node can sit in
+ * different slots, so they are unlinked one per command, pipelined; a key answered with `-MOVED`
+ * or `-ASK` (its slot is migrating) is retried once through the Cluster client, which follows
+ * the redirection (bounded by its `maxRedirections`). A key that still fails is counted in
+ * `failed` instead of throwing, so the caller can report a partial flush.
+ */
+export async function unlinkMatching(
+  client: RedisClientLike,
+  pattern: string,
+): Promise<UnlinkResult> {
   const cluster = isCluster(client);
   let deleted = 0;
+  let failed = 0;
   await scanKeys(client, pattern, async (node, keys) => {
     if (!cluster) {
       deleted += await node.unlink(...keys);
@@ -64,10 +86,18 @@ export async function unlinkMatching(client: RedisClientLike, pattern: string): 
     const pipeline = node.pipeline();
     for (const key of keys) pipeline.unlink(key);
     const results = (await pipeline.exec()) ?? [];
-    for (const [error, count] of results) {
-      if (error) throw error;
-      deleted += Number(count);
+    for (const [index, [error, count]] of results.entries()) {
+      if (!error) {
+        deleted += Number(count);
+        continue;
+      }
+      if (!isRedirection(error)) throw error;
+      try {
+        deleted += await (client as Redis).unlink(keys[index]);
+      } catch {
+        failed += 1;
+      }
     }
   });
-  return deleted;
+  return { deleted, failed };
 }

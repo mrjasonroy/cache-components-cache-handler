@@ -102,7 +102,7 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 | Option | Default | Meaning |
 |---|---|---|
 | `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
-| `defaultTTL` | `31622400` (366 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`. |
+| `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
 | `redis` | — | The 16.5 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 

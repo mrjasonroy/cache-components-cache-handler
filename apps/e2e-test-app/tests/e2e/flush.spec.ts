@@ -4,6 +4,7 @@ import {
   KEY_PREFIX,
   buildId,
   isRedisLane,
+  readTagRecord,
   revalidate,
   scanKeys,
   uniqueId,
@@ -39,13 +40,17 @@ test.describe("flushCache", () => {
       expect(await scanKeys(buildPattern)).not.toHaveLength(0);
     }).toPass({ timeout: 10_000 });
 
+    const tagBefore = await readTagRecord(`e2e-data-${id}`);
+    expect(tagBefore.record).not.toBeNull();
+    expect(tagBefore.indexScore).not.toBeNull();
+
     const response = await flush(FLUSH_TOKEN);
     expect(response.status).toBe(200);
     const body = (await response.json()) as { deleted: number };
     expect(body.deleted).toBeGreaterThan(0);
 
     expect(await scanKeys(buildPattern)).toHaveLength(0);
-    // Tag records sit above the build ID, so a build-scope flush leaves them.
-    expect(await scanKeys(`${KEY_PREFIX}tag:e2e-data-${id}`)).toHaveLength(1);
+    // Tag records sit above the build ID, so a build-scope flush leaves them as they were.
+    expect(await readTagRecord(`e2e-data-${id}`)).toEqual(tagBefore);
   });
 });

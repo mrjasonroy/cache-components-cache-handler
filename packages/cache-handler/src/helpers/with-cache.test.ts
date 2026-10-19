@@ -38,6 +38,15 @@ describe("withCache", () => {
     expect(config.cacheMaxMemorySize).toBeUndefined();
   });
 
+  test("pages: false keeps the user's own cacheHandler", () => {
+    const config = withCache({ cacheHandler: "/abs/my-handler.mjs" }, { pages: false });
+    expect(config.cacheHandler).toBe("/abs/my-handler.mjs");
+    expect(basename(config.cacheHandlers.remote)).toBe("remote.js");
+    expect(() => withCache({ cacheHandlers: { default: "./x.mjs" } }, { pages: false })).toThrow(
+      /already sets/,
+    );
+  });
+
   test("custom handler files; relative paths resolve against cwd", () => {
     const config = withCache(
       {},

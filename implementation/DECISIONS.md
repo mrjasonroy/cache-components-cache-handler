@@ -39,13 +39,71 @@ key starts with `<prefix>tags:`, the namespace where 16.5's `RedisCacheHandler` 
 `createCacheHandler` keep `nextjs:tags:<tag>` keys of other types; a tag named `index` would
 otherwise collide.
 
-- `updateTags` is 1 HSET + 1 ZADD (+ the two 366-day EXPIREs), however many tags it carries.
+- `updateTags` is 1 HSET + 1 ZADD, however many tags it carries. Neither key has a TTL.
+- An update Redis did not take (an error, or Redis down) stays queued in the process and is sent
+  with the next update or on reconnect. It is re-applied at send time, here and in Redis, so the
+  replayed record is the newest one and can only invalidate more, never bring back an entry a
+  later revalidation on another instance invalidated. Before this a revalidation made during an
+  outage reached that process only, for good.
 - `refreshTags` reads the index from the last sync point (minus 5 s for clock skew), then HMGETs
   only the tags that changed. Both reads are paged at 1,000. The sync point advances to the sync's
-  start, so an idle sync is one empty ZRANGEBYSCORE. A process's first sync reads every tag, paged.
-- The index is trimmed only by age, so a sync can never fall off the end of it and there is no
-  full-resync path. Each process prunes at most hourly, on write: up to 500 tags untouched for
-  366 days, HDEL from the hash and ZREM from the index.
+  own start, and only once the whole range has been read, so an idle sync is one empty
+  ZRANGEBYSCORE and a failed one is retried whole. A process's first sync reads every tag, paged.
+- Pages are walked by score, not by `LIMIT` offset. Offsets broke when a tag on an already-read
+  page was revalidated mid-sync: it moved to the end, every later tag shifted down one rank, and
+  the next offset skipped one tag for good (its score was behind the next sync point). With a
+  score cursor a revalidated tag only moves up, so it is read again, and nothing else moves. Each
+  page restarts at the previous page's last score, inclusive, and fetches only the tags below it,
+  so a run of equal scores split across pages is read whole. A full page of one score (an update
+  of over 1,000 tags) is read with one unbounded `ZRANGEBYSCORE s s`, then stepped past with an
+  exclusive `(s`. This is a keyset cursor on the score alone, not on (score, member): a member
+  bound inside one score is not expressible in a single `ZRANGEBYSCORE` without Lua or rank
+  offsets, and the only ties are tags written by one update, which are read whole.
+- The sync point is the reader's own start time, never the highest score read: a writer whose
+  clock runs ahead would otherwise move it past a lagging writer's updates.
+
+**No pruning: tag records live until a flush.** A record matters while an entry created before
+its `stale` or `expired` time can still be stored: `check` expires an entry created before
+`expired`, including one cached after the revalidation (16.5.1 semantics, Next's own). With
+`revalidateTag(tag, "max")` (`expire` = 365 days) a record is still needed 365 days after the
+revalidation plus the longest entry age, and with a larger custom `expire` longer still. An
+earlier round pruned at 366 and then 731 days, which needed a clamp on `expired`, a margin for
+clock skew and per-key Lua compare-and-delete scripts so a prune could not delete a tag another
+instance was revalidating at that moment. Each was a correctness hazard on its own (a pruned
+record reads as never-invalidated and brings stale entries back). Not pruning removes all of it.
+
+What it costs: a record exists only for a tag that was revalidated at least once (soft `_N_T_`
+tags included, via `revalidatePath`), so growth is the number of distinct tags ever revalidated,
+bounded by the number of entities and paths, not by traffic. At about 230 B per tag (hash field
+plus index member):
+
+| distinct new tags revalidated per day | after 1 year | after 3 years |
+|---|---|---|
+| 100 | 8 MB | 25 MB |
+| 1,000 | 84 MB | 250 MB |
+| 10,000 | 840 MB | 2.5 GB |
+
+A site revalidating by entity id (`product:<id>`) tops out at its catalogue size: 100k products
+is 23 MB. The other cost is a process's first sync, which reads the whole index: about 76 ms per
+100k tags, in 1,000-tag pages, never blocking Redis. Incremental syncs and page reads do not
+depend on the hash's size.
+
+The operational answer to a large hash is `flushCache({ scope: "all" })`, which drops the tags
+with the entries they invalidate, so nothing stale can come back. There is no automatic or
+manual prune. One could be added later as an explicit `pruneTags({ olderThan })`, documented as
+unsafe below the longest `expire` any revalidation used plus the longest entry age.
+
+Because the tag keys have no TTL, Redis must not evict them: run it with `noeviction` or a
+`volatile-*` policy (every entry key has a TTL). Under `allkeys-*` an evicted `<prefix>tags`
+brings every invalidated entry back.
+
+**Entry age.** `MAX_ENTRY_AGE_SECONDS` (365 days, `cacheLife("max")`'s `expire`, in
+`shared/keys.ts`) bounds memory, not tag retention. Every store caps an entry's age at it on write
+(Redis TTLs, the page and data memory stores, the `"use cache"` LRU, the outage fallback, the page
+handler's `defaultTTL`) and checks `timestamp`/`lastModified` against it on read, so an entry
+written by an older version or with a longer TTL is not served either. Before this the
+`"use cache"` handler kept values until `timestamp + revalidate` with no cap.
+
 - Nothing ever runs HGETALL on the hash. At 100k tags HGETALL blocks Redis for about 54 ms, while
   each 1,000-tag page of the first sync takes under 1 ms.
 - `getExpiration` reads only local state.
@@ -97,15 +155,28 @@ about 2% of one core including network overhead. A Redis node handles 100k+ simp
 this starts to matter around 50k page gets/s, or with hundreds of tags per page. Read replicas are
 the remedy if it ever does.
 
-While Redis is down, local tag state applies. It holds every tag record a `get` has read, and the
-`"use cache"` handlers' `refreshTags` keeps it synced from the index. The page handler does no log
-sync of its own. An immediate revalidation (`expired === stale`) counts as expired whatever the
-reader's clock says, so a reader whose clock lags never serves it as stale.
+**An unchecked tag is a miss, never a hit.** A tag read or sync that fails or is skipped must
+not let an invalidated entry through:
+
+- The page handler and `"use cache: remote"` read the tag records in the same round trip as the
+  entry (the entry's own tags as last seen, plus the soft tags), and any error on that read is a
+  miss. Before this the remote handler checked only local tag state, so a revalidation on another
+  instance was invisible until this process happened to sync.
+- `"use cache"` (local) values are checked against local tag state, which is only as good as the
+  last sync. `TagStore.isSynced()` is false with Redis configured until a sync completes, and
+  again after every reconnect and every failed sync; while it is false, `get` misses. A sync
+  skipped because Redis was not ready does not count against the 1 s interval. Without Redis
+  (memory-only mode) local state is authoritative and always synced.
+- While Redis is down the page and remote handlers serve from the memory fallback, whose entries
+  are dropped on reconnect. An immediate revalidation (`expired === stale`) counts as expired
+  whatever the reader's clock says, so a reader whose clock lags never serves it as stale.
 
 A client the application passes in is never reconfigured, patched, quit or disconnected. The
 package reaches it through a proxy that bounds its own commands by `commandTimeout`. After 3
 timeouts in a row, the connection reports not ready for 2 s, so the handlers use the memory
-fallback. A successful command after that marks it ready again.
+fallback. A successful command after that marks it ready again. A reply that arrives after its own
+timeout fired is ignored: it neither resets the count nor marks the connection ready, so a server
+answering every command in 1.5 s against a 1 s timeout is still dropped.
 
 Entries are scoped by build (`<prefix><buildId>:page:` / `:data:`). Tag records are not, so a
 revalidation reaches every build that is still running. `createCacheHandler` keeps its own key

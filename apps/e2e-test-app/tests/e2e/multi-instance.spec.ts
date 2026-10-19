@@ -10,6 +10,14 @@ import {
   waitForStable,
 } from "./helpers/cache";
 
+/**
+ * B's `refreshTags` syncs tag records at most every 100 ms, so give it a moment past the
+ * revalidation before asserting on its very next read.
+ */
+function settleTagSync(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 1_000));
+}
+
 // Two `next start` processes (3000 and 3001) sharing one Redis. Invalidation on A must reach B.
 test.describe("Two instances sharing Redis", () => {
   test.skip(!isRedisLane, "needs Redis and the second instance");
@@ -38,6 +46,40 @@ test.describe("Two instances sharing Redis", () => {
 
     await revalidate(INSTANCE_A, { tag: `e2e-local-${id}` });
     await waitForChange(INSTANCE_B, path, "local", onB);
+  });
+
+  test("revalidateTag(tag) with no profile on A makes B's next read a miss", async () => {
+    const id = uniqueId("multi-none");
+    const path = `/e2e/data?id=${id}`;
+
+    const onA = await waitForStable(INSTANCE_A, path, "remote");
+    await expect(async () => {
+      expect(await readStamp(INSTANCE_B, path, "remote")).toBe(onA);
+    }).toPass({ timeout: 15_000 });
+
+    // No durations reach updateTags: the record expires now, so there is no stale window.
+    await revalidate(INSTANCE_A, { tag: `e2e-remote-${id}`, profile: "none" });
+    await settleTagSync();
+
+    const fresh = await readStamp(INSTANCE_B, path, "remote");
+    expect(fresh, "B's first read after the revalidation must be a fresh render").not.toBe(onA);
+  });
+
+  test('revalidateTag(tag, "max") on A: B serves the old value once more, then a new one', async () => {
+    const id = uniqueId("multi-max");
+    const path = `/e2e/data?id=${id}`;
+
+    const onA = await waitForStable(INSTANCE_A, path, "remote");
+    await expect(async () => {
+      expect(await readStamp(INSTANCE_B, path, "remote")).toBe(onA);
+    }).toPass({ timeout: 15_000 });
+
+    await revalidate(INSTANCE_A, { tag: `e2e-remote-${id}`, profile: "max" });
+    await settleTagSync();
+
+    // Stale-while-revalidate: the stale entry is served and regenerated in the background.
+    expect(await readStamp(INSTANCE_B, path, "remote"), "stale read on B").toBe(onA);
+    await waitForChange(INSTANCE_B, path, "remote", onA);
   });
 
   test("pages are shared, and revalidatePath on A refreshes B", async () => {

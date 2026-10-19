@@ -5,20 +5,36 @@ import { flushCache } from "./flush.js";
 import { getCacheRuntime } from "./runtime.js";
 import { escapeGlob } from "./scan.js";
 
-/** A Cluster stand-in: `nodes("master")` and a per-node pipeline. */
+/**
+ * A Cluster stand-in: `nodes("master")` and a per-node pipeline. Keys in `migrating` answer the
+ * node pipeline with `-MOVED`, as during a slot migration; the cluster's own `unlink` follows the
+ * redirection unless the key is also in `stuck`.
+ */
 class FakeCluster {
+  readonly migrating = new Set<string>();
+  readonly stuck = new Set<string>();
   constructor(readonly masters: FakeRedis[]) {}
+  async unlink(key: string): Promise<number> {
+    if (this.stuck.has(key)) throw new Error("Too many Cluster redirections. Last error: MOVED");
+    let count = 0;
+    for (const node of this.masters) count += await node.unlink(key);
+    return count;
+  }
   nodes(_role: "master") {
     return this.masters.map((node) =>
       Object.assign(node, {
         pipeline: () => {
-          const ops: Promise<number>[] = [];
+          const ops: Promise<[Error | null, number]>[] = [];
           const pipeline = {
             unlink: (key: string) => {
-              ops.push(node.unlink(key));
+              ops.push(
+                this.migrating.has(key)
+                  ? Promise.resolve([new Error("MOVED 3999 127.0.0.1:7001"), 0])
+                  : node.unlink(key).then((count) => [null, count]),
+              );
               return pipeline;
             },
-            exec: async () => (await Promise.all(ops)).map((count) => [null, count]),
+            exec: async () => Promise.all(ops),
           };
           return pipeline;
         },
@@ -102,6 +118,39 @@ describe("flushCache", () => {
     });
     expect(result.deleted).toBe(4);
     expect(one.commands.filter((c) => c === "unlink")).toHaveLength(3);
+  });
+
+  test("a Cluster: a key answered with -MOVED mid-flush is unlinked through the cluster", async () => {
+    const one = new FakeRedis();
+    await one.set("app:b1:page:/a", "x");
+    await one.set("app:b1:page:/b", "x");
+    const cluster = new FakeCluster([one]);
+    cluster.migrating.add("app:b1:page:/b");
+    const result = await flushCache({
+      client: cluster as unknown as import("ioredis").Cluster,
+      keyPrefix: "app:",
+      buildId: "b1",
+    });
+    expect(result).toEqual({ deleted: 2 });
+    expect(one.items.size).toBe(0);
+  });
+
+  test("a Cluster: a key that still fails after redirection makes the result partial", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const one = new FakeRedis();
+    await one.set("app:b1:page:/a", "x");
+    await one.set("app:b1:page:/b", "x");
+    const cluster = new FakeCluster([one]);
+    cluster.migrating.add("app:b1:page:/b");
+    cluster.stuck.add("app:b1:page:/b");
+    const result = await flushCache({
+      client: cluster as unknown as import("ioredis").Cluster,
+      keyPrefix: "app:",
+      buildId: "b1",
+    });
+    expect(result).toEqual({ deleted: 1, partial: true, failed: 1 });
+    expect([...one.items.keys()]).toEqual(["app:b1:page:/b"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("partial"));
   });
 
   test("without Redis it empties process memory and counts those entries", async () => {

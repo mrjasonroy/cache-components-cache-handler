@@ -131,9 +131,9 @@ pattern:
 
 So `revalidateTag` on instance A also invalidates B's memory copy.
 
-The page handler and the remote handler use the same per-process tag store. Pages are stricter
+The page handler and the remote handler use the same per-process tag store. Both are stricter
 than `"use cache"`: Next reads the page handler before it calls any `refreshTags`, so the page
-handler checks the tag records in Redis on every read
+and remote handlers check the tag records in Redis on every read, and a failed tag read is a miss
 ([Pages and route handlers](#pages-and-route-handlers)). Next calls `updateTags` on every handler and then the page handler's
 `revalidateTag` for one `revalidateTag()` call. Identical updates in the same synchronous run are
 written to Redis once; a later identical update is written again.
@@ -141,11 +141,16 @@ written to Redis once; a later identical update is written again.
 Limits worth knowing:
 
 - During a Redis outage only local tags apply. An invalidation made then reaches its own instance
-  only, and a warning is logged. The first sync after Redis returns catches up.
-- A process's first sync reads every tag in the index, 1,000 per round trip. After that it reads
-  only what changed. The index is trimmed by age only, so a sync never misses an update.
-- Tags untouched for 366 days (longer than any entry can live) are pruned from both keys, at
-  most hourly per process.
+  first, and a warning is logged; it is sent to Redis when the connection is back, as a fresh
+  revalidation. Until a `"use cache"` instance has synced since it (re)connected, its memory
+  values are misses rather than possibly stale hits.
+- A process's first sync reads every tag in the index, 1,000 per round trip, paging by score so
+  a tag revalidated mid-sync can never push another out of reach. After that it reads only what
+  changed. The index is trimmed by age only, so a sync never misses an update.
+- Tag records are never deleted, except by `flushCache({ scope: "all" })`: a deleted record would
+  read as never-invalidated and bring stale entries back. Only tags that were revalidated get a
+  record, about 230 B each, so the hash grows with the distinct tags ever revalidated (100,000
+  tags take about 23 MB). No entry is kept or served past 365 days.
 - Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
   instances until the tag is invalidated again.
 
@@ -155,8 +160,8 @@ The page handler implements Next 16's singular `cacheHandler` contract:
 
 - **Lifetime.** An entry is kept for `1.5 × revalidate`, capped at the profile's `expire`. That
   keeps a stale-while-revalidate window without keeping dead pages forever. An entry with `expire`
-  but no `revalidate` is kept for `expire`. With neither, it is kept for `defaultTTL` (366 days).
-  Nothing is kept longer than 366 days.
+  but no `revalidate` is kept for `expire`. With neither, it is kept for `defaultTTL` (365 days).
+  Nothing is kept or served longer than 365 days.
 - **Tags, checked in Redis on every read.** A `get` sends the entry `GET` together with one
   `HMGET` of every tag record that applies: the soft tags (`revalidatePath`'s implicit path tags),
   the `fetch` tags, and the entry's own tags (the `x-next-cache-tags` header) as this process last
@@ -224,7 +229,11 @@ export async function POST(request: Request) {
 ```
 
 `scope: "all"` matches by prefix, so it also deletes keys written under the same prefix by
-`createCacheHandler` and by 16.5.x's `RedisCacheHandler`.
+`createCacheHandler` and by 16.5.x's `RedisCacheHandler`. With the default `nextjs:` prefix that
+means everything under it, 16.5's `nextjs:cache:*`, `nextjs:tags:*` and `nextjs:data-cache:*`
+included, and any other app's keys that share the `nextjs:` prefix. On a Cluster, a key caught
+in a slot migration is retried through the Cluster client; if any still fail, `flushCache` logs a
+warning and returns `{ deleted, partial: true, failed }` instead of throwing, so run it again.
 
 ## Custom handlers
 
@@ -305,7 +314,7 @@ All three factories take `CacheOptions`:
 
 `createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
 `BUILD_ID`), the build that scopes entry keys. `createRedisCacheHandler` also takes `defaultTTL`,
-in seconds, for entries with neither `revalidate` nor `expire` (default 366 days).
+in seconds, for entries with neither `revalidate` nor `expire` (default and maximum 365 days).
 
 `CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
 
@@ -337,10 +346,11 @@ The [deprecated exports](#deprecated) are still exported.
 
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
 is read from the build output that `next start` and a standalone `server.js` use, and it is
-`development` under `next dev`. Every key has a TTL. Remote entries expire at `expire`; page
+`development` under `next dev`. Every entry key has a TTL. Remote entries expire at `expire`; page
 entries as described under [Pages and route handlers](#pages-and-route-handlers). The two tag keys
-are shared by every build and get a 366-day TTL on every update; tags untouched for 366 days are
-pruned from both, at most hourly.
+are shared by every build and have no TTL: they are kept until `flushCache({ scope: "all" })`.
+Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy (`volatile-lru`), never
+`allkeys-*`: an evicted tag hash brings every invalidated entry back.
 
 `createCacheHandler` keeps its 16.5 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
 
@@ -351,9 +361,9 @@ Redis command volume, not latency, is what grows with traffic:
 | Operation | Redis commands |
 |---|---|
 | Page, route handler or cached `fetch` read | 1 `GET` + 1 `HMGET` of every tag that applies (soft tags, `fetch` tags, the entry's tags), in one round trip. The first read of an entry by a process that did not write it is 3 commands in 2 round trips. |
-| `"use cache: remote"` read | 1 `GET`. Tags are checked against local state. |
+| `"use cache: remote"` read | 1 `GET` + 1 `HMGET` of the entry's tags and the soft tags, in one round trip (2 round trips the first time a process reads an entry it did not write). |
 | `"use cache"` (memory) read | none. One tag sync per request, at most every 100 ms: 1 `ZRANGEBYSCORE` of the index since the last sync, plus 1 `HMGET` of the tags that changed, if any. |
-| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `HSET` + 1 `ZADD` + 2 `EXPIRE`, however many tags. |
+| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `HSET` + 1 `ZADD`, however many tags. |
 
 The tag read shares the entry's round trip, so page latency is unchanged; size Redis for the
 command rate. Nothing runs `HGETALL`: an `HMGET` costs in proportion to the tags it reads, not to

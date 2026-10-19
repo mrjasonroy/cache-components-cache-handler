@@ -6,26 +6,33 @@
  * Redis layout (two keys per prefix, whatever the number of tags):
  * - `<prefix>tags`, a hash: field = tag, value = `"<stale>,<expired>"` (ms since the epoch).
  * - `<prefix>tag-index`, a sorted set of the same tags scored by their last update (ms). Each
- *   tag appears once; it is trimmed by age only, so it never loses an update.
+ *   tag appears once.
+ *
+ * Neither key has a TTL and nothing deletes a tag record: a record must outlive every entry it
+ * can invalidate, and the records of every tag ever revalidated are small (see DEC-3 for growth).
+ * Only `flushCache({ scope: "all" })` removes them.
  *
  * - `update` (from `updateTags` and the page handler's `revalidateTag`) records the invalidation in
- *   local state, then sends one HSET of every tag and one ZADD to the index (plus their EXPIRE).
- * - `fetch` reads named records with one HMGET and merges them. The page handler sends it with its
- *   entry GET, in one round trip, because Next reads the singular `cacheHandler` before any
- *   `refreshTags` (next/dist/server/async-storage/work-store.js creates refreshTags lazily and
- *   only use-cache-wrapper.js awaits it).
+ *   local state, then sends one HSET of every tag and one ZADD to the index. An update Redis did
+ *   not acknowledge (an outage, an error) is sent again with the next update or on reconnect.
+ * - `fetch` reads named records with one HMGET and merges them. The page and remote handlers send
+ *   it with their entry GET, in one round trip, because Next reads the singular `cacheHandler`
+ *   before any `refreshTags` (next/dist/server/async-storage/work-store.js creates refreshTags
+ *   lazily and only use-cache-wrapper.js awaits it), and so a failed sync never lets them serve an
+ *   invalidated entry.
  * - `sync` (`refreshTags`, at most every 100 ms) reads the index entries updated since the last
  *   sync minus a skew margin, then HMGETs only those tags: one ZRANGEBYSCORE while nothing
  *   changed. The first sync of a process reads the whole index, in pages of
- *   {@link SYNC_PAGE_SIZE}.
+ *   {@link SYNC_PAGE_SIZE} walked by score, never by offset (see {@link TagStore.readIndexFrom}).
  * - `check` and `getExpiration` read local state only: no Redis call per lookup.
- * - Tags not updated for the tag TTL (366 days) are removed from both keys, at most hourly per
- *   process, a bounded batch at a time.
+ * - `isSynced` says whether local state may be trusted for a value only this process holds (the
+ *   local handler's): with Redis, only once a sync has completed since the connection was last
+ *   (re)established.
  *
  * While Redis is down only local tags apply, and an `update` reaches this process only (a warning
- * is logged). On reconnect the next sync catches up on every invalidation made since the last one.
- * Writers' clocks may differ by up to {@link SYNC_SKEW_MS}; a larger skew can delay an
- * invalidation on other instances until the tag is updated again.
+ * is logged) until Redis is back. On reconnect the next sync catches up on every invalidation
+ * made since the last one. Writers' clocks may differ by up to {@link SYNC_SKEW_MS}; a larger
+ * skew can delay an invalidation on other instances until the tag is updated again.
  *
  * Record semantics are 16.5.1's (see `../data-cache/redis.ts`): every update sets `stale = now`;
  * without durations it also sets `expired = now` (immediate), and with `durations.expire` it sets
@@ -34,7 +41,7 @@
 
 import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
 import type { RedisConnection } from "./connection.js";
-import { TAG_TTL_SECONDS, tagIndexKey, tagsKey } from "./keys.js";
+import { tagIndexKey, tagsKey } from "./keys.js";
 
 /**
  * Tags read per round trip by a sync.
@@ -42,16 +49,9 @@ import { TAG_TTL_SECONDS, tagIndexKey, tagsKey } from "./keys.js";
 export const SYNC_PAGE_SIZE = 1_000;
 
 /**
- * Most expired tags removed from Redis by one prune.
- */
-const REMOTE_PRUNE_BATCH = 500;
-
-/**
  * How far before the last sync point a sync reads again, to absorb clock skew between writers.
  */
 export const SYNC_SKEW_MS = 5_000;
-
-const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 /**
  * When a tag was last invalidated, in ms since the epoch.
@@ -67,6 +67,8 @@ export interface TagRecord {
  * The state of an entry given its tags.
  */
 export type TagState = "fresh" | "stale" | "expired";
+
+type Durations = { expire?: number };
 
 /**
  * `"<stale>,<expired>"`, either part empty when unset.
@@ -94,7 +96,7 @@ export function decodeRecord(raw: string | null | undefined): TagRecord | undefi
 export function applyUpdate(
   existing: TagRecord | undefined,
   now: number,
-  durations?: { expire?: number },
+  durations?: Durations,
 ): TagRecord {
   const record: TagRecord = { ...existing, stale: now };
   if (!durations) record.expired = now;
@@ -108,10 +110,13 @@ export function applyUpdate(
 export class TagStore {
   private readonly records = new Map<string, TagRecord>();
   private readonly reportError: ErrorReporter;
+  /** Updates Redis has not acknowledged, by tag: their durations, `null` for an immediate one. */
+  private readonly unsent = new Map<string, Durations | null>();
   private syncedUpTo = 0;
   private lastSyncAt = 0;
-  private lastPruneAt = Number.NEGATIVE_INFINITY;
-  private lastRemotePruneAt = Number.NEGATIVE_INFINITY;
+  private synced = false;
+  /** Bumped each time the connection becomes ready; a sync started before counts for nothing. */
+  private connectedSince = 0;
   private syncing: Promise<void> | undefined;
   private lastUpdate: { key: string; done: Promise<void> } | undefined;
 
@@ -121,6 +126,12 @@ export class TagStore {
     options: { errorLogIntervalMs?: number } = {},
   ) {
     this.reportError = createErrorReporter("[RedisCache]:", options.errorLogIntervalMs);
+    connection?.onReady(() => {
+      this.connectedSince += 1;
+      this.synced = false;
+      this.lastSyncAt = 0;
+      void this.send();
+    });
   }
 
   /**
@@ -128,6 +139,15 @@ export class TagStore {
    */
   get(tag: string): TagRecord | undefined {
     return this.records.get(tag);
+  }
+
+  /**
+   * Whether local state holds every invalidation another instance could have made: always without
+   * Redis; with Redis, once a sync has completed since the connection was last (re)established.
+   * It stays true through an outage that starts after such a sync.
+   */
+  isSynced(): boolean {
+    return !this.connection || this.synced;
   }
 
   /**
@@ -175,19 +195,17 @@ export class TagStore {
    * updates in the same synchronous run share one write; nothing can be cached between them. A
    * later identical update, however soon, is applied again.
    */
-  update(tags: string[], durations?: { expire?: number }): Promise<void> {
+  update(tags: string[], durations?: Durations): Promise<void> {
     const now = Date.now();
     const key = JSON.stringify([[...tags].sort(), durations ?? null]);
     if (this.lastUpdate?.key === key) return this.lastUpdate.done;
 
-    const written = new Map<string, TagRecord>();
     for (const tag of tags) {
-      const record = applyUpdate(this.records.get(tag), now, durations);
-      this.records.set(tag, record);
-      written.set(tag, record);
+      this.records.set(tag, applyUpdate(this.records.get(tag), now, durations));
+      if (this.connection) this.queue(tag, durations ?? null);
     }
 
-    const done = this.write(written, now);
+    const done = this.send();
     const lastUpdate = { key, done };
     this.lastUpdate = lastUpdate;
     queueMicrotask(() => {
@@ -196,62 +214,67 @@ export class TagStore {
     return done;
   }
 
-  private async write(records: Map<string, TagRecord>, now: number): Promise<void> {
+  /**
+   * Queue an update of `tag` for Redis. An immediate update outranks one with durations.
+   */
+  private queue(tag: string, durations: Durations | null): void {
+    const queued = this.unsent.get(tag);
+    this.unsent.set(tag, queued === null ? null : durations);
+  }
+
+  /**
+   * Send every queued update to Redis: one HSET and one ZADD, whatever the number of tags. Updates
+   * that fail stay queued, for the next update or the next reconnect.
+   *
+   * Each update is applied again at the time it is sent, here and in Redis. An update replayed
+   * after an outage then carries the newest `stale` (so the HSET cannot replace a later update
+   * from another instance with an older record); it can only invalidate entries cached since the
+   * original update once more.
+   */
+  private async send(): Promise<void> {
     const connection = this.connection;
-    if (!connection || records.size === 0) return;
+    if (!connection || this.unsent.size === 0) return;
 
     await connection.waitForInitialConnection();
     if (!connection.isReady()) {
       this.reportError(
         "updateTags",
         new Error(
-          `Redis unavailable, revalidation of [${[...records.keys()].join(", ")}] reached this process only; other instances keep their entries until they expire`,
+          `Redis unavailable, revalidation of [${[...this.unsent.keys()].join(", ")}] reached this process only; it is sent to Redis when the connection is back`,
         ),
       );
       return;
     }
 
-    const client = connection.client;
-    const hash = tagsKey(this.keyPrefix);
-    const index = tagIndexKey(this.keyPrefix);
+    const batch = new Map(this.unsent);
+    this.unsent.clear();
+    const now = Date.now();
     const fields: Record<string, string> = {};
     const scores: (string | number)[] = [];
-    for (const [tag, record] of records) {
+    for (const [tag, durations] of batch) {
+      const record = applyUpdate(this.records.get(tag), now, durations ?? undefined);
+      this.records.set(tag, record);
       fields[tag] = encodeRecord(record);
       scores.push(now, tag);
     }
     try {
+      const client = connection.client;
       await Promise.all([
-        client.hset(hash, fields),
-        client.zadd(index, ...scores),
-        client.expire(hash, TAG_TTL_SECONDS),
-        client.expire(index, TAG_TTL_SECONDS),
+        client.hset(tagsKey(this.keyPrefix), fields),
+        client.zadd(tagIndexKey(this.keyPrefix), ...scores),
       ]);
-      await this.pruneRemote(now);
     } catch (error) {
+      for (const [tag, durations] of batch) {
+        if (!this.unsent.has(tag)) this.unsent.set(tag, durations);
+        else if (durations === null) this.unsent.set(tag, null);
+      }
       this.reportError("updateTags", error);
     }
   }
 
   /**
-   * Remove tags not updated for the tag TTL from Redis: no stored entry can still depend on them.
-   * At most hourly per process and {@link REMOTE_PRUNE_BATCH} tags at a time.
-   */
-  private async pruneRemote(now: number): Promise<void> {
-    const connection = this.connection;
-    if (!connection || now - this.lastRemotePruneAt < PRUNE_INTERVAL_MS) return;
-    this.lastRemotePruneAt = now;
-    const client = connection.client;
-    const index = tagIndexKey(this.keyPrefix);
-    const cutoff = now - TAG_TTL_SECONDS * 1000;
-    const old = await client.zrangebyscore(index, "-inf", cutoff, "LIMIT", 0, REMOTE_PRUNE_BATCH);
-    if (old.length === 0) return;
-    await Promise.all([client.hdel(tagsKey(this.keyPrefix), ...old), client.zrem(index, ...old)]);
-  }
-
-  /**
    * Copy invalidations made by other instances into local state. Concurrent calls share one
-   * sync; a call within `minIntervalMs` of the last completed sync does nothing.
+   * sync; a call within `minIntervalMs` of the last sync that reached Redis does nothing.
    */
   sync(minIntervalMs = 0): Promise<void> {
     if (!this.connection) return Promise.resolve();
@@ -260,7 +283,6 @@ export class TagStore {
       return Promise.resolve();
     }
     this.syncing = this.runSync().finally(() => {
-      this.lastSyncAt = Date.now();
       this.syncing = undefined;
     });
     return this.syncing;
@@ -270,39 +292,64 @@ export class TagStore {
     const connection = this.connection;
     if (!connection) return;
     await connection.waitForInitialConnection();
+    // Not stamped as a sync, so the next call tries again.
     if (!connection.isReady()) return;
 
-    const client = connection.client;
-    const index = tagIndexKey(this.keyPrefix);
+    const connectedSince = this.connectedSince;
     const since = this.syncedUpTo - SYNC_SKEW_MS;
     // An update that lands after this point is scored at least `startedAt - SYNC_SKEW_MS` by any
-    // writer within the skew bound, so the next sync can start there.
+    // writer within the skew bound, so the next sync can start there. Scores read are not used:
+    // one from a writer whose clock runs ahead would move the start past a lagging writer's.
     const startedAt = Date.now();
 
     try {
-      let upTo = Math.max(this.syncedUpTo, startedAt);
-      for (let offset = 0; ; offset += SYNC_PAGE_SIZE) {
-        const changed = await client.zrangebyscore(
-          index,
-          since,
-          "+inf",
-          "WITHSCORES",
-          "LIMIT",
-          offset,
-          SYNC_PAGE_SIZE,
-        );
-        const tags: string[] = [];
-        for (let i = 0; i + 1 < changed.length; i += 2) {
-          tags.push(changed[i]);
-          upTo = Math.max(upTo, Number(changed[i + 1]));
-        }
-        await this.fetch(tags);
-        if (tags.length < SYNC_PAGE_SIZE) break;
-      }
-      this.syncedUpTo = upTo;
-      this.prune();
+      await this.readIndexFrom(connection.client, since);
+      // Only once every score from `since` up has been read: a failed sync is retried whole.
+      this.syncedUpTo = Math.max(this.syncedUpTo, startedAt);
+      if (this.connectedSince === connectedSince) this.synced = true;
     } catch (error) {
+      this.synced = false;
       this.reportError("refreshTags", error);
+    }
+    this.lastSyncAt = Date.now();
+  }
+
+  /**
+   * Fetch the record of every tag scored `since` or later, a page of {@link SYNC_PAGE_SIZE} at a
+   * time. Pages are walked by score, not by offset: a tag revalidated meanwhile only moves to a
+   * higher score, so it is read again later and never shifts an unread tag out of reach. Each page
+   * resumes at the previous page's last score, inclusive, so tags sharing that score are read
+   * whole; a page with a single score throughout reads all that score's tags in one command.
+   */
+  private async readIndexFrom(client: RedisConnection["client"], since: number): Promise<void> {
+    const index = tagIndexKey(this.keyPrefix);
+    let min = String(since);
+    for (;;) {
+      const page = await client.zrangebyscore(
+        index,
+        min,
+        "+inf",
+        "WITHSCORES",
+        "LIMIT",
+        0,
+        SYNC_PAGE_SIZE,
+      );
+      if (page.length < SYNC_PAGE_SIZE * 2) {
+        await this.fetch(page.filter((_, i) => i % 2 === 0));
+        return;
+      }
+      const lastScore = page[page.length - 1];
+      if (page[1] === lastScore) {
+        const tied = await client.zrangebyscore(index, lastScore, lastScore);
+        for (let i = 0; i < tied.length; i += SYNC_PAGE_SIZE) {
+          await this.fetch(tied.slice(i, i + SYNC_PAGE_SIZE));
+        }
+        min = `(${lastScore}`;
+      } else {
+        // Tags at the last score may continue on the next page, which starts at that score.
+        await this.fetch(page.filter((_, i) => i % 2 === 0 && page[i + 1] !== lastScore));
+        min = lastScore;
+      }
     }
   }
 
@@ -330,17 +377,5 @@ export class TagStore {
   private merge(tag: string, remote: TagRecord): void {
     const local = this.records.get(tag);
     if (!local || (remote.stale ?? 0) >= (local.stale ?? 0)) this.records.set(tag, remote);
-  }
-
-  /**
-   * Forget records older than the tag TTL: no entry they could invalidate is still stored.
-   */
-  private prune(now: number = Date.now()): void {
-    if (now - this.lastPruneAt < PRUNE_INTERVAL_MS) return;
-    this.lastPruneAt = now;
-    const cutoff = now - TAG_TTL_SECONDS * 1000;
-    for (const [tag, record] of this.records) {
-      if (Math.max(record.stale ?? 0, record.expired ?? 0) < cutoff) this.records.delete(tag);
-    }
   }
 }

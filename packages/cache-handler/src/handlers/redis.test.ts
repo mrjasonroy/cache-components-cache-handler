@@ -12,7 +12,8 @@ vi.mock("node:module", () => ({
   },
 }));
 
-import { TAG_TTL_SECONDS } from "../shared/keys.js";
+import { encodeEntry } from "../shared/codec.js";
+import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
@@ -224,7 +225,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       const [stale, expired] = (raw ?? "").split(",");
       const record = { stale, expired };
       expect(Number(record.expired) - Number(record.stale)).toBe(10_000);
-      expect(fake.ttlOf("nextjs:tags")).toBe(TAG_TTL_SECONDS);
+      expect(fake.ttlOf("nextjs:tags")).toBe(-1);
       expect(await fake.zrangebyscore("nextjs:tag-index", "-inf", "+inf")).toContain("t1");
     });
 
@@ -323,18 +324,49 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(getEntryLifetime(value, { cacheControl: { revalidate: 7 } })).toBe(11);
     });
 
-    test("expire without revalidate, else the fallback, never past the tag TTL", () => {
+    test("expire without revalidate, else the fallback, never past the longest entry age", () => {
       const value = page("x");
       expect(getEntryLifetime(value, { cacheControl: { revalidate: false, expire: 500 } })).toBe(
         500,
       );
       expect(getEntryLifetime(value, { cacheControl: { revalidate: false } })).toBe(
-        TAG_TTL_SECONDS,
+        MAX_ENTRY_AGE_SECONDS,
       );
       expect(getEntryLifetime(value, undefined, 42)).toBe(42);
-      expect(getEntryLifetime(value, { cacheControl: { expire: TAG_TTL_SECONDS * 2 } })).toBe(
-        TAG_TTL_SECONDS,
+      expect(getEntryLifetime(value, undefined, MAX_ENTRY_AGE_SECONDS * 2)).toBe(
+        MAX_ENTRY_AGE_SECONDS,
       );
+      expect(getEntryLifetime(value, { cacheControl: { expire: MAX_ENTRY_AGE_SECONDS * 2 } })).toBe(
+        MAX_ENTRY_AGE_SECONDS,
+      );
+      expect(getEntryLifetime(value, { cacheControl: { revalidate: 300 * 86_400 } })).toBe(
+        MAX_ENTRY_AGE_SECONDS,
+      );
+    });
+
+    test("an entry older than the longest entry age is never served", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const fake = new FakeRedis();
+      const handler = handlerFor(fake);
+      // Written with a longer TTL (an older version, or a defaultTTL past the cap).
+      const days = 86_400;
+      await fake.set(
+        KEY,
+        encodeEntry({ value: page("old"), tags: ["t1"], lastModified: Date.now() }),
+        "EX",
+        500 * days,
+      );
+      const ctx = { kind: "APP_PAGE" as const, isFallback: false };
+      vi.setSystemTime(Date.now() + MAX_ENTRY_AGE_SECONDS * 1000 - 1_000);
+      expect((await handler.get("/blog", ctx))?.value.html).toBe("old");
+      vi.setSystemTime(Date.now() + 1_000);
+      expect(await handler.get("/blog", ctx)).toBeNull();
+
+      // A memory-only entry is capped the same way.
+      const memory = new RedisCacheHandler();
+      await memory.set("/m", page("m"), { cacheControl: { revalidate: false } });
+      vi.setSystemTime(Date.now() + MAX_ENTRY_AGE_SECONDS * 1000);
+      expect(await memory.get("/m", ctx)).toBeNull();
     });
 
     test("FETCH uses data.revalidate; 16.5 ctx.revalidate still works", () => {

@@ -329,18 +329,24 @@ function watchUnownedClient(
 
   const withTimeout = (result: Promise<unknown>): Promise<unknown> =>
     new Promise((resolve, reject) => {
+      // A reply that arrives after its timeout says nothing about the server's health now: it
+      // must not reset the count or mark the client recovered.
+      let timedOut = false;
       const timer = setTimeout(() => {
+        timedOut = true;
         settled(true);
         reject(new Error(TIMEOUT_MESSAGE));
       }, options.commandTimeout);
       timer.unref?.();
       result.then(
         (value) => {
+          if (timedOut) return;
           clearTimeout(timer);
           settled(false);
           resolve(value);
         },
         (error: unknown) => {
+          if (timedOut) return;
           clearTimeout(timer);
           // A reply, even an error reply, means the server answers.
           settled(false);

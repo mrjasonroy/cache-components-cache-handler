@@ -129,8 +129,9 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 <prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```
 
-`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every key has a TTL, so Redis can run with
-`maxmemory-policy volatile-lru` or `allkeys-lru`. Entries are binary and not human-readable.
+`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every entry key has a TTL; the two tag
+keys have none. Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy
+(`volatile-lru`), never `allkeys-lru`: an evicted tag hash brings every invalidated entry back. Entries are binary and not human-readable.
 `CACHE_DEBUG=1` on the app logs what is read and written.
 
 ```bash
@@ -141,8 +142,9 @@ redis-cli zrevrange nextjs:tag-index 0 9 withscores    # the 10 most recently in
 redis-cli hget nextjs:tags <tag>                       # one tag's "<stale>,<expired>"
 ```
 
-The tag keys are shared by every build and refreshed to a 366-day TTL on every update; tags
-untouched for 366 days are pruned from both. In `INFO commandstats`, expect about one `HMGET` per
+The tag keys are shared by every build and never expire or get pruned: a deleted record would read
+as never-invalidated. They grow with the distinct tags ever revalidated (about 230 B each; 100,000
+tags take about 23 MB). `flushCache({ scope: "all" })` clears them with the entries. In `INFO commandstats`, expect about one `HMGET` per
 page `GET`: every page read also reads the records of the tags that apply to it. See
 [Sizing](../README.md#sizing).
 

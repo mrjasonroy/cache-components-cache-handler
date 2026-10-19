@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import {
   INSTANCE_A,
-  KEY_PREFIX,
   buildKeyPattern,
   isRedisLane,
+  readTagRecord,
   revalidate,
   scanKeys,
   uniqueId,
@@ -41,8 +41,10 @@ test.describe('Data handlers ("use cache" / "use cache: remote")', () => {
     await waitForChange(INSTANCE_A, path, "remote", remote);
 
     if (isRedisLane) {
-      // Tag records sit above the build ID: <prefix>tag:<tag>
-      expect(await scanKeys(`${KEY_PREFIX}tag:e2e-data-${id}`)).toHaveLength(1);
+      // Tag records sit above the build ID: a field of <prefix>tags, indexed in <prefix>tag-index.
+      const { record, indexScore } = await readTagRecord(`e2e-data-${id}`);
+      expect(record).toMatch(/^\d+,\d*$/);
+      expect(Number(indexScore)).toBeGreaterThan(0);
     }
   });
 });

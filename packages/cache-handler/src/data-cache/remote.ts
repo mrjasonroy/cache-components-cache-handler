@@ -3,10 +3,13 @@
  * fallback built in.
  *
  * - Entries live under `<prefix><buildId>:data:<key>` in the binary v2 format
- *   (`../shared/codec.ts`), with a TTL of `timestamp + expire` capped at the tag TTL. They are
- *   served until `expire`; past `revalidate` Next serves them and regenerates in the background.
- * - Tags go through the process's shared tag store (`../shared/tag-store.ts`): `refreshTags`
- *   syncs, `getExpiration` and the tag check in `get` read local state only.
+ *   (`../shared/codec.ts`), with a TTL of `timestamp + expire` capped at the longest entry age
+ *   (365 days), which reads enforce too. They are served until `expire`; past `revalidate` Next
+ *   serves them and regenerates in the background.
+ * - Tags go through the process's shared tag store (`../shared/tag-store.ts`). Like the page
+ *   handler, `get` reads the records of the entry's tags and the soft tags from Redis in the same
+ *   round trip as the entry (`../shared/read-with-tags.ts`), so it never depends on `refreshTags`
+ *   having synced; a tag-read error is a miss. `getExpiration` reads local state only.
  * - While Redis is down, entries go to process memory for at most 60 s and that memory is never
  *   read, and is emptied, once Redis is back. `memoryFallback: false` misses instead.
  * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
@@ -17,6 +20,7 @@
 import { getBuildId } from "../shared/build-id.js";
 import { decodeEntry, encodeEntry } from "../shared/codec.js";
 import { dataKey } from "../shared/keys.js";
+import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
   FALLBACK_TTL_SECONDS,
@@ -83,29 +87,38 @@ export function createRemoteCacheHandler(
   }
 
   return {
-    async get(cacheKey) {
+    async get(cacheKey, softTags) {
       await pendingSets.wait(cacheKey);
+      const inMemory = stores.data.get(cacheKey) as InMemoryEntry | undefined;
 
-      const local = fromMemory(stores.data, cacheKey);
-      if (local || !connection) {
-        log?.("get", cacheKey, local ? "memory hit" : "miss");
-        return local;
+      if (!connection) {
+        const entry = inMemory
+          ? toDataCacheEntry(inMemory.stored, tags, inMemory.until)
+          : undefined;
+        log?.("get", cacheKey, entry ? "memory hit" : "miss");
+        return entry;
       }
 
       if (!(await isRedisReady(runtime))) {
         log?.("get", cacheKey, "Redis down");
+        if (inMemory) return toDataCacheEntry(inMemory.stored, tags, inMemory.until);
         return memoryFallback ? fromMemory(stores.dataFallback, cacheKey) : undefined;
       }
 
+      // The entry's tag records (and the soft tags', for `getExpiration`) come from Redis with the
+      // entry, so a failed or skipped `refreshTags` never serves an invalidated entry.
       try {
-        const stored = decodeEntry<StoredDataEntry>(
-          await connection.client.getBuffer(keyOf(cacheKey)),
-        );
-        if (!stored || !(stored.value instanceof Uint8Array)) {
+        const key = keyOf(cacheKey);
+        const stored = await readWithTags(runtime, key, inMemory?.stored, softTags, async () => {
+          const found = decodeEntry<StoredDataEntry>(await connection.client.getBuffer(key));
+          return found && found.value instanceof Uint8Array ? found : undefined;
+        });
+        if (!stored) {
           log?.("get", cacheKey, "miss");
           return undefined;
         }
-        const entry = toDataCacheEntry(stored, tags, stored.timestamp + stored.expire * 1000);
+        const until = inMemory ? inMemory.until : stored.timestamp + stored.expire * 1000;
+        const entry = toDataCacheEntry(stored, tags, until);
         log?.("get", cacheKey, entry ? "hit" : "invalidated");
         return entry;
       } catch (error) {
@@ -136,7 +149,9 @@ export function createRemoteCacheHandler(
 
         if (await isRedisReady(runtime)) {
           try {
-            await connection.client.set(keyOf(cacheKey), encodeEntry(stored), "EX", ttl);
+            const key = keyOf(cacheKey);
+            await connection.client.set(key, encodeEntry(stored), "EX", ttl);
+            stores.entryTags.set(key, stored.tags, stored.tags.length, null);
             log?.("set", cacheKey, "redis", { ttl });
             return;
           } catch (error) {

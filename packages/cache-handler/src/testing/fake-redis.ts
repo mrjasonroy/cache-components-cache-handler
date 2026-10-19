@@ -205,9 +205,20 @@ export class FakeRedis extends EventEmitter {
     ...options: (string | number)[]
   ): Promise<string[]> {
     this.run("zrangebyscore");
-    const low = min === "-inf" ? Number.NEGATIVE_INFINITY : Number(min);
-    const high = max === "+inf" ? Number.POSITIVE_INFINITY : Number(max);
-    let matched = this.sorted(key).filter(([, score]) => score >= low && score <= high);
+    const bound = (value: number | string, infinite: string, inf: number) => {
+      const text = String(value);
+      if (text === infinite) return { at: inf, open: false };
+      return text.startsWith("(")
+        ? { at: Number(text.slice(1)), open: true }
+        : { at: Number(text), open: false };
+    };
+    const low = bound(min, "-inf", Number.NEGATIVE_INFINITY);
+    const high = bound(max, "+inf", Number.POSITIVE_INFINITY);
+    let matched = this.sorted(key).filter(
+      ([, score]) =>
+        (low.open ? score > low.at : score >= low.at) &&
+        (high.open ? score < high.at : score <= high.at),
+    );
     const limit = options.indexOf("LIMIT");
     if (limit >= 0) {
       const offset = Number(options[limit + 1]);

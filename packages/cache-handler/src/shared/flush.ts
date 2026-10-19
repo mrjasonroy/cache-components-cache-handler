@@ -31,13 +31,22 @@ export interface FlushCacheOptions extends CacheOptions {
 export interface FlushCacheResult {
   /** Redis keys deleted; without Redis, in-process entries dropped. */
   deleted: number;
+  /**
+   * Set when some matching keys could not be deleted: on a Cluster, a key whose slot was
+   * migrating and still failed after following the `-MOVED` / `-ASK` redirection. Run it again.
+   */
+  partial?: true;
+  /** How many matching keys could not be deleted; set with `partial`. */
+  failed?: number;
 }
 
 /**
  * Delete this app's cache entries with SCAN + UNLINK (every master of a Cluster is scanned), and
  * empty this process's memory stores. Without Redis configured it only empties the memory stores
  * and returns how many entries they held. Throws, deleting nothing, if Redis is configured but
- * unavailable, or for `scope: "all"` with an empty `keyPrefix`.
+ * unavailable, or for `scope: "all"` with an empty `keyPrefix`. On a Cluster, a key caught in a slot
+ * migration is retried through the Cluster client; any that still fail are reported with
+ * `partial: true` and `failed`, and a warning is logged, instead of failing the whole flush.
  *
  * Put it behind your own authenticated route; the package ships no HTTP endpoint.
  *
@@ -67,8 +76,12 @@ export async function flushCache(options: FlushCacheOptions = {}): Promise<Flush
     options.scope === "all"
       ? `${prefix}*`
       : `${prefix}${escapeGlob(options.buildId ?? getBuildId())}:*`;
-  const deleted = await unlinkMatching(connection.client, pattern);
+  const { deleted, failed } = await unlinkMatching(connection.client, pattern);
   // Only once Redis is flushed: a failed flush leaves this process as consistent as Redis.
   clearAllMemoryStores();
-  return { deleted };
+  if (failed === 0) return { deleted };
+  console.warn(
+    `flushCache: partial flush, ${failed} key(s) matching ${pattern} could not be deleted during a Cluster slot migration; run it again`,
+  );
+  return { deleted, partial: true, failed };
 }
