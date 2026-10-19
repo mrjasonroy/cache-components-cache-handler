@@ -412,6 +412,39 @@ describe("TagStore", () => {
     expect(await fake.hmget(tagsKey(PREFIX), "a", "b")).not.toContain(null);
   });
 
+  test("a revalidation sent together with another is not done until Redis took the batch holding it", async () => {
+    const fake = new FakeRedis();
+    const tags = storeOn(fake);
+    const { held, release } = holdWrites(fake);
+    let bDone = false;
+    const a = tags.update(["a"]);
+    const b = tags.update(["b"]).then(() => {
+      bDone = true;
+    });
+    await held;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(bDone).toBe(false);
+
+    release();
+    await Promise.all([a, b]);
+    expect(await fake.hmget(tagsKey(PREFIX), "b")).not.toEqual([null]);
+  });
+
+  test("a write Redis refused while the connection stayed up is sent again by the next sync", async () => {
+    const fake = new FakeRedis();
+    const tags = storeOn(fake);
+    fake.failWith = new Error("OOM command not allowed when used memory > 'maxmemory'.");
+    await tags.update(["a"]);
+    expect(await fake.exists(tagsKey(PREFIX))).toBe(0);
+
+    fake.failWith = undefined;
+    await tags.sync();
+    await vi.waitFor(async () => {
+      expect(await fake.hmget(tagsKey(PREFIX), "a")).not.toEqual([null]);
+    });
+    expect(await fake.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).toEqual(["a"]);
+  });
+
   test("every script call names exactly one key, the tags hash: it cannot be CROSSSLOT", async () => {
     const fake = new FakeRedis();
     const evalCalls = vi.spyOn(fake, "eval");

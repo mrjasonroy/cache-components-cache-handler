@@ -150,7 +150,9 @@ interface FlushCacheOptions extends CacheOptions {
 Deletes with SCAN + UNLINK on every master of a Cluster, and empties this process's memory stores.
 `deleted` is the number of Redis keys deleted, or, without Redis, the number of memory entries
 dropped. It throws, deleting nothing, if Redis is configured but unavailable, or for
-`scope: "all"` with an empty `keyPrefix`. See
+`scope: "all"` with an empty `keyPrefix`. After the delete it writes a tag record for the flush
+(`__cch_flush__`, or `__cch_flush__:<buildId>` for `scope: "build"`) that prerendered build output
+is checked against, so build output older than the flush is not served again. See
 [Flushing the cache](../README.md#flushing-the-cache).
 
 ## `MEMORY_ONLY_TAG`

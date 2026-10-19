@@ -23,6 +23,7 @@ import type { DataCacheEntry } from "../data-cache/types.js";
 import type { PageCacheValue } from "../handlers/page-types.js";
 import { createRedisCacheHandler } from "../handlers/redis.js";
 import { flushCache } from "../shared/flush.js";
+import { FLUSH_TAG } from "../shared/keys.js";
 import { getCacheRuntime } from "../shared/runtime.js";
 import { resetCacheState } from "../testing/env.js";
 
@@ -315,6 +316,8 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     expect((await flushCache({ ...options, buildId: "old" })).deleted).toBe(2);
     expect(await raw.exists(`${prefix}new:page:/x`)).toBe(1);
     await flushCache({ ...options, scope: "all" });
-    expect(await raw.keys(`${prefix}*`)).toEqual([]);
+    // Only the flush's own record is left: build output older than it is never served again.
+    expect((await raw.keys(`${prefix}*`)).sort()).toEqual([`${prefix}tag-index`, `${prefix}tags`]);
+    expect(Object.keys(await raw.hgetall(`${prefix}tags`))).toEqual([FLUSH_TAG]);
   }, 30_000);
 });

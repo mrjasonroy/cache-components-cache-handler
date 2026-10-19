@@ -1,10 +1,12 @@
-import { rmSync } from "node:fs";
+import { rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { flushCache } from "../shared/flush.js";
 import { pageKey } from "../shared/keys.js";
 import {
   type BuildOutput,
+  type BuildOutputOptions,
   appPageCtx,
   appRouteCtx,
   pagesCtx,
@@ -12,6 +14,7 @@ import {
 } from "../testing/build-output.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
+import { BUILD_STAMP_FILE } from "./build-info.js";
 import { RedisCacheHandler } from "./redis.js";
 
 const BLOG_KEY = pageKey("nextjs:", "development", "/blog");
@@ -30,6 +33,14 @@ function handlerFor(fake?: FakeRedis) {
 async function restart(): Promise<void> {
   await resetCacheState();
 }
+
+/** Replace the build output with one written with `options`. */
+function rebuild(options: BuildOutputOptions): void {
+  rmSync(dirname(build.serverDistDir), { recursive: true, force: true });
+  build = writeBuildOutput(options);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 describe("page handler: prerendered build output", () => {
   beforeEach(async () => {
@@ -185,5 +196,149 @@ describe("page handler: prerendered build output", () => {
   test("without fs and serverDistDir from Next there is no build output", async () => {
     const handler = new RedisCacheHandler({ client: asClient(new FakeRedis()) });
     expect(await handler.get("/blog", appPageCtx)).toBeNull();
+  });
+
+  describe("the build time is the handler's build stamp, never the files' mtime", () => {
+    test("files whose mtime is 1970 (reproducible builds) are served, at the stamp's time", async () => {
+      rebuild({ mtimeMs: 0 });
+      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      expect(result?.value.html).toBe("<html>built blog</html>");
+      expect(result?.lastModified).toBe(build.builtAt);
+    });
+
+    test("files copied without their mtimes (now) are still older than a revalidation made after the build", async () => {
+      rebuild({ ageMs: 2 * DAY_MS });
+      const fake = new FakeRedis();
+      await handlerFor(fake).revalidateTag("products");
+      // The deploy copies the files: their mtime is now, after the revalidation.
+      const files = ["blog.html", "blog.rsc", "blog.meta"].map((file) =>
+        join(build.serverDistDir, "app", file),
+      );
+      for (const file of files) utimesSync(file, new Date(), new Date());
+
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("without a stamp, a page with no tag record ever written is served, as of the read", async () => {
+      rebuild({ stamp: false, mtimeMs: 0 });
+      const before = Date.now();
+      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      expect(result?.value.html).toBe("<html>built blog</html>");
+      expect(result?.lastModified).toBeGreaterThanOrEqual(before);
+    });
+
+    test("without a stamp, any record of the page's tags makes it a miss, however old", async () => {
+      rebuild({ stamp: false });
+      const fake = new FakeRedis();
+      // Revalidated long before the build: with no build time, it cannot be told apart.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(Date.now() - 300 * DAY_MS);
+      await handlerFor(fake).revalidateTag("_N_T_/blog");
+      vi.useRealTimers();
+
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
+    });
+
+    test("without a stamp, a time-based page is a miss: its window cannot be placed", async () => {
+      rebuild({ stamp: false, routes: { "/blog": { revalidate: 3600 } } });
+      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("a stamp naming another build counts as missing", async () => {
+      rebuild({ routes: { "/blog": { revalidate: 3600 } }, ageMs: 1000 });
+      writeFileSync(
+        join(build.serverDistDir, BUILD_STAMP_FILE),
+        JSON.stringify({ buildTime: build.builtAt, buildId: "another-build" }),
+      );
+      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+    });
+  });
+
+  describe("a time-based route's build output lasts 1.5 × revalidate (capped at expire) from the build", () => {
+    test("inside the window it is served and written to Redis for what is left of it", async () => {
+      rebuild({ routes: { "/blog": { revalidate: 60 } }, ageMs: 30_000 });
+      const fake = new FakeRedis();
+      expect((await handlerFor(fake).get("/blog", appPageCtx))?.value.html).toBe(
+        "<html>built blog</html>",
+      );
+      // 90 s from the build, 30 s of it gone.
+      expect(fake.ttlOf(BLOG_KEY)).toBeGreaterThan(55);
+      expect(fake.ttlOf(BLOG_KEY)).toBeLessThanOrEqual(60);
+    });
+
+    test("past the window, once its Redis key has expired, the build-time copy is not served again", async () => {
+      rebuild({ routes: { "/blog": { revalidate: 60 } }, ageMs: 30 * DAY_MS });
+      const fake = new FakeRedis();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
+    });
+
+    test("expire caps the window", async () => {
+      rebuild({ routes: { "/blog": { revalidate: 60, expire: 70 } }, ageMs: 80_000 });
+      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("a route the prerender manifest does not list is a miss", async () => {
+      rmSync(join(build.serverDistDir, "..", "prerender-manifest.json"));
+      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("a route with revalidate: false keeps its build output however old the build", async () => {
+      rebuild({ ageMs: 200 * DAY_MS });
+      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      expect(result?.lastModified).toBe(build.builtAt);
+    });
+  });
+
+  describe("a flush is a barrier: build output older than it is never served again", () => {
+    test('flushCache({ scope: "all" }) deletes the tag records, yet a page revalidated before it does not come back after a restart', async () => {
+      const fake = new FakeRedis();
+      await handlerFor(fake).revalidateTag("products");
+      await flushCache({ client: asClient(fake), scope: "all" });
+
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get("/sitemap.xml", appRouteCtx)).toBeNull();
+      expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
+    });
+
+    test("flushCache() of this build is a barrier for this build's output only", async () => {
+      const fake = new FakeRedis();
+      await flushCache({ client: asClient(fake), buildId: "another-build" });
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).not.toBeNull();
+
+      await flushCache({ client: asClient(fake) });
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("an instance that was already running sees the barrier on its next read", async () => {
+      const fake = new FakeRedis();
+      const running = handlerFor(fake);
+      expect(await running.get("/blog", appPageCtx)).not.toBeNull();
+      // Another instance flushes.
+      await flushCache({ client: asClient(new FakeRedis(fake.items)), scope: "all" });
+      expect(await running.get("/blog", appPageCtx)).toBeNull();
+    });
+
+    test("a build made after the flush is served", async () => {
+      const fake = new FakeRedis();
+      await flushCache({ client: asClient(fake), scope: "all" });
+      rebuild({ ageMs: -1000 });
+
+      await restart();
+      expect(await handlerFor(fake).get("/blog", appPageCtx)).not.toBeNull();
+    });
+
+    test("without Redis, a flush keeps the build output from being read back from disk", async () => {
+      const handler = handlerFor();
+      expect(await handler.get("/blog", appPageCtx)).not.toBeNull();
+      await flushCache();
+      expect(await handler.get("/blog", appPageCtx)).toBeNull();
+    });
   });
 });

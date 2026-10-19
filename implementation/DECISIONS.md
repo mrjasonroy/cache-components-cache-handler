@@ -112,7 +112,13 @@ is 23 MB. The other cost is a process's first sync, which reads the whole index:
 depend on the hash's size.
 
 The operational answer to a large hash is `flushCache({ scope: "all" })`, which drops the tags
-with the entries they invalidate, so nothing stale can come back. There is no automatic or
+with the entries they invalidate. The prerendered build output on disk outlives the flush, and
+with its tag records gone it would read as never invalidated: a restarted instance would serve
+day-0 content again and write it to Redis. So the flush then writes one record, `__cch_flush__`
+(`__cch_flush__:<buildId>` for `scope: "build"`), through the normal tag update (script, index,
+sync), and the page handler adds both fields to the HMGET it already sends for build output's
+tags and to the tags of the copy it writes to Redis. Build output from before the flush is a miss
+on every instance; a build made after it is not affected. There is no automatic or
 manual prune. One could be added later as an explicit `pruneTags({ olderThan })`, documented as
 unsafe below the longest `expire` any revalidation used plus the longest entry age.
 
@@ -214,6 +220,26 @@ writes no `cacheControl` to `.meta`, so a build-output entry revalidated with `{
 rather than served stale; Next takes its schedule from the prerender manifest as it does for its own
 `FileSystemCache`.
 
+The build output's `lastModified` is not the files' mtime, which Next's own reader uses: a copy
+without `-p` moves it forward past revalidations made before the deploy, and reproducible builds
+set it to 1970. During `next build` (`NEXT_PHASE=phase-production-build`) the page handler writes
+`<distDir>/server/cache-handler-build.json` = `{ buildTime, buildId }` the first time it is
+constructed once `BUILD_ID` exists; Next cleans `distDir` before compiling and writes `BUILD_ID`
+before static generation, so the stamp predates every prerender of that build. A stamp naming
+another build is replaced at build time and ignored at runtime. Without a valid stamp the age is
+unknown, so build output is served only for a `revalidate: false` route none of whose tags (or
+flush barriers) has any record, with `lastModified` the read time. Next writes nothing with a
+reliable render time: `next build` puts no timestamp in `.meta`, and `routeCacheLastModified` is
+set only when `FileSystemCache` promotes a seed at runtime (next@16.4.2
+file-system-cache.js), so its reader falls back to the mtime.
+
+A time-based route's build output is served only while `buildTime + min(1.5 × revalidate,
+expire)` has not passed, read once from `prerender-manifest.json` (`initialRevalidateSeconds`,
+`initialExpireSeconds`), and written to Redis for what is left of that window. Without this, once
+a regenerated entry's TTL ran out (or it was evicted, or flushed with `scope: "build"`) the
+build-time copy came back, possibly months old, where Next's own cache would serve the latest
+regeneration it had flushed to disk. A route the manifest does not list is a miss.
+
 **The handlers load on the edge runtime and do nothing there.** Next bundles the page
 `cacheHandler` into the edge middleware too (`OPTIONAL_IMPORT:incrementalCacheHandler`,
 next/dist/build/templates/middleware.js). On the edge runtime `node:module`, `node:fs` and
@@ -251,6 +277,16 @@ moved on, and a resent 5 MB GET only adds load to a recovering server), and the 
 each command object once. Either alone fixes the flap; both are kept, the second for redirections
 and for applications that turn resending back on through `redisOptions`. `connection.stats()`
 (internal) counts timeouts and drops for tests.
+
+That one connection is also why large values need bandwidth: at the 1000 ms default a 5 MB value
+needs about 40 Mbit/s, and the commands queued behind a slower transfer time out with it. On such
+links `commandTimeout` must be raised (documented next to the option). Keeping large values out
+of Redis, or compressing them, is pending Jason's call.
+
+A tag write Redis refuses while the connection stays up (`OOM` under `noeviction`, `READONLY` or
+`LOADING` during a failover, one timeout) stays queued and is sent again by the next sync, at most
+100 ms later under traffic, not only by the next revalidation or reconnect. An `update` whose tags
+another concurrent send already took resolves only once that batch is answered.
 
 Entries are scoped by build (`<prefix><buildId>:page:` / `:data:`). Tag records are not, so a
 revalidation reaches every build that is still running. `createCacheHandler` keeps its own key

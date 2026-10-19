@@ -16,8 +16,8 @@
  *   local state, then sends one script call that merges every tag's update into its record and
  *   one `ZADD GT` to the index. Both only ever move a record forward, so a write that reaches
  *   Redis after a newer one never undoes it (see `./tag-update.ts`). An update Redis did not
- *   acknowledge (an outage, an error) is sent again, the same way, with the next update or on
- *   reconnect.
+ *   acknowledge (an outage, an error) is sent again, the same way, with the next update, the
+ *   next sync or on reconnect.
  * - `fetch` reads named records with one HMGET and merges them. The page and remote handlers send
  *   it with their entry GET, in one round trip, because Next reads the singular `cacheHandler`
  *   before any `refreshTags` (next/dist/server/async-storage/work-store.js creates refreshTags
@@ -137,6 +137,8 @@ export class TagStore {
   /** Bumped each time the connection becomes ready; a sync started before counts for nothing. */
   private connectedSince = 0;
   private syncing: Promise<void> | undefined;
+  /** Batches sent to Redis and not yet answered. */
+  private readonly sending = new Set<Promise<void>>();
   private lastUpdate: { key: string; done: Promise<void> } | undefined;
 
   constructor(
@@ -244,8 +246,9 @@ export class TagStore {
   /**
    * Send every queued update to Redis: one script call and one `ZADD GT`, whatever the number of
    * tags. Both merge forward only, so this write cannot undo a newer one from another instance
-   * that Redis acknowledged first. Updates that fail stay queued, for the next update or the next
-   * reconnect, and are sent the same way.
+   * that Redis acknowledged first. Updates that fail stay queued, for the next update, sync or
+   * reconnect, and are sent the same way. A send that finds the queue already taken by another
+   * resolves once that batch is answered, so no `update` resolves before Redis has its tags.
    *
    * Each update is applied again at the time it is sent, here and in Redis. An update replayed
    * after an outage then carries the newest `stale`: it reaches every instance as a new
@@ -253,7 +256,8 @@ export class TagStore {
    */
   private async send(): Promise<void> {
     const connection = this.connection;
-    if (!connection || this.unsent.size === 0) return;
+    if (!connection) return;
+    if (this.unsent.size === 0) return this.inFlight();
 
     await connection.waitForInitialConnection();
     if (!connection.isReady()) {
@@ -267,9 +271,23 @@ export class TagStore {
     }
 
     // Another send may have taken the queue while this one waited for the connection.
-    if (this.unsent.size === 0) return;
+    if (this.unsent.size === 0) return this.inFlight();
     const batch = new Map(this.unsent);
     this.unsent.clear();
+    const sent = this.sendBatch(connection, batch);
+    this.sending.add(sent);
+    await sent;
+    this.sending.delete(sent);
+  }
+
+  private async inFlight(): Promise<void> {
+    await Promise.all(this.sending);
+  }
+
+  private async sendBatch(
+    connection: RedisConnection,
+    batch: Map<string, Durations | null>,
+  ): Promise<void> {
     const now = Date.now();
     const updates = new Map<string, TagUpdate>();
     const scores: (string | number)[] = [];
@@ -344,6 +362,9 @@ export class TagStore {
       // Only once every score from `since` up has been read: a failed sync is retried whole.
       this.syncedUpTo = Math.max(this.syncedUpTo, startedAt);
       if (this.connectedSince === connectedSince) this.synced = true;
+      // An update Redis refused while the connection stayed up (OOM, READONLY, a timeout) would
+      // otherwise wait for this process's next revalidation or reconnect.
+      if (this.unsent.size > 0) void this.send();
     } catch (error) {
       this.synced = false;
       this.reportError("refreshTags", error);

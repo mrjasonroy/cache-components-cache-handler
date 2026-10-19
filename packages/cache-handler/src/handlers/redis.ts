@@ -18,9 +18,13 @@
  *   regenerates it in the background. Without durations the entry is a miss.
  * - A prerendered route (`APP_PAGE`, `APP_ROUTE`, `PAGES`) missing from the cache is read from
  *   the build output on disk, which `next build` writes only there, with `lastModified` the build
- *   time and the same tag check, so a revalidation since the build always wins. It is then written
- *   to Redis unless another instance got there first. With Redis configured this happens only
- *   while the tag records could be read from Redis.
+ *   time and the same tag check, so a revalidation since the build always wins; so does a flush
+ *   (see `../shared/flush.ts`). A time-based route's build output is served only within
+ *   `1.5 × revalidate` (capped at `expire`) of the build, as a render of it would be kept. It is
+ *   then written to Redis unless another instance got there first. With Redis configured this
+ *   happens only while the tag records could be read from Redis. The build time is the stamp this
+ *   handler writes during `next build`; without it the build output is served only when none of
+ *   its tags was ever revalidated, and never for a time-based route (see `./build-info.ts`).
  * - On the edge runtime (Next bundles this handler into the middleware) every read is a miss and
  *   writes and revalidations do nothing.
  * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
@@ -34,8 +38,8 @@ import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
 import { decodeEntry, encodeEntry } from "../shared/codec.js";
-import { isEdgeRuntime } from "../shared/env.js";
-import { MAX_ENTRY_AGE_SECONDS, pageKey } from "../shared/keys.js";
+import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
+import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
@@ -47,6 +51,7 @@ import {
   getCacheRuntime,
   isRedisReady,
 } from "../shared/runtime.js";
+import { readBuildTime, readRoutePeriods, writeBuildStamp } from "./build-info.js";
 import { readBuildOutput } from "./build-output.js";
 import type {
   PageCacheControl,
@@ -104,6 +109,12 @@ interface StoredPageEntry {
 
 interface InMemoryPage {
   entry: StoredPageEntry;
+}
+
+interface BuildOutputEntry {
+  entry: StoredPageEntry;
+  /** Seconds it may still be kept. */
+  lifetime: number;
 }
 
 function isRedisClient(value: unknown): value is Redis | Cluster {
@@ -166,8 +177,14 @@ export function getEntryLifetime(
   ctx: PageCacheSetContext | undefined,
   fallback: number = MAX_ENTRY_AGE_SECONDS,
 ): number {
-  const expire = ctx?.cacheControl?.expire;
-  const revalidate = getRevalidate(data, ctx);
+  return lifetimeOf(getRevalidate(data, ctx), ctx?.cacheControl?.expire, fallback);
+}
+
+function lifetimeOf(
+  revalidate: number | false | undefined,
+  expire: number | undefined,
+  fallback: number,
+): number {
   let lifetime: number;
   if (typeof revalidate === "number") {
     lifetime = Math.ceil(revalidate * EXPIRE_FACTOR);
@@ -239,6 +256,7 @@ export class RedisCacheHandler {
 
   constructor(options: RedisCacheHandlerOptions = {}) {
     registerServerDistDir(options.serverDistDir);
+    if (options.serverDistDir && isBuildPhase()) writeBuildStamp(options.serverDistDir);
     markPageHandlerCreated();
     this.options = options;
     this.runtime = getCacheRuntime(toRuntimeOptions(options));
@@ -284,10 +302,10 @@ export class RedisCacheHandler {
         entry = (stores.pageFallback.get(cacheKey) as InMemoryPage | undefined)?.entry;
       }
     }
-    let built = false;
+    let built: BuildOutputEntry | undefined;
     if (!entry?.value && tagsCurrent) {
-      entry = await this.readBuildOutput(cacheKey, ctx);
-      built = entry !== undefined;
+      built = await this.readBuildOutput(cacheKey, ctx, softTags);
+      entry = built?.entry;
     }
     if (!entry?.value) {
       this.log?.("get", cacheKey, "miss");
@@ -299,7 +317,7 @@ export class RedisCacheHandler {
     this.log?.("get", cacheKey, result ? (built ? "build output" : "hit") : "invalidated", {
       bytes: encodeEntry(entry).byteLength,
     });
-    if (result && built) await this.keepBuildOutput(cacheKey, entry);
+    if (result && built) await this.keepBuildOutput(cacheKey, built);
     return result;
   }
 
@@ -322,45 +340,76 @@ export class RedisCacheHandler {
   }
 
   /**
-   * The prerendered build output of `cacheKey`, if it has one, with the records of its tags read
-   * from Redis. `lastModified` stays the build time, so the tag check that follows rejects it once
-   * any of its tags was revalidated after the build.
+   * The prerendered build output of `cacheKey`, if it has one and its route's window is open, with
+   * the records of its tags and of the flush barriers read from Redis (one HMGET). `lastModified`
+   * is the build time, so the tag check that follows rejects it once any of its tags was
+   * revalidated, or the cache flushed, after the build. The barriers are kept in the entry's tags,
+   * so a copy written to Redis carries them too.
+   *
+   * Without a build stamp the age of the output is unknown: it is a miss if any of its tags or
+   * barriers has a record at all, or if its route is time-based; otherwise its `lastModified` is
+   * now.
    */
   private async readBuildOutput(
     cacheKey: string,
     ctx: PageCacheGetContext | undefined,
-  ): Promise<StoredPageEntry | undefined> {
+    softTags: string[],
+  ): Promise<BuildOutputEntry | undefined> {
+    const { serverDistDir } = this.options;
+    if (!serverDistDir) return undefined;
+    const periods = readRoutePeriods(serverDistDir, cacheKey);
+    if (!periods) return undefined;
+    const buildTime = readBuildTime(serverDistDir);
+    let until: number | undefined;
+    if (periods.revalidate !== false) {
+      if (buildTime === undefined) return undefined;
+      until = buildTime + lifetimeOf(periods.revalidate, periods.expire, 0) * 1000;
+      if (Date.now() >= until) return undefined;
+    }
+
     const found = await readBuildOutput(this.options, cacheKey, ctx, (error) =>
       this.runtime.reportError("build output", error),
     );
     if (!found) return undefined;
-    const entry: StoredPageEntry = {
-      value: found.value,
-      tags: getEntryTags(found.value),
-      lastModified: found.lastModified,
-    };
-    if (found.cacheControl) entry.cacheControl = found.cacheControl;
+    const tags = [
+      ...getEntryTags(found.value),
+      FLUSH_TAG,
+      buildFlushTag(this.options.buildId ?? getBuildId()),
+    ];
     try {
-      await this.runtime.tags.fetch(entry.tags);
+      await this.runtime.tags.fetch(tags);
     } catch (error) {
       this.runtime.reportError("get", error);
       return undefined;
     }
-    return entry;
+    const now = Date.now();
+    if (
+      buildTime === undefined &&
+      this.runtime.tags.check([...tags, ...softTags], 0, now) !== "fresh"
+    ) {
+      return undefined;
+    }
+    const entry: StoredPageEntry = { value: found.value, tags, lastModified: buildTime ?? now };
+    if (found.cacheControl) entry.cacheControl = found.cacheControl;
+    const lifetime =
+      until === undefined
+        ? getEntryLifetime(
+            entry.value,
+            { cacheControl: entry.cacheControl },
+            this.options.defaultTTL,
+          )
+        : Math.ceil((until - now) / 1000);
+    return { entry, lifetime };
   }
 
   /**
-   * Keep a build-output entry that passed the tag check: in Redis (`NX`, so an entry another
-   * instance or a render wrote first wins), or in process memory without Redis. A failed write
-   * only costs the next read another trip to the disk.
+   * Keep a build-output entry that passed the tag check, for what is left of its lifetime: in
+   * Redis (`NX`, so an entry another instance or a render wrote first wins), or in process memory
+   * without Redis. A failed write only costs the next read another trip to the disk.
    */
-  private async keepBuildOutput(cacheKey: string, entry: StoredPageEntry): Promise<void> {
+  private async keepBuildOutput(cacheKey: string, built: BuildOutputEntry): Promise<void> {
     const { connection, stores } = this.runtime;
-    const lifetime = getEntryLifetime(
-      entry.value,
-      { cacheControl: entry.cacheControl },
-      this.options.defaultTTL,
-    );
+    const { entry, lifetime } = built;
     if (lifetime <= 0) return;
     const encoded = encodeEntry(entry);
     if (!connection) {

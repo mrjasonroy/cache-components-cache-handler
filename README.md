@@ -180,8 +180,14 @@ The page handler implements Next 16's singular `cacheHandler` contract:
 - **Prerendered routes are served from the build output.** `next build` writes prerendered pages
   and route handlers (sitemaps, robots, manifests) to disk only. On a miss the handler reads them
   through Next's own `FileSystemCache`, checks their tags with `lastModified` = the build time (a
-  tag or path revalidated since the build wins), then writes them to Redis unless an entry is
-  already there. While Redis is down they are not served, because their tags cannot be checked.
+  tag or path revalidated since the build wins, and so does a `flushCache`), then writes them to
+  Redis unless an entry is already there. A route with a revalidate period is served from the
+  build output only within `1.5 × revalidate` (capped at `expire`) of the build, as long as a
+  render of it would be kept; after that a miss renders it. While Redis is down they are not
+  served, because their tags cannot be checked. The build time is not the files' mtime: the page
+  handler writes `cache-handler-build.json` into `.next/server` during `next build`, so ship that
+  file with the build. Without it the build output is served only for `revalidate: false` routes
+  none of whose tags was ever revalidated.
 - **Edge middleware.** Next bundles this handler into the middleware too. On the edge runtime it
   imports without touching Node built-ins and does nothing: every read is a miss.
 - Cached `fetch` entries share the `page:` key namespace.
@@ -213,7 +219,9 @@ await flushCache({ scope: "all" });  // every key under CACHE_KEY_PREFIX, tag re
 number of Redis keys deleted. It also empties **this process's** in-memory stores. Other
 instances keep their in-memory `"use cache"` values until those reach `revalidate`, or until a
 tag invalidation reaches them. Without Redis it only empties the memory stores and returns how
-many entries they held. If Redis is configured but unavailable, it throws and deletes nothing. It
+many entries they held. Either way it then records the flush like a tag revalidation (a field in
+`<prefix>tags`), so prerendered build output older than the flush is not served again, even
+after the tag records were deleted. If Redis is configured but unavailable, it throws and deletes nothing. It
 also refuses `scope: "all"` when the key prefix is empty, which would delete the whole database.
 
 | Option | Default | Meaning |
@@ -308,6 +316,11 @@ package's own commands reach it through a proxy that bounds them by `commandTime
 timeouts in a row the handlers serve from memory for 2 s at a time, until a command succeeds
 again. Your other uses of the client are unaffected, so set its own `commandTimeout` (and a
 `retryStrategy`) for those.
+
+All commands share one connection, so a large value on a slow link delays the commands queued
+behind it. At 1000 ms, a 5 MB page needs about 40 Mbit/s; on a slower link (cross-region, or an
+ElastiCache node out of network burst credits) raise `commandTimeout`, or 3 timeouts in a row
+send the handlers to memory.
 
 All three factories take `CacheOptions`:
 

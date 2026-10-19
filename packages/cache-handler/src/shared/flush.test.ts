@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import { flushCache } from "./flush.js";
+import { FLUSH_TAG, buildFlushTag, tagIndexKey, tagsKey } from "./keys.js";
 import { getCacheRuntime } from "./runtime.js";
 import { escapeGlob } from "./scan.js";
 
@@ -54,13 +55,30 @@ class FakeCluster {
   removeListener() {
     return this;
   }
+  // The tag keys' slot is on the first master.
+  evalsha(...args: Parameters<FakeRedis["evalsha"]>) {
+    return this.masters[0].evalsha(...args);
+  }
+  eval(...args: Parameters<FakeRedis["eval"]>) {
+    return this.masters[0].eval(...args);
+  }
+  zadd(...args: Parameters<FakeRedis["zadd"]>) {
+    return this.masters[0].zadd(...args);
+  }
+}
+
+/** Keys other than the tag records the flush writes afterwards. */
+function entryKeys(fake: FakeRedis, prefix = "app:"): string[] {
+  return [...fake.items.keys()]
+    .filter((key) => key !== tagsKey(prefix) && key !== tagIndexKey(prefix))
+    .sort();
 }
 
 async function seed(fake: FakeRedis) {
   await fake.set("app:b1:page:/a", "x");
   await fake.set("app:b1:data:k", "x");
   await fake.set("app:b2:page:/a", "x");
-  await fake.set("app:tags", "x");
+  await fake.hset("app:tags", { products: "1,1" });
   await fake.set("other:b1:page:/a", "x");
 }
 
@@ -80,11 +98,8 @@ describe("flushCache", () => {
     await seed(fake);
     const result = await flushCache({ client: asClient(fake), keyPrefix: "app:", buildId: "b1" });
     expect(result.deleted).toBe(2);
-    expect([...fake.items.keys()].sort()).toEqual([
-      "app:b2:page:/a",
-      "app:tags",
-      "other:b1:page:/a",
-    ]);
+    expect(entryKeys(fake)).toEqual(["app:b2:page:/a", "other:b1:page:/a"]);
+    expect(await fake.hmget("app:tags", "products")).toEqual(["1,1"]);
   });
 
   test("scope all deletes everything under the prefix, tag records included", async () => {
@@ -92,7 +107,27 @@ describe("flushCache", () => {
     await seed(fake);
     const result = await flushCache({ client: asClient(fake), keyPrefix: "app:", scope: "all" });
     expect(result.deleted).toBe(4);
-    expect([...fake.items.keys()]).toEqual(["other:b1:page:/a"]);
+    expect(entryKeys(fake)).toEqual(["other:b1:page:/a"]);
+    expect(await fake.hmget("app:tags", "products")).toEqual([null]);
+  });
+
+  test("a flush is recorded afterwards as a tag revalidation: a barrier for the build output", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    const fake = new FakeRedis();
+    await seed(fake);
+    await flushCache({ client: asClient(fake), keyPrefix: "app:", scope: "all" });
+    await flushCache({ client: asClient(fake), keyPrefix: "app:", buildId: "b1" });
+    vi.useRealTimers();
+
+    expect(await fake.hmget("app:tags", FLUSH_TAG, buildFlushTag("b1"))).toEqual([
+      "1000000,1000000",
+      "1000000,1000000",
+    ]);
+    expect(await fake.zrangebyscore("app:tag-index", "-inf", "+inf")).toEqual([
+      FLUSH_TAG,
+      buildFlushTag("b1"),
+    ]);
   });
 
   test("glob characters in the prefix match literally", async () => {
@@ -101,7 +136,7 @@ describe("flushCache", () => {
     await fake.set("ab:b1:page:/x", "x");
     expect(escapeGlob("a*[?]\\")).toBe("a\\*\\[\\?\\]\\\\");
     await flushCache({ client: asClient(fake), keyPrefix: "a*:", scope: "all" });
-    expect([...fake.items.keys()]).toEqual(["ab:b1:page:/x"]);
+    expect(entryKeys(fake, "a*:")).toEqual(["ab:b1:page:/x"]);
   });
 
   test("a Cluster: every master is scanned and keys are unlinked one per command", async () => {
@@ -132,7 +167,7 @@ describe("flushCache", () => {
       buildId: "b1",
     });
     expect(result).toEqual({ deleted: 2 });
-    expect(one.items.size).toBe(0);
+    expect(entryKeys(one)).toEqual([]);
   });
 
   test("a Cluster: a key that still fails after redirection makes the result partial", async () => {
@@ -149,7 +184,7 @@ describe("flushCache", () => {
       buildId: "b1",
     });
     expect(result).toEqual({ deleted: 1, partial: true, failed: 1 });
-    expect([...one.items.keys()]).toEqual(["app:b1:page:/b"]);
+    expect(entryKeys(one)).toEqual(["app:b1:page:/b"]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("partial"));
   });
 
@@ -159,6 +194,7 @@ describe("flushCache", () => {
     runtime.stores.page.set("b", 1, 1, null);
     expect(await flushCache()).toEqual({ deleted: 2 });
     expect(runtime.stores.local.size).toBe(0);
+    expect(runtime.tags.get(buildFlushTag("development"))).toBeDefined();
   });
 
   test("throws when Redis is configured but down, and keeps process memory", async () => {

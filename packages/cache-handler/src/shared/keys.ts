@@ -54,3 +54,18 @@ export function tagsKey(prefix: string): string {
 export function tagIndexKey(prefix: string): string {
   return `${prefix}tag-index`;
 }
+
+/**
+ * Tag record `flushCache({ scope: "all" })` writes, through the normal tag update, after the
+ * flush: the build output is checked against it, so a flush that deleted the tag records cannot
+ * bring back a prerendered page revalidated before it. Entries rendered after the flush are newer
+ * than it and unaffected.
+ */
+export const FLUSH_TAG = "__cch_flush__";
+
+/**
+ * Tag record `flushCache({ scope: "build" })` writes for that build (see {@link FLUSH_TAG}).
+ */
+export function buildFlushTag(buildId: string): string {
+  return `${FLUSH_TAG}:${buildId}`;
+}
