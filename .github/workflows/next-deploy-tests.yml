@@ -37,6 +37,10 @@ on:
         type: choice
         options: ["2", "1"]
         default: "2"
+      debug:
+        description: "Set CACHE_DEBUG=1 and NEXT_PRIVATE_DEBUG_CACHE=1 for next build and next start"
+        type: boolean
+        default: false
 
 concurrency:
   group: next-deploy-tests-${{ github.event.pull_request.number || github.ref }}
@@ -48,6 +52,8 @@ env:
   SUITE_FILTER: ${{ inputs.suite_filter || '' }}
   NEXT_DEPLOY_USE_CACHE: ${{ inputs.use_cache || 'memory' }}
   NEXT_DEPLOY_INSTANCES: ${{ inputs.instances || '2' }}
+  CACHE_DEBUG: ${{ inputs.debug && '1' || '' }}
+  NEXT_PRIVATE_DEBUG_CACHE: ${{ inputs.debug && '1' || '' }}
   # Must match the shard list in the suites matrix.
   SHARDS: "4"
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
