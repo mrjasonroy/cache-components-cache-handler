@@ -12,6 +12,11 @@
 //   - `baseline` or `branch` results are incomplete (a shard never finished), since a missing
 //     result can hide a regression.
 // `pkg-16.5.1` is informational. A skipped `branch` (no withCache yet) never fails the job.
+//
+// Independently of `branch`, exit 1 when `baseline` looks like a broken harness: fewer than
+// BASELINE_MIN_PASS_RATE (default 0.5) of the baseline tests that ran passed, or none ran. Plain
+// `next start` passes most of these suites, so a low rate means the deploy script or runner is
+// broken, and every comparison against it is meaningless.
 import {
   appendFileSync,
   existsSync,
@@ -86,8 +91,11 @@ for (const variant of VARIANTS) {
         skipped: 0,
         total: 0,
       };
-      if (!previous || RANK[status] > RANK[merged.status]) {
-        merged.status = status in RANK ? status : "fail";
+      // Older shard files marked an all-skipped part "pass"; nothing passed, so nothing ran.
+      const partStatus =
+        status === "pass" && Number(passed) === 0 && Number(failed) === 0 ? "skipped" : status;
+      if (!previous || RANK[partStatus] > RANK[merged.status]) {
+        merged.status = partStatus in RANK ? partStatus : "fail";
       }
       merged.seconds += Number(seconds) || 0;
       merged.passed += Number(passed) || 0;
@@ -180,6 +188,16 @@ const totals = Object.fromEntries(
   }),
 );
 
+const minPassRate = Number(process.env.BASELINE_MIN_PASS_RATE ?? 0.5);
+const baselineTests = totals.baseline.tests;
+const baselineRan = baselineTests.passed + baselineTests.failed;
+const baselinePassRate = baselineRan === 0 ? 0 : baselineTests.passed / baselineRan;
+const percent = (rate, digits) => `${(rate * 100).toFixed(digits)}%`;
+const harnessBroken =
+  variants.baseline.state === "ran" && (baselineRan === 0 || baselinePassRate < minPassRate)
+    ? `baseline passed ${baselineTests.passed} of the ${baselineRan} tests that ran (${percent(baselinePassRate, 1)}, minimum ${percent(minPassRate, 0)}); the harness is likely broken, so no comparison against it means anything`
+    : null;
+
 const runUrl = process.env.GITHUB_RUN_ID
   ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
   : null;
@@ -196,6 +214,7 @@ const json = {
     instances: Number(process.env.NEXT_DEPLOY_INSTANCES ?? 2),
   },
   variants: totals,
+  harnessBroken,
   regressions,
   knownFailures: [...known],
   suites: report,
@@ -203,13 +222,16 @@ const json = {
 
 function cell(entry) {
   if (!entry || entry.total === undefined) return entry?.status ?? "-";
+  if (entry.status === "skipped") {
+    return entry.skipped ? `no tests ran (${entry.skipped} skipped)` : "no tests ran";
+  }
   return `${entry.status} ${entry.passed}/${entry.total}${entry.failed ? ` (${entry.failed} failed)` : ""}`;
 }
 
 const variantLine = (variant) => {
   const v = totals[variant];
   if (v.state === "skipped") return `- \`${variant}\`: skipped (${v.reason})`;
-  return `- \`${variant}\`: ${v.suites.pass} suites pass, ${v.suites.fail + v.suites.timeout} fail; tests ${v.tests.passed}/${v.tests.total} passed${v.incomplete.length ? `; incomplete: ${v.incomplete.join(", ")}` : ""}`;
+  return `- \`${variant}\`: ${v.suites.pass} suites pass, ${v.suites.fail + v.suites.timeout} fail, ${v.suites.skipped} ran no tests; tests ${v.tests.passed}/${v.tests.total} passed${v.incomplete.length ? `; incomplete: ${v.incomplete.join(", ")}` : ""}`;
 };
 
 const lines = [
@@ -217,9 +239,10 @@ const lines = [
   "",
   ...VARIANTS.map(variantLine),
   "",
+  ...(harnessBroken ? [`**BROKEN HARNESS:** ${harnessBroken}.`, ""] : []),
   branchRan
     ? `**${regressions.length} regression(s)** of \`branch\` vs \`baseline\`${blockingIncomplete.length ? `, ${blockingIncomplete.length} incomplete` : ""}.`
-    : "`branch` was not run, so nothing is gated.",
+    : "`branch` was not run, so there is no regression gate.",
   "",
   "Cells are `status passed/total`. `pkg-16.5.1` is informational.",
   "",
@@ -248,6 +271,10 @@ if (process.env.GITHUB_STEP_SUMMARY) {
 }
 console.log(markdown);
 
+if (harnessBroken) {
+  console.error(`::error::Broken harness: ${harnessBroken}`);
+  process.exit(1);
+}
 if (regressions.length > 0 || blockingIncomplete.length > 0) {
   console.error(
     `::error::${regressions.length} regression(s), ${blockingIncomplete.length} incomplete result(s)`,

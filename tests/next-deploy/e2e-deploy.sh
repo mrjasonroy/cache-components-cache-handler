@@ -54,11 +54,18 @@ wait_for_port() {
 
 # Starts a command in its own session (so e2e-cleanup.sh can kill the whole process group) with
 # its output in a log file, never on this script's stdout.
+#
+# `3>&-` matters: fd 3 is the harness's stdout pipe, and execa only resolves once every holder of
+# that pipe has closed it. A server that inherits fd 3 keeps the deploy "running" until jest's
+# 240s beforeAll timeout, so every test fails without a request ever being made.
 start_background() {
   local log="$1"
   shift
-  setsid nohup "$@" >"$log" 2>&1 </dev/null &
+  setsid nohup "$@" >"$log" 2>&1 </dev/null 3>&- &
   echo "$!" >>.deploy-pids
+  if [ -n "${NEXT_DEPLOY_PIDS_FILE:-}" ]; then
+    echo "$!" >>"$NEXT_DEPLOY_PIDS_FILE"
+  fi
 }
 
 echo "[next-deploy] suite=$SUITE variant=$VARIANT instances=$INSTANCES app=$APP_DIR"

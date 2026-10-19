@@ -37,9 +37,27 @@ export NEXT_DEPLOY_VARIANT="$VARIANT"
 export NEXT_DEPLOY_NOTES_FILE="$RESULTS_DIR/$VARIANT-$SHARD.notes.tsv"
 : >"$NEXT_DEPLOY_NOTES_FILE"
 
+# e2e-deploy.sh records every server/proxy process group here too, so anything the harness's
+# cleanup missed (a timed-out suite, a killed jest worker) is stopped before the next suite part
+# instead of piling up on the runner.
+export NEXT_DEPLOY_PIDS_FILE="$RESULTS_DIR/.$VARIANT-$SHARD.pids"
+: >"$NEXT_DEPLOY_PIDS_FILE"
+stop_leftover_servers() {
+  local pid
+  while read -r pid; do
+    [ -n "$pid" ] || continue
+    kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+  done <"$NEXT_DEPLOY_PIDS_FILE"
+  : >"$NEXT_DEPLOY_PIDS_FILE"
+}
+trap stop_leftover_servers EXIT
+
 # Harness settings, as in https://nextjs.org/docs/app/api-reference/adapters/testing-adapters
 export NEXT_TEST_MODE=deploy
 export NEXT_TEST_JOB=1
+# run-tests.js's passed-test cache keys on GITHUB_SHA; on a re-run attempt it would skip tests that
+# passed before and report them as never run.
+export NEXT_TEST_SKIP_RESULT_CACHE=1
 export IS_TURBOPACK_TEST=1
 export NEXT_TELEMETRY_DISABLED=1
 export NEXT_E2E_TEST_TIMEOUT=240000
@@ -100,22 +118,7 @@ for suite in "${suite_order[@]}"; do
   ) >"$log" 2>&1
   code=$?
   elapsed=$((SECONDS - started))
-
-  if [ "$code" = 0 ]; then
-    if grep -q '^total: 0$' "$log"; then
-      status=skipped
-    else
-      status=pass
-    fi
-  elif [ "$code" = 124 ] || [ "$code" = 137 ]; then
-    status=timeout
-  else
-    status=fail
-  fi
-  if [ "$status" != pass ]; then
-    tail -n 150 "$log"
-  fi
-  echo "::endgroup::"
+  stop_leftover_servers
 
   # passed, failed, skipped, total summed over this part's jest JSON files.
   # shellcheck disable=SC2016
@@ -133,6 +136,24 @@ for suite in "${suite_order[@]}"; do
     }
     console.log(sum.join("\t"));
   ' "${files[@]}")"
+  IFS=$'\t' read -r passed failed _ _ <<<"$counts"
+
+  # "pass" means at least one test passed and none failed. A clean exit with nothing passed or
+  # failed is "skipped": the files are gated off in deploy mode (@force-gate !deploy,
+  # describe.skip) or the manifest filtered them out.
+  if [ "$code" = 124 ] || [ "$code" = 137 ]; then
+    status=timeout
+  elif [ "$code" != 0 ] || [ "${failed:-0}" -gt 0 ]; then
+    status=fail
+  elif [ "${passed:-0}" -gt 0 ]; then
+    status=pass
+  else
+    status=skipped
+  fi
+  if [ "$status" = fail ] || [ "$status" = timeout ]; then
+    tail -n 150 "$log"
+  fi
+  echo "::endgroup::"
 
   echo "$VARIANT $suite: $status (${elapsed}s; passed/failed/skipped/total: ${counts//$'\t'//})"
   printf '%s\t%s\t%s\t%s\t%s\n' "$suite" "$status" "$elapsed" "${#files[@]}" "$counts" >>"$RESULTS"
