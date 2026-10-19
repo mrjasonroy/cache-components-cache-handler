@@ -1,0 +1,43 @@
+name: PR Reminders
+
+# Weekly reminder so outside PRs aren't left waiting. Code review itself comes from
+# Claude's built-in GitHub code review, configured in Claude settings, not here.
+
+on:
+  schedule:
+    # Mondays 14:00 UTC: nudge anything that has been waiting too long.
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  MAINTAINER: mrjasonroy
+
+jobs:
+  stale-sweep:
+    # Plain shell, no AI: weekly @-mention for PRs stuck on the maintainer, and
+    # a gentle check-in on PRs stuck on the contributor.
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Nudge stale PRs
+        run: |
+          now=$(date +%s)
+          gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,labels,updatedAt,author |
+          jq -c '.[]' | while read -r pr; do
+            n=$(jq -r .number <<<"$pr")
+            labels=$(jq -r '[.labels[].name] | join(",")' <<<"$pr")
+            author=$(jq -r .author.login <<<"$pr")
+            age_days=$(( (now - $(date -d "$(jq -r .updatedAt <<<"$pr")" +%s)) / 86400 ))
+            if [[ "$labels" == *"triage: ready to merge"* || "$labels" == *"triage: needs maintainer"* ]] && (( age_days >= 7 )); then
+              gh pr comment "$n" --repo "$GITHUB_REPOSITORY" --body "@$MAINTAINER reminder: this PR has been waiting on you for $age_days days."
+            elif [[ "$labels" == *"triage: changes requested"* ]] && (( age_days >= 14 )); then
+              gh pr comment "$n" --repo "$GITHUB_REPOSITORY" --body "Hi @$author, just checking in. Are you still working on this? Happy to help if anything in the review was unclear."
+            fi
+          done
