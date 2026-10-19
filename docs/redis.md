@@ -58,8 +58,10 @@ For Sentinel, Cluster, IAM auth or other ioredis options, build the client yours
 [custom handler files](../README.md#custom-handlers). Give all three handlers the same client so
 they share one connection and one tag store.
 
-A client you pass in is yours. The package never closes it, does not install its timeout watchdog,
-and does not apply `commandTimeout` to it. Set those on the client:
+A client you pass in is yours: the package never closes, disconnects or reconfigures it. Its own
+commands reach the client through a proxy bounded by `commandTimeout`; after 3 timeouts in a row
+the handlers serve from memory for 2 s at a time, until a command succeeds again. Your other uses
+of the client are unaffected, so set the timeouts and retry strategy on the client too:
 
 ```js
 // cache/redis.mjs
@@ -107,7 +109,8 @@ globalThis[key] ??= new Cluster(
 ```
 
 Cluster mode needs no hash tags. Every command the handlers send touches a single key, so none
-can fail with `CROSSSLOT`. `flushCache` and the tag store's full resync scan every master.
+can fail with `CROSSSLOT`. `flushCache` scans every master. The two tag keys live on one shard
+(see [Sizing](../README.md#sizing) for the hot-key cost).
 
 ## Running Redis locally
 
@@ -122,8 +125,8 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 ```
 <prefix><buildId>:page:<key>   page, route handler or cached fetch entry
 <prefix><buildId>:data:<key>   "use cache: remote" entry
-<prefix>tag:<tag>              tag record (hash of stale / expired times in ms), 366-day TTL
-<prefix>tags:log               sorted set of recently invalidated tags
+<prefix>tags                   hash of every tag record: field = tag, value = "<stale>,<expired>" in ms
+<prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```
 
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every key has a TTL, so Redis can run with
@@ -133,12 +136,15 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 ```bash
 redis-cli info memory
 redis-cli --scan --pattern 'nextjs:*:page:*' | wc -l   # page entries, every build
-redis-cli --scan --pattern 'nextjs:tag:*' | wc -l      # tag records
-redis-cli zrevrange nextjs:tags:log 0 9 withscores     # the 10 most recent invalidations
+redis-cli hlen nextjs:tags                            # tag records
+redis-cli zrevrange nextjs:tag-index 0 9 withscores    # the 10 most recently invalidated tags
+redis-cli hget nextjs:tags <tag>                       # one tag's "<stale>,<expired>"
 ```
 
-Expect far more `HGETALL` than `GET` in `INFO commandstats`: every page read also reads the
-records of the tags that apply to it. See [Sizing](../README.md#sizing).
+The tag keys are shared by every build and refreshed to a 366-day TTL on every update; tags
+untouched for 366 days are pruned from both. In `INFO commandstats`, expect about one `HMGET` per
+page `GET`: every page read also reads the records of the tags that apply to it. See
+[Sizing](../README.md#sizing).
 
 Old builds' entries are not deleted on deploy; they expire on their own. To clear them sooner, use
 [`flushCache`](../README.md#flushing-the-cache).

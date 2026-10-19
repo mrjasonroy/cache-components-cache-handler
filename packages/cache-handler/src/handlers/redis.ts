@@ -67,7 +67,7 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
   redis?: Redis | Cluster | string | RedisOptions;
 
   /**
-   * @deprecated Tag records now live under `<keyPrefix>tag:` and are shared by every handler;
+   * @deprecated Tag records now live in the `<keyPrefix>tags` hash and are shared by every handler;
    * this option is ignored.
    */
   tagPrefix?: string;

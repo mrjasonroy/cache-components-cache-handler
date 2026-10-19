@@ -98,7 +98,8 @@ The full table is in the README under [Environment variables](../README.md#envir
    ```
 
    Pages sit under `nextjs:<buildId>:page:`, `"use cache: remote"` entries under
-   `nextjs:<buildId>:data:`, and tag records under `nextjs:tag:`. Plain `"use cache"` values stay
+   `nextjs:<buildId>:data:`, and tag records in the `nextjs:tags` hash, indexed by
+   `nextjs:tag-index` (both appear after the first revalidation). Plain `"use cache"` values stay
    in memory unless you pass `{ useCache: "redis" }`.
 
 A local Redis for this is one command away: `pnpm docker:up` in this repo, or

@@ -69,11 +69,14 @@ at. Runtime settings come from the [environment](#environment-variables).
 | Option | Default | What it does |
 |---|---|---|
 | `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
-| `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. `false` leaves both unset. |
+| `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. `false` leaves both unset. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. |
 | `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](#custom-handlers). Relative paths resolve against `process.cwd()`. |
 
 `withCache` throws if the config already sets `cacheHandler` or `cacheHandlers`, because two
 configs fighting over the cache is always a bug. Use `handlers` instead.
+
+`nextConfig` can also be a config function, `(phase, { defaultConfig }) => config`, sync or
+async. `withCache` then returns an async function that applies the same settings to its result.
 
 ```js
 // Keep plain "use cache" in Redis too (every entry is visible with redis-cli)
@@ -116,11 +119,13 @@ pattern:
 - **Values live in per-instance memory**: an LRU of up to 10,000 entries. Like Next's built-in
   handler, a value is dropped once its `revalidate` period has passed, and the next request
   renders it again.
-- **`updateTags` writes the invalidation to Redis**: a timestamp record per tag, plus an entry in
-  a log of recent invalidations.
-- **`refreshTags` syncs once per request.** Next calls it before the first `"use cache"` read. It
-  reads the log entries newer than the last sync and copies them into local state. Concurrent
-  requests share one sync.
+- **`updateTags` writes the invalidation to Redis**: one `HSET` into the tag hash (a
+  `stale,expired` timestamp record per tag) and one `ZADD` into the tag index, however many tags
+  it carries.
+- **`refreshTags` syncs once per request**, at most every 100 ms. Next calls it before the first
+  `"use cache"` read. It reads the index for tags updated since the last sync (minus 5 s for clock
+  skew), then fetches only those records with one `HMGET` and copies them into local state. While
+  nothing changes, that is a single `ZRANGEBYSCORE`. Concurrent requests share one sync.
 - **`getExpiration` reads only local state**, so there is no Redis call per cache lookup. It
   returns the most recent time any of the tags was invalidated.
 
@@ -130,15 +135,17 @@ The page handler and the remote handler use the same per-process tag store. Page
 than `"use cache"`: Next reads the page handler before it calls any `refreshTags`, so the page
 handler checks the tag records in Redis on every read
 ([Pages and route handlers](#pages-and-route-handlers)). Next calls `updateTags` on every handler and then the page handler's
-`revalidateTag` for one `revalidateTag()` call. Identical updates within 100 ms are written to
-Redis once.
+`revalidateTag` for one `revalidateTag()` call. Identical updates in the same synchronous run are
+written to Redis once; a later identical update is written again.
 
 Limits worth knowing:
 
 - During a Redis outage only local tags apply. An invalidation made then reaches its own instance
   only, and a warning is logged. The first sync after Redis returns catches up.
-- The log keeps the newest 10,000 tags and nothing older than 366 days. If invalidations may have
-  been trimmed away since an instance last synced, that instance does a full resync.
+- A process's first sync reads every tag in the index, 1,000 per round trip. After that it reads
+  only what changed. The index is trimmed by age only, so a sync never misses an update.
+- Tags untouched for 366 days (longer than any entry can live) are pruned from both keys, at
+  most hourly per process.
 - Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
   instances until the tag is invalidated again.
 
@@ -151,13 +158,13 @@ The page handler implements Next 16's singular `cacheHandler` contract:
   but no `revalidate` is kept for `expire`. With neither, it is kept for `defaultTTL` (366 days).
   Nothing is kept longer than 366 days.
 - **Tags, checked in Redis on every read.** A `get` sends the entry `GET` together with one
-  `HGETALL` per tag record that applies: the soft tags (`revalidatePath`'s implicit path tags), the
-  `fetch` tags, and the entry's own tags (the `x-next-cache-tags` header) as this process last saw
-  them. They go out together, so a revalidation on any instance is seen by the very next read at
-  no extra latency. The first time a process reads an entry it did not write, it learns the
-  entry's tags from the entry itself, so that read takes a second round trip. While Redis is down,
-  pages are checked against local tag state, which a background sync keeps current (at most once a
-  second while Redis is up).
+  `HMGET` of every tag record that applies: the soft tags (`revalidatePath`'s implicit path tags),
+  the `fetch` tags, and the entry's own tags (the `x-next-cache-tags` header) as this process last
+  saw them. They go out in one round trip, so a revalidation on any instance is seen by the very
+  next read at no extra latency. The first time a process reads an entry it did not write, it
+  learns the entry's tags from the entry itself, so that read takes a second round trip (one more
+  `HMGET`). While Redis is down, pages are checked against local tag state: every record a `get`
+  has read, kept current by the `"use cache"` handlers' `refreshTags` sync.
 - **`revalidateTag(tag, "max")`** (or any `{ expire }`) leaves the page servable until `expire`:
   it is served once more and regenerated in the background. `revalidateTag(tag)`, `updateTag` and
   `revalidatePath` make it a miss. A page without a `revalidate` period cannot be served stale, so
@@ -173,7 +180,7 @@ The page handler implements Next 16's singular `cacheHandler` contract:
 | `next build` | memory | memory | memory |
 | Redis down at boot | memory (each entry at most 60 s) | memory | applied locally, with a warning: other instances keep their copy until it ages out |
 | Redis lost mid-run | the same; switches within one command timeout | the same | the same |
-| Redis stalled (accepts, never answers) | 1 s timeout per command → miss; after 3 timeouts in a row, drop and redial → memory | the same | the same |
+| Redis stalled (accepts, never answers) | 1 s timeout per command → miss; after 3 timeouts in a row, drop and redial → memory (a [client you pass in](#custom-handlers) is never dropped: memory for 2 s at a time instead) | the same | the same |
 | Redis back | Redis; the outage memory is dropped | Redis | Redis and local |
 
 A request never fails because of the cache. A cache error is always a miss plus a rate-limited log
@@ -193,7 +200,8 @@ await flushCache({ scope: "all" });  // every key under CACHE_KEY_PREFIX, tag re
 number of Redis keys deleted. It also empties **this process's** in-memory stores. Other
 instances keep their in-memory `"use cache"` values until those reach `revalidate`, or until a
 tag invalidation reaches them. Without Redis it only empties the memory stores and returns how
-many entries they held. If Redis is configured but unavailable, it throws and deletes nothing.
+many entries they held. If Redis is configured but unavailable, it throws and deletes nothing. It
+also refuses `scope: "all"` when the key prefix is empty, which would delete the whole database.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -278,9 +286,11 @@ you don't replace keeps reading the environment. So if you pass a `client` and l
 unset, also provide `default`; otherwise `"use cache"` tag invalidation stays local to each
 instance.
 
-A client you pass in is yours. The package never closes it and does not install its timeout
-watchdog, and `commandTimeout` does not apply to it. Set `commandTimeout` (and a `retryStrategy`)
-on the client itself.
+A client you pass in is yours: the package never closes, disconnects or reconfigures it. The
+package's own commands reach it through a proxy that bounds them by `commandTimeout`. After 3
+timeouts in a row the handlers serve from memory for 2 s at a time, until a command succeeds
+again. Your other uses of the client are unaffected, so set its own `commandTimeout` (and a
+`retryStrategy`) for those.
 
 All three factories take `CacheOptions`:
 
@@ -290,7 +300,7 @@ All three factories take `CacheOptions`:
 | `client` | — | Your own ioredis `Redis` or `Cluster`. Overrides `url`. |
 | `keyPrefix` | `CACHE_KEY_PREFIX` / `nextjs:` | Prefix for every key. |
 | `memoryFallback` | `true` | Serve from memory (each entry at most 60 s) while Redis is down. `false` → miss instead. |
-| `commandTimeout` | `1000` | Per-command timeout in ms, for a connection the package opens. |
+| `commandTimeout` | `1000` | Per-command timeout in ms. Also bounds the package's commands on a `client` you pass in. |
 | `debug` | `CACHE_DEBUG=1` | Log hits, misses and state changes. |
 
 `createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
@@ -321,29 +331,38 @@ The [deprecated exports](#deprecated) are still exported.
 ```
 <prefix><buildId>:page:<key>   page, route handler or cached fetch entry
 <prefix><buildId>:data:<key>   "use cache: remote" entry (and "use cache" with useCache: "redis")
-<prefix>tag:<tag>              tag record: a hash of stale / expired times in ms; shared by every build, 366-day TTL
-<prefix>tags:log               sorted set of recently invalidated tags, scored by time (newest 10,000)
+<prefix>tags                   hash of every tag record: field = tag, value = "<stale>,<expired>" in ms
+<prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```
 
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
 is read from the build output that `next start` and a standalone `server.js` use, and it is
 `development` under `next dev`. Every key has a TTL. Remote entries expire at `expire`; page
-entries as described under [Pages and route handlers](#pages-and-route-handlers).
+entries as described under [Pages and route handlers](#pages-and-route-handlers). The two tag keys
+are shared by every build and get a 366-day TTL on every update; tags untouched for 366 days are
+pruned from both, at most hourly.
 
 `createCacheHandler` keeps its 16.5 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
 
 ### Sizing
 
-Redis command volume, not latency, is what grows with traffic. Per read:
+Redis command volume, not latency, is what grows with traffic:
 
-| Read | Redis commands |
+| Operation | Redis commands |
 |---|---|
-| Page, route handler or cached `fetch` | 1 `GET` plus 1 `HGETALL` per tag that applies (soft tags, `fetch` tags, the entry's tags), sent together. A page with 5 implicit and 4 explicit tags costs 10 commands where a bare `GET` would be 1. |
-| `"use cache: remote"` | 1 `GET`. Tags are checked against local state. |
-| `"use cache"` (memory) | none. One tag sync per request, which reads only invalidations newer than the last one. |
+| Page, route handler or cached `fetch` read | 1 `GET` + 1 `HMGET` of every tag that applies (soft tags, `fetch` tags, the entry's tags), in one round trip. The first read of an entry by a process that did not write it is 3 commands in 2 round trips. |
+| `"use cache: remote"` read | 1 `GET`. Tags are checked against local state. |
+| `"use cache"` (memory) read | none. One tag sync per request, at most every 100 ms: 1 `ZRANGEBYSCORE` of the index since the last sync, plus 1 `HMGET` of the tags that changed, if any. |
+| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `HSET` + 1 `ZADD` + 2 `EXPIRE`, however many tags. |
 
-The extra commands share the entry's round trip, so page latency is unchanged; size Redis for the
-command rate. Each `HGETALL` is a single key, so on a Cluster they spread across nodes.
+The tag read shares the entry's round trip, so page latency is unchanged; size Redis for the
+command rate. Nothing runs `HGETALL`: an `HMGET` costs in proportion to the tags it reads, not to
+the size of the hash. 100,000 tags take about 23 MB.
+
+**Hot key.** One shard serves the tag hash, on a Cluster too. At 2,000 page reads/s that is about
+2% of one core; it starts to matter around 50,000 page reads/s, or with hundreds of tags per page.
+Read replicas are the escape hatch if it ever does.
+
 [DEC-3](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/implementation/DECISIONS.md) has the measurements.
 
 ## Migrating
@@ -380,7 +399,7 @@ Next 16 contract. You can delete the subclass and use `withCache`. If you keep i
 
 - With no `redis` option, the handler reads `REDIS_URL`. If that is unset it runs in memory; in
   16.5 it connected to `localhost:6379`.
-- `tagPrefix` is ignored. Tag records live under `<keyPrefix>tag:`.
+- `tagPrefix` is ignored. Tag records live in the `<keyPrefix>tags` hash.
 - `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
 
 Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read and expire on their own.

@@ -11,6 +11,10 @@ function withCache<T extends object>(
   nextConfig: T,
   options?: WithCacheOptions,
 ): T & WithCacheConfig;
+function withCache<T extends object>(
+  nextConfig: (phase: string, context: { defaultConfig: object }) => T | Promise<T>,
+  options?: WithCacheOptions,
+): (phase: string, context: { defaultConfig: object }) => Promise<T & WithCacheConfig>;
 
 interface WithCacheOptions {
   /** Where plain "use cache" stores entries. @default "memory" */
@@ -29,9 +33,10 @@ Returns `nextConfig` plus:
 | `cacheHandler` | `handlers.page`, or the built-in page handler. Omitted with `pages: false`. |
 | `cacheHandlers.remote` | `handlers.remote`, or the built-in remote handler. |
 | `cacheHandlers.default` | `handlers.default`; else the remote handler with `useCache: "redis"`; else the built-in local handler. |
-| `cacheMaxMemorySize` | `0`. Omitted with `pages: false`. |
+| `cacheMaxMemorySize` | `0`, unless `nextConfig` sets it: then that value is kept, with a warning if it is not `0`. Omitted with `pages: false`. |
 
-Throws if `nextConfig` already sets `cacheHandler` or `cacheHandlers`.
+Throws if `nextConfig` already sets `cacheHandler` or `cacheHandlers`. A config function is wrapped
+in an async one that applies the same settings to its result.
 
 The built-in handlers read the [environment](../README.md#environment-variables) at runtime.
 
@@ -44,13 +49,16 @@ called with no options behaves like the built-in handler.
 interface CacheOptions {
   /** @default REDIS_URL ?? VALKEY_URL ?? the ELASTICACHE_* env; unset → memory only */
   url?: string;
-  /** Your own ioredis Redis or Cluster. Overrides url. Never closed by the package. */
+  /** Your own ioredis Redis or Cluster. Overrides url. Never closed or reconfigured. */
   client?: Redis | Cluster;
   /** @default CACHE_KEY_PREFIX ?? "nextjs:" */
   keyPrefix?: string;
   /** Serve from memory (each entry at most 60 s) while Redis is down. @default true */
   memoryFallback?: boolean;
-  /** Per-command timeout in ms, for a connection the package opens. @default 1000 */
+  /**
+   * Per-command timeout in ms. On a client you pass in, it bounds the package's own commands
+   * through a proxy; 3 timeouts in a row → memory for 2 s. @default 1000
+   */
   commandTimeout?: number;
   /** @default CACHE_DEBUG === "1" */
   debug?: boolean;
@@ -84,8 +92,10 @@ export default createRedisCacheHandler({ client });
 
 The class Next constructs for the singular `cacheHandler`. It implements `get`, `set`,
 `revalidateTag`, `resetRequestCache`, `delete` and `close`. `get` reads the entry and the tag
-records that apply to it in one round trip, so a revalidation on any instance is seen by the next
-read (see [Sizing](../README.md#sizing) for the command cost).
+records that apply to it in one round trip (1 `GET` + 1 `HMGET` of the `<prefix>tags` hash), so a
+revalidation on any instance is seen by the next read. The first read of an entry by a process
+that did not write it takes one more `HMGET`, for the tags it learns from the entry. See
+[Sizing](../README.md#sizing).
 
 `RedisCacheHandlerOptions` is Next's constructor context plus `CacheOptions` and:
 
@@ -94,7 +104,7 @@ read (see [Sizing](../README.md#sizing) for the command cost).
 | `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31622400` (366 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`. |
 | `redis` | — | The 16.5 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
-| `tagPrefix` | — | Deprecated and ignored. Tag records live under `<keyPrefix>tag:`. |
+| `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 
 The constructor has the same shape as in 16.5, so subclasses keep working. `close()` closes the
 process's shared connection, so call it only at shutdown. It never closes a client you passed in.
@@ -139,7 +149,8 @@ interface FlushCacheOptions extends CacheOptions {
 
 Deletes with SCAN + UNLINK on every master of a Cluster, and empties this process's memory stores.
 `deleted` is the number of Redis keys deleted, or, without Redis, the number of memory entries
-dropped. It throws if Redis is configured but unavailable. See
+dropped. It throws, deleting nothing, if Redis is configured but unavailable, or for
+`scope: "all"` with an empty `keyPrefix`. See
 [Flushing the cache](../README.md#flushing-the-cache).
 
 ## `MEMORY_ONLY_TAG`
