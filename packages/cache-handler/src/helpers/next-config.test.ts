@@ -16,10 +16,25 @@ describe("next-config helpers", () => {
     });
   });
 
-  test("createCacheConfig does not emit the legacy ISR cacheHandler key", () => {
+  test("createCacheConfig omits cacheHandler when no isrHandlerPath is given", () => {
     const config = createCacheConfig({ dataCacheHandlerPath: "/tmp/data.mjs" });
 
     expect(config).not.toHaveProperty("cacheHandler");
+  });
+
+  test("isrHandlerPath is passed through as cacheHandler", () => {
+    const config = createCacheConfig({
+      isrHandlerPath: "/tmp/isr.mjs",
+      dataCacheHandlerPath: "/tmp/data.mjs",
+    });
+    const withProfiles = createCacheConfigWithProfiles({
+      isrHandlerPath: "/tmp/isr.mjs",
+      defaultDataCacheHandlerPath: "/tmp/memory.mjs",
+      remoteDataCacheHandlerPath: "/tmp/redis.mjs",
+    });
+
+    expect(config.cacheHandler).toBe("/tmp/isr.mjs");
+    expect(withProfiles.cacheHandler).toBe("/tmp/isr.mjs");
   });
 
   test("createCacheConfigWithProfiles allows custom default and remote handlers", () => {

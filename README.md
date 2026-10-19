@@ -27,17 +27,17 @@ Implements Next.js 16+ caching APIs:
 - `revalidatePath()` - Invalidate by path
 - Cache Components and PPR
 
-## Scope: `"use cache"` only
+## Scope
 
-This package provides handlers for Next.js's **`cacheHandlers`** (plural) config — the cache behind
-`"use cache"`, `"use cache: remote"`, `cacheLife()`, `cacheTag()`, `revalidateTag()`, `updateTag()`
-and `revalidatePath()` under Cache Components.
+This package's main API is handlers for Next.js's **`cacheHandlers`** (plural) config — the cache
+behind `"use cache"`, `"use cache: remote"`, `cacheLife()`, `cacheTag()`, `revalidateTag()`,
+`updateTag()` and `revalidatePath()` under Cache Components.
 
-It does **not** provide a handler for the singular **`cacheHandler`** config. In Next.js 16 that
-option only covers ISR pages, route handler responses and optimized images, and it is not used by
-`"use cache"`. Leave it unset and Next uses its default per-instance cache for those, which is
-**not shared across instances**; multi-instance deploys should configure their own shared ISR
-`cacheHandler` alongside this package (see
+The singular **`cacheHandler`** config is separate: in Next.js 16 it covers ISR pages, route handler
+responses and optimized images, and it is not used by `"use cache"`. Left unset, Next uses its
+default per-instance cache for those, which is **not shared across instances**. The package also
+exports ISR handlers for it (`RedisCacheHandler`, `MemoryCacheHandler`, `CompositeHandler`); see
+[ISR handlers](#isr-handlers) for their current limits, or bring your own (see
 [Using your own ISR `cacheHandler`](#using-your-own-isr-cachehandler-alongside-this-package)).
 
 ## Supported Backends
@@ -166,35 +166,20 @@ listener so a lost connection doesn't crash the process.
 
 See [docs/redis.md](./docs/redis.md) for node-redis, Sentinel, and Cluster examples.
 
-## Migrating from the ISR handler (16.5.0, breaking)
+## ISR handlers
 
-Versions before 16.5.0 also exported an ISR `cacheHandler` implementation (`MemoryCacheHandler`,
-`RedisCacheHandler`, `CompositeHandler`, `createMemoryCacheHandler`) plus ISR-only helpers
-(`calculateLifespan`, `isExpired`, `isImplicitTag`, `IMPLICIT_TAG_PREFIX`, `bufferToString`,
-`stringToBuffer`, `jsonReplacer`, `jsonReviver`) and types (`CacheHandler`, `CacheValue`,
-`CacheHandlerContext`, ...). **These are removed in 16.5.0.** They implemented a Next 14-era
-contract and did not work on Next 16: `revalidateTag` received a `string[]` but was handled as a
-string (so it did nothing), and the `revalidate`/`implicitTags` context they relied on is never
-passed, so entries were stored without a TTL.
+16.5.0 removed the ISR `cacheHandler` exports (`MemoryCacheHandler`, `RedisCacheHandler`,
+`CompositeHandler`, `createMemoryCacheHandler`, the ISR helpers and types). That broke builds that
+imported them under a `^16.x` range, so **16.5.1 restores them unchanged**, along with the
+`isrHandlerPath` option of `createCacheConfig` / `createCacheConfigWithProfiles`. If you pinned
+16.5.0 and removed `cacheHandler`, you can put it back.
 
-To upgrade:
-
-1. If `cacheHandler` in `next.config` pointed at this package's ISR handler, delete it (and the
-   handler file). If it points at your own handler, keep it.
-2. Keep your `cacheHandlers` config as is.
-3. If you call `createCacheConfig` / `createCacheConfigWithProfiles`, drop the `isrHandlerPath`
-   option. They now return only `cacheHandlers` and `cacheMaxMemorySize`.
-
-**Warning: removing `cacheHandler` means ISR pages, route handler responses and optimized images
-fall back to Next's default per-instance cache. On any multi-instance deploy that is a silent
-regression: each instance renders and stores its own copy, and `revalidateTag`/`revalidatePath` on
-one instance does not clear the other instances' page caches. If you run more than one instance,
-bring your own shared ISR `cacheHandler` (it can coexist with this package's `cacheHandlers`, see
-below).**
-
-In production, `createCacheHandler` logs a one-time reminder of this when it creates a
-Redis/Valkey/ElastiCache handler. It cannot see your `next.config`, so it warns even if you already
-have an ISR handler; pass `suppressIsrWarning: true` once you do (or if you run a single instance).
+**Known limits on Next 16** (being fixed): these handlers implement a Next 14-era contract, so
+`revalidateTag` does not invalidate ISR entries, and entries are stored without a TTL. They do
+share ISR pages across instances. `createCacheHandler` logs a one-time production reminder about
+ISR when it creates a Redis/Valkey/ElastiCache handler, because it cannot see your `next.config`;
+pass `suppressIsrWarning: true` once a shared ISR `cacheHandler` is configured (or if you run a
+single instance).
 
 ### Using your own ISR `cacheHandler` alongside this package
 

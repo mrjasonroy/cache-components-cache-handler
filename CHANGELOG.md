@@ -2,9 +2,12 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [16.5.1] - 2026-10-19
 
 ### Fixed
+- **Restored the ISR `cacheHandler` exports removed in 16.5.0** (`MemoryCacheHandler`, `createMemoryCacheHandler`, `RedisCacheHandler`, `CompositeHandler`, `createCompositeHandler`, the ISR helpers and types). Removing them in a minor release broke builds that import them under a `^16.x` range. They are back unchanged, plus the fixes from #52 (Redis `SET` TTL) and #53 (nested buffers stored as base64). Next.js still supports `cacheHandler`, so they are not deprecated; their Next 16 contract gaps (`revalidateTag` doesn't invalidate ISR entries, no TTL) are being fixed separately.
+- `createCacheConfig` / `createCacheConfigWithProfiles` accept `isrHandlerPath` again and emit `cacheHandler` when it is passed. In 16.5.0 a JS config that still passed it lost its ISR handler silently.
+- Importing the package still doesn't require `ioredis`: the ISR `RedisCacheHandler` now loads it lazily, like the data cache factory.
 - CI: the daily canary test now fails (and opens an issue) when a canary breaks; before, only `latest` could fail. The stale `rc` channel (npm still tags 15.0.0-rc.1) is dropped.
 - CI: the Next.js bump workflow no longer calls the missing `redis-cli`, which marked every bump PR "Tests need review".
 - CI: an open bump PR with failing checks, or a leftover bump branch with no PR, now fails the nightly run instead of being skipped silently.

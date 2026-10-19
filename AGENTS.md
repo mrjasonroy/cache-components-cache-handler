@@ -54,7 +54,7 @@
 ### Before Making Changes
 1. Read `CHANGELOG.md` for recent changes
 2. Check `implementation/ISSUES.md` for known issues
-3. Review `implementation/DECISIONS.md` for context (e.g. why there is no ISR `cacheHandler`)
+3. Review `implementation/DECISIONS.md` for context (e.g. why the ISR `cacheHandler` exports were removed and restored)
 
 ### While Making Changes
 1. Make your changes
@@ -103,7 +103,7 @@ This project focuses on Next.js 16's new caching system:
 **Key Resources:**
 - [Cache Components](https://nextjs.org/docs/app/getting-started/cache-components)
 - [Caching and Revalidating](https://nextjs.org/docs/app/getting-started/caching-and-revalidating)
-- [cacheHandlers API](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers) (this package implements `cacheHandlers` only, not the ISR `cacheHandler`)
+- [cacheHandlers API](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers) (the main API; the ISR `cacheHandler` handlers live in `src/handlers/`)
 
 ## Package Structure
 
@@ -117,7 +117,9 @@ packages/
     │   │   ├── redis.ts           # Redis/Valkey/ElastiCache handler
     │   │   ├── ioredis-adapter.ts # ioredis -> node-redis-style client adapter
     │   │   └── factory.ts         # createCacheHandler zero-config factory
+    │   ├── handlers/              # ISR cacheHandler handlers (memory, redis, composite)
     │   ├── helpers/
+    │   │   ├── load-ioredis.ts    # lazy ioredis loader
     │   │   └── next-config.ts     # createCacheConfig helpers
     │   └── index.ts               # Public API
     └── package.json
@@ -176,8 +178,8 @@ Use conventional commits:
 
 ### Creating a Cache Handler
 
-Handlers implement Next's `cacheHandlers` (plural) `DataCacheHandler` contract, not the ISR
-`cacheHandler` one (see `implementation/DECISIONS.md`):
+Data cache handlers implement Next's `cacheHandlers` (plural) `DataCacheHandler` contract. The ISR
+handlers in `src/handlers/` implement the singular `cacheHandler` one (see `implementation/DECISIONS.md`):
 
 ```typescript
 import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
