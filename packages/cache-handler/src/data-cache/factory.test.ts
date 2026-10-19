@@ -10,7 +10,34 @@ const createFakeRedis = () => ({
   hget: vi.fn(),
   hset: vi.fn(),
   hgetall: vi.fn(),
+  expire: vi.fn(),
+  on: vi.fn(),
 });
+
+interface ResilienceConfig {
+  retryStrategy: (times: number) => number | null;
+  maxRetriesPerRequest: number;
+  enableOfflineQueue: boolean;
+  commandTimeout: number;
+}
+
+// Every client the factory builds must keep reconnecting forever (a routine
+// failover must not disable caching until restart) and must fail commands fast
+// while disconnected (a cache must never hang a page render).
+function expectResilientClient(config: ResilienceConfig) {
+  for (const times of [1, 3, 4, 10, 100, 10_000]) {
+    const delay = config.retryStrategy(times);
+    expect(delay).toBeTypeOf("number");
+    expect(delay).toBeGreaterThan(0);
+    expect(delay).toBeLessThanOrEqual(5000);
+  }
+  expect(config.retryStrategy(1)).toBe(200);
+  expect(config.retryStrategy(4)).toBe(800);
+  expect(config.retryStrategy(1000)).toBe(5000);
+  expect(config.maxRetriesPerRequest).toBe(1);
+  expect(config.commandTimeout).toBeGreaterThan(0);
+  expect(config.commandTimeout).toBeLessThanOrEqual(5000);
+}
 
 const redisConstructorMock = vi.hoisted(() =>
   vi.fn<[], ReturnType<typeof createFakeRedis>>(() => createFakeRedis()),
@@ -103,16 +130,62 @@ describe("createCacheHandler factory", () => {
       type: "valkey",
     });
 
-    expect(redisConstructorMock).toHaveBeenCalledWith("redis://valkey.internal:6380");
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      "redis://valkey.internal:6380",
+      expect.any(Object),
+    );
   });
 
-  test("skips constructor options when no password or tls configured", () => {
+  test("passes no password or tls when none configured", () => {
     createCacheHandler({
       type: "redis",
       url: "redis://no-auth",
     });
 
-    expect(redisConstructorMock).toHaveBeenCalledWith("redis://no-auth");
+    expect(redisConstructorMock).toHaveBeenCalledWith("redis://no-auth", expect.any(Object));
+    const config = redisConstructorMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(config).not.toHaveProperty("password");
+    expect(config).not.toHaveProperty("tls");
+  });
+
+  test("redis/valkey client reconnects forever and fails commands fast", () => {
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    expectResilientClient(redisConstructorMock.mock.calls[0][1] as ResilienceConfig);
+  });
+
+  test("elasticache client reconnects forever and fails commands fast", () => {
+    process.env.ELASTICACHE_ENDPOINT = "my-cluster";
+    createCacheHandler({ type: "elasticache" });
+    expectResilientClient(redisConstructorMock.mock.calls[0][0] as ResilienceConfig);
+  });
+
+  test("passes commandTimeout through to the client", () => {
+    createCacheHandler({ type: "redis", commandTimeout: 250 });
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ commandTimeout: 250 }),
+    );
+  });
+
+  // Without an "error" listener ioredis prints "Unhandled error event" on every
+  // reconnect attempt; with one that swallows, a dead Redis is invisible.
+  test("logs client connection errors, rate-limited", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = createFakeRedis();
+    redisConstructorMock.mockImplementation(() => client);
+
+    createCacheHandler({ type: "redis" });
+
+    const errorListeners = client.on.mock.calls.filter((call) => call[0] === "error");
+    expect(errorListeners).toHaveLength(1);
+    const listener = errorListeners[0][1] as (error: Error) => void;
+    listener(new Error("ECONNREFUSED"));
+    listener(new Error("ECONNREFUSED"));
+    listener(new Error("ECONNREFUSED"));
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(String(errorSpy.mock.calls[0][0])).toContain("connection");
+    errorSpy.mockRestore();
   });
 
   // ElastiCache differs from plain Redis only in how it maps env vars to the ioredis
@@ -139,13 +212,13 @@ describe("createCacheHandler factory", () => {
     );
 
     // Verify the backoff itself, not just that a function was passed: linear
-    // 200ms * attempt, then give up (null) after 3 attempts.
-    const config = redisConstructorMock.mock.calls[0][0] as {
-      retryStrategy: (times: number) => number | null;
-    };
+    // 200ms * attempt, capped at 5s, and never giving up. Returning null would
+    // end the ioredis client for good after a routine failover.
+    const config = redisConstructorMock.mock.calls[0][0] as ResilienceConfig;
     expect(config.retryStrategy(1)).toBe(200);
     expect(config.retryStrategy(3)).toBe(600);
-    expect(config.retryStrategy(4)).toBeNull();
+    expect(config.retryStrategy(4)).toBe(800);
+    expect(config.retryStrategy(1000)).toBe(5000);
   });
 
   test("explicit options override ElastiCache env vars", () => {
