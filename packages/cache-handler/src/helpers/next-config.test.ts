@@ -2,14 +2,12 @@ import { describe, expect, test } from "vitest";
 import { createCacheConfig, createCacheConfigWithProfiles } from "./next-config.js";
 
 describe("next-config helpers", () => {
-  test("createCacheConfig builds configuration for single handler", () => {
+  test("createCacheConfig points default and remote at the same handler", () => {
     const config = createCacheConfig({
-      isrHandlerPath: "/tmp/isr-handler.mjs",
       dataCacheHandlerPath: "/tmp/data-cache-handler.mjs",
     });
 
     expect(config).toEqual({
-      cacheHandler: "/tmp/isr-handler.mjs",
       cacheHandlers: {
         default: "/tmp/data-cache-handler.mjs",
         remote: "/tmp/data-cache-handler.mjs",
@@ -18,15 +16,19 @@ describe("next-config helpers", () => {
     });
   });
 
+  test("createCacheConfig does not emit the legacy ISR cacheHandler key", () => {
+    const config = createCacheConfig({ dataCacheHandlerPath: "/tmp/data.mjs" });
+
+    expect(config).not.toHaveProperty("cacheHandler");
+  });
+
   test("createCacheConfigWithProfiles allows custom default and remote handlers", () => {
     const config = createCacheConfigWithProfiles({
-      isrHandlerPath: "/tmp/isr-handler.mjs",
       defaultDataCacheHandlerPath: "/tmp/memory-handler.mjs",
       remoteDataCacheHandlerPath: "/tmp/redis-handler.mjs",
     });
 
     expect(config).toEqual({
-      cacheHandler: "/tmp/isr-handler.mjs",
       cacheHandlers: {
         default: "/tmp/memory-handler.mjs",
         remote: "/tmp/redis-handler.mjs",
@@ -37,7 +39,6 @@ describe("next-config helpers", () => {
 
   test("helpers keep default memory cache when disableDefaultMemoryCache is false", () => {
     const config = createCacheConfig({
-      isrHandlerPath: "/tmp/isr.mjs",
       dataCacheHandlerPath: "/tmp/data.mjs",
       disableDefaultMemoryCache: false,
     });

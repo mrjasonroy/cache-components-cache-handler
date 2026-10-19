@@ -2,7 +2,7 @@
 
 ## Project Context
 
-**better-nextjs-cache-handler** is a modern Next.js 16+ cache handler library built with:
+**@mrjasonroy/cache-components-cache-handler** is a Next.js 16+ `"use cache"` (data cache) handler library built with:
 - **Turborepo** - Monorepo management
 - **TypeScript** - Strict mode, full type safety
 - **Biome** - Linting and formatting
@@ -52,9 +52,9 @@
 ## Workflow
 
 ### Before Making Changes
-1. Read `implementation/PROGRESS.md` for current state
-2. Check `implementation/NEXT_STEPS.md` for planned work
-3. Review `implementation/DECISIONS.md` for context
+1. Read `CHANGELOG.md` for recent changes
+2. Check `implementation/ISSUES.md` for known issues
+3. Review `implementation/DECISIONS.md` for context (e.g. why there is no ISR `cacheHandler`)
 
 ### While Making Changes
 1. Make your changes
@@ -64,10 +64,9 @@
 5. Run `pnpm test` to ensure tests pass
 
 ### After Making Changes
-1. Update `implementation/PROGRESS.md` with what you did
-2. Update `implementation/NEXT_STEPS.md` with what's next
-3. Document important decisions in `implementation/DECISIONS.md`
-4. Add any issues to `implementation/ISSUES.md`
+1. Add a `CHANGELOG.md` entry for user-facing changes
+2. Document important decisions in `implementation/DECISIONS.md`
+3. Add any issues to `implementation/ISSUES.md`
 
 ## Key Commands
 
@@ -104,32 +103,34 @@ This project focuses on Next.js 16's new caching system:
 **Key Resources:**
 - [Cache Components](https://nextjs.org/docs/app/getting-started/cache-components)
 - [Caching and Revalidating](https://nextjs.org/docs/app/getting-started/caching-and-revalidating)
-- [Cache Handler API](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandler)
+- [cacheHandlers API](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers) (this package implements `cacheHandlers` only, not the ISR `cacheHandler`)
 
 ## Package Structure
 
 ```
 packages/
-├── cache-handler/              # @mrjasonroy/better-nextjs-cache-handler
-│   ├── src/
-│   │   ├── types.ts           # Core types
-│   │   ├── handlers/
-│   │   │   ├── memory.ts      # Memory handler
-│   │   │   └── composite.ts   # Composite handler
-│   │   └── index.ts           # Public API
-│   └── package.json
-│
-├── cache-handler-redis/        # @mrjasonroy/better-nextjs-cache-handler-redis
-│   └── (coming soon)
-│
-└── cache-handler-elasticache/  # @mrjasonroy/better-nextjs-cache-handler-elasticache
-    └── (coming soon)
+└── cache-handler/              # @mrjasonroy/cache-components-cache-handler
+    ├── src/
+    │   ├── data-cache/
+    │   │   ├── types.ts           # DataCacheHandler / DataCacheEntry types
+    │   │   ├── memory.ts          # Memory handler
+    │   │   ├── redis.ts           # Redis/Valkey/ElastiCache handler
+    │   │   ├── ioredis-adapter.ts # ioredis -> node-redis-style client adapter
+    │   │   └── factory.ts         # createCacheHandler zero-config factory
+    │   ├── helpers/
+    │   │   └── next-config.ts     # createCacheConfig helpers
+    │   └── index.ts               # Public API
+    └── package.json
+
+apps/
+├── e2e-test-app/               # Playwright e2e suite (memory, redis, valkey, elasticache)
+└── redis-example/              # Minimal Redis example
 ```
 
 ## When Making Changes
 
 ### Adding a New Feature
-1. Add types to `src/types.ts` if needed
+1. Add types to `src/data-cache/types.ts` if needed
 2. Implement in appropriate handler file
 3. Export from `src/index.ts`
 4. Write tests in `*.test.ts` file
@@ -175,21 +176,28 @@ Use conventional commits:
 
 ### Creating a Cache Handler
 
+Handlers implement Next's `cacheHandlers` (plural) `DataCacheHandler` contract, not the ISR
+`cacheHandler` one (see `implementation/DECISIONS.md`):
+
 ```typescript
-import type { CacheHandler, CacheHandlerContext, CacheValue } from "../types.js";
+import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
 
-export class MyCacheHandler implements CacheHandler {
-  async get(key: string): Promise<CacheValue | null> {
-    // Implementation
-  }
-
-  async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {
-    // Implementation
-  }
-
-  async revalidateTag(tag: string): Promise<void> {
-    // Implementation
-  }
+export function createMyDataCacheHandler(): DataCacheHandler {
+  return {
+    async get(cacheKey: string, softTags: string[]): Promise<DataCacheEntry | undefined> {
+      // Implementation
+    },
+    async set(cacheKey: string, pendingEntry: Promise<DataCacheEntry>): Promise<void> {
+      // Implementation
+    },
+    async refreshTags(): Promise<void> {},
+    async getExpiration(tags: string[]): Promise<Timestamp> {
+      // Implementation
+    },
+    async updateTags(tags: string[], durations?: { expire?: number }): Promise<void> {
+      // Implementation
+    },
+  };
 }
 ```
 
@@ -209,15 +217,11 @@ try {
 ```typescript
 import { describe, test, expect } from "vitest";
 
-describe("MemoryCacheHandler", () => {
-  test("should store and retrieve values", async () => {
-    const handler = createMemoryCacheHandler();
-    const value = { kind: "FETCH", data: {...}, revalidate: false };
+describe("createMemoryDataCacheHandler", () => {
+  test("returns undefined for a missing key", async () => {
+    const handler = createMemoryDataCacheHandler();
 
-    await handler.set("test-key", value);
-    const result = await handler.get("test-key");
-
-    expect(result).toEqual(value);
+    expect(await handler.get("missing", [])).toBeUndefined();
   });
 });
 ```

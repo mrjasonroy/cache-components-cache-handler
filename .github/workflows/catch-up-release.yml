@@ -69,6 +69,10 @@ jobs:
           if [ "$CURRENT_PKG_VERSION" = "$NEW_PKG_VERSION" ]; then
             echo "needs_update=false" >> $GITHUB_OUTPUT
             echo "Already up to date!"
+          elif node -e 'const p=v=>{const[m,pre]=v.split("-");return[...m.split(".").map(Number),pre?0:1]};const[a,b]=process.argv.slice(1).map(p);for(let i=0;i<4;i++){if(a[i]!==b[i])process.exit(a[i]>b[i]?0:1)}process.exit(1)' "$CURRENT_PKG_VERSION" "$NEW_PKG_VERSION"; then
+            # Never lower the package version: publishing a lower version would move npm `latest` back.
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "Package $CURRENT_PKG_VERSION is ahead of Next $NEW_PKG_VERSION; nothing to do"
           else
             echo "needs_update=true" >> $GITHUB_OUTPUT
           fi
@@ -81,12 +85,10 @@ jobs:
           pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
           cd ../..
 
-          # Update legacy-cache-test if it exists
-          if [ -d "apps/legacy-cache-test" ]; then
-            cd apps/legacy-cache-test
-            pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
-            cd ../..
-          fi
+          # Update redis-example
+          cd apps/redis-example
+          pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
+          cd ../..
 
       - name: Update package version
         if: steps.versions.outputs.needs_update == 'true'

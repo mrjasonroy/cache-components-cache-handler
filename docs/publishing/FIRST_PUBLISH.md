@@ -117,9 +117,7 @@ npm install @mrjasonroy/cache-components-cache-handler@16.0.0-alpha.0
 
 ```typescript
 import {
-  MemoryCacheHandler,
-  RedisCacheHandler,
-  CompositeHandler,
+  createCacheHandler,
   createMemoryDataCacheHandler,
   createRedisDataCacheHandler
 } from '@mrjasonroy/cache-components-cache-handler'

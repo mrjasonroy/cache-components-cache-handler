@@ -2,14 +2,25 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [16.5.0] - 2026-10-18
+
+### Removed (BREAKING)
+
+- **The legacy ISR `cacheHandler` (singular) implementation is gone; the package is now `"use cache"`-only.** Removed exports: `MemoryCacheHandler`, `createMemoryCacheHandler`, `RedisCacheHandler`, `CompositeHandler`, `createCompositeHandler` and their option types; the ISR helpers `calculateLifespan`, `isExpired`, `isImplicitTag`, `IMPLICIT_TAG_PREFIX`, `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`; and the ISR types `CacheHandler`, `CacheHandlerContext`, `CacheHandlerGetMeta`, `CacheHandlerOptions`, `CacheHandlerValue`, `CacheValue`, `LifespanParameters`. These implemented a Next 14-era contract and did not work on Next 16 (`revalidateTag` got a `string[]` and was a no-op; no TTL because `context.revalidate` is never passed; `implicitTags` never arrives). See `implementation/DECISIONS.md`.
+- `createCacheConfig` / `createCacheConfigWithProfiles` no longer accept `isrHandlerPath` and no longer return a `cacheHandler` key.
+- **Migration:** delete `cacheHandler` from `next.config` (if it pointed at this package); keep `cacheHandlers`.
+- **Warning: removing `cacheHandler` means ISR pages, route handler responses and optimized images fall back to Next's default per-instance cache. On any multi-instance deploy that is a silent regression: each instance renders and stores its own copy, and `revalidateTag`/`revalidatePath` on one instance does not clear the other instances' page caches. Users running more than one instance must bring their own shared ISR `cacheHandler` (it can coexist with this package's `cacheHandlers`; see the README).**
 
 ### Added
 
+- One-time production warning (once per process, only when `NODE_ENV === "production"`) when `createCacheHandler` creates a Redis/Valkey/ElastiCache handler, reminding multi-instance users to configure a shared ISR `cacheHandler`. The handler cannot see `next.config`, so it warns regardless; opt out with `suppressIsrWarning: true`.
 - Unit coverage for the factory's `elasticache` branch — asserts `ELASTICACHE_*` env vars (and explicit options) map to the ioredis config (host/port, TLS-on-by-default, auth-token password, connect timeout, retry) and that a missing endpoint throws.
 
 ### Changed
 
+- Importing the package no longer loads `ioredis` at module load; it is only required (lazily) by the Redis/Valkey/ElastiCache factory paths, so memory-only users don't need it installed.
+- Removed the `apps/legacy-cache-test` app; the Next.js version-bump workflows now bump `apps/redis-example` alongside `apps/e2e-test-app`.
+- Docs: fixed JSDoc import paths that referenced non-exported subpaths, and the factory's documented `keyPrefix` default (`nextjs:data-cache:`).
 - The `e2e-elasticache` CI job now runs against a Redis container with **in-transit TLS and an auth token** (self-signed CA trusted via `NODE_EXTRA_CA_CERTS`), instead of a plaintext container with TLS off and no auth. This validates the TLS handshake + AUTH path that real ElastiCache requires.
 - The e2e test app builds its ElastiCache handler through the package's `createCacheHandler({ type: "elasticache" })` factory rather than hand-wiring ioredis, so the e2e exercises the shipped code path.
 

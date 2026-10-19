@@ -1,6 +1,6 @@
 // Test page for fetch() caching WITHOUT "use cache" directive
-// NOTE: In Next.js 16 with cacheComponents enabled, native fetch() caching
-// is NOT supported. This page demonstrates that behavior.
+// NOTE: These fetches go through Next's incremental cache (the singular
+// `cacheHandler`, or Next's default when unset), not this package's `cacheHandlers`.
 
 import { Suspense } from "react";
 
