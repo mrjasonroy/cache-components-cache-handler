@@ -56,6 +56,14 @@ export interface RemoteCacheHandlerOptions extends CacheOptions {
   buildId?: string;
 }
 
+/**
+ * Sizes for the debug log: the value's bytes, and the entry as stored in Redis. Only computed with
+ * debug logging on (arguments of an optional call are not evaluated otherwise).
+ */
+function sizes(stored: StoredDataEntry): { bytes: number; encodedBytes: number } {
+  return { bytes: stored.value.byteLength, encodedBytes: encodeEntry(stored).byteLength };
+}
+
 interface InMemoryEntry {
   stored: StoredDataEntry;
   until: number;
@@ -98,7 +106,7 @@ export function createRemoteCacheHandler(
         const entry = inMemory
           ? toDataCacheEntry(inMemory.stored, tags, inMemory.until)
           : undefined;
-        log?.("get", cacheKey, entry ? "memory hit" : "miss");
+        log?.("get", cacheKey, entry ? "memory hit" : "miss", inMemory && sizes(inMemory.stored));
         return entry;
       }
 
@@ -122,7 +130,7 @@ export function createRemoteCacheHandler(
         }
         const until = inMemory ? inMemory.until : stored.timestamp + stored.expire * 1000;
         const entry = toDataCacheEntry(stored, tags, until);
-        log?.("get", cacheKey, entry ? "hit" : "invalidated");
+        log?.("get", cacheKey, entry ? "hit" : "invalidated", sizes(stored));
         return entry;
       } catch (error) {
         runtime.reportError("get", error);
@@ -146,16 +154,21 @@ export function createRemoteCacheHandler(
             stored.value.byteLength,
             now + ttl * 1000,
           );
-          log?.("set", cacheKey, "memory", { ttl });
+          log?.("set", cacheKey, "memory", { ttl, bytes: stored.value.byteLength });
           return;
         }
 
         if (await isRedisReady(runtime)) {
           try {
             const key = keyOf(cacheKey);
-            await connection.client.set(key, encodeEntry(stored), "EX", ttl);
+            const encoded = encodeEntry(stored);
+            await connection.client.set(key, encoded, "EX", ttl);
             stores.entryTags.set(key, stored.tags, stored.tags.length, null);
-            log?.("set", cacheKey, "redis", { ttl });
+            log?.("set", cacheKey, "redis", {
+              ttl,
+              bytes: stored.value.byteLength,
+              encodedBytes: encoded.byteLength,
+            });
             return;
           } catch (error) {
             runtime.reportError("set", error);
@@ -165,7 +178,7 @@ export function createRemoteCacheHandler(
         if (!memoryFallback) return;
         const until = now + Math.min(ttl, FALLBACK_TTL_SECONDS) * 1000;
         stores.dataFallback.set(cacheKey, { stored, until }, stored.value.byteLength, until);
-        log?.("set", cacheKey, "fallback memory");
+        log?.("set", cacheKey, "fallback memory", { bytes: stored.value.byteLength });
       });
     },
 

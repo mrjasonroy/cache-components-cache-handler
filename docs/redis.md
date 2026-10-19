@@ -132,7 +132,7 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every entry key has a TTL; the two tag
 keys have none. Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy
 (`volatile-lru`), never `allkeys-lru`: an evicted tag hash brings every invalidated entry back. Entries are binary and not human-readable.
-`CACHE_DEBUG=1` on the app logs what is read and written.
+`CACHE_DEBUG=1` on the app logs what is read and written, with each value's size: `bytes` (the value; the encoded entry for pages) and, for `"use cache: remote"`, `encodedBytes` (as stored in Redis).
 
 ```bash
 redis-cli info memory

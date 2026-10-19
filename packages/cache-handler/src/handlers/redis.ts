@@ -294,7 +294,10 @@ export class RedisCacheHandler {
     }
 
     const result = this.toResult(entry, [...entry.tags, ...softTags, ...fetchTags], ctx);
-    this.log?.("get", cacheKey, result ? (built ? "build output" : "hit") : "invalidated");
+    // Arguments of an optional call are only evaluated with debug logging on.
+    this.log?.("get", cacheKey, result ? (built ? "build output" : "hit") : "invalidated", {
+      bytes: encodeEntry(entry).byteLength,
+    });
     if (result && built) await this.keepBuildOutput(cacheKey, entry);
     return result;
   }
@@ -361,12 +364,19 @@ export class RedisCacheHandler {
     const encoded = encodeEntry(entry);
     if (!connection) {
       stores.page.set(cacheKey, { entry }, encoded.byteLength, Date.now() + lifetime * 1000);
+      this.log?.("set", cacheKey, "build output, memory", { lifetime, bytes: encoded.byteLength });
       return;
     }
     try {
       const key = this.redisKey(cacheKey);
-      await connection.client.set(key, encoded, "EX", lifetime, "NX");
+      const written = await connection.client.set(key, encoded, "EX", lifetime, "NX");
       stores.entryTags.set(key, entry.tags, entry.tags.length, null);
+      this.log?.(
+        "set",
+        cacheKey,
+        written ? "build output, redis" : "build output, already in redis",
+        { lifetime, bytes: encoded.byteLength },
+      );
     } catch (error) {
       this.runtime.reportError("set", error);
     }
@@ -422,13 +432,9 @@ export class RedisCacheHandler {
     if (!ctx?.fetchCache && ctx?.cacheControl) entry.cacheControl = ctx.cacheControl;
 
     if (!connection || tags.includes(MEMORY_ONLY_TAG)) {
-      stores.page.set(
-        cacheKey,
-        { entry },
-        encodeEntry(entry).byteLength,
-        entry.lastModified + lifetime * 1000,
-      );
-      this.log?.("set", cacheKey, "memory", { lifetime });
+      const bytes = encodeEntry(entry).byteLength;
+      stores.page.set(cacheKey, { entry }, bytes, entry.lastModified + lifetime * 1000);
+      this.log?.("set", cacheKey, "memory", { lifetime, bytes });
       return;
     }
 
@@ -439,7 +445,7 @@ export class RedisCacheHandler {
         const key = this.redisKey(cacheKey);
         await connection.client.set(key, encoded, "EX", lifetime);
         stores.entryTags.set(key, tags, tags.length, null);
-        this.log?.("set", cacheKey, "redis", { tags, lifetime });
+        this.log?.("set", cacheKey, "redis", { tags, lifetime, bytes: encoded.byteLength });
         return;
       } catch (error) {
         this.runtime.reportError("set", error);
@@ -450,7 +456,7 @@ export class RedisCacheHandler {
     const size = (encoded ?? encodeEntry(entry)).byteLength;
     const until = entry.lastModified + Math.min(lifetime, FALLBACK_TTL_SECONDS) * 1000;
     stores.pageFallback.set(cacheKey, { entry }, size, until);
-    this.log?.("set", cacheKey, "fallback memory");
+    this.log?.("set", cacheKey, "fallback memory", { bytes: size });
   }
 
   /**

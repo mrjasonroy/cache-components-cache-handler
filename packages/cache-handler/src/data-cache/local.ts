@@ -74,7 +74,7 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
       }
       const stored = stores.local.get(cacheKey) as StoredDataEntry | undefined;
       const entry = stored ? toDataCacheEntry(stored, tags, keepUntil(stored)) : undefined;
-      log?.("get", cacheKey, entry ? "hit" : "miss");
+      log?.("get", cacheKey, entry ? "hit" : "miss", stored && { bytes: stored.value.byteLength });
       return entry;
     },
 
@@ -85,7 +85,7 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
         const until = keepUntil(stored);
         if (until <= Date.now()) return;
         stores.local.set(cacheKey, stored, stored.value.byteLength, until);
-        log?.("set", cacheKey);
+        log?.("set", cacheKey, { bytes: stored.value.byteLength });
       });
     },
 

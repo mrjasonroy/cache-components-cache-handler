@@ -100,7 +100,7 @@ from the environment, the same under `next start`, standalone and Docker.
 | `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch. |
-| `CACHE_DEBUG` | unset | `1` logs hits, misses and state changes. It never logs the URL. |
+| `CACHE_DEBUG` | unset | `1` logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
 
 There are no tuning variables for timeouts or TTLs: the defaults above are the product. If you
 need different ones, write a [custom handler file](#custom-handlers).
