@@ -55,7 +55,7 @@ jobs:
 
           if [ "${{ inputs.version }}" = "specific" ]; then
             NEW_VERSION="${{ inputs.specific_version }}"
-            npm version $NEW_VERSION --no-git-tag-version
+            npm version $NEW_VERSION --no-git-tag-version --allow-same-version
           elif [ "${{ inputs.version }}" = "prerelease-alpha" ]; then
             NEW_VERSION=$(npm version prerelease --preid=alpha --no-git-tag-version | sed 's/v//')
           elif [ "${{ inputs.version }}" = "prerelease-beta" ]; then
@@ -66,7 +66,7 @@ jobs:
             # Remove prerelease tags (16.0.0-alpha.0 -> 16.0.0)
             CURRENT_VERSION=$(node -p "require('./package.json').version")
             NEW_VERSION=$(echo $CURRENT_VERSION | sed 's/-.*$//')
-            npm version $NEW_VERSION --no-git-tag-version
+            npm version $NEW_VERSION --no-git-tag-version --allow-same-version
           else
             NEW_VERSION=$(npm version ${{ inputs.version }} --no-git-tag-version | sed 's/v//')
           fi

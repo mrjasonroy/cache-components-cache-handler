@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- CI: the daily canary/RC test now fails (and opens an issue) when a pre-release breaks; before, only `latest` could fail.
+- CI: the Next.js bump workflow no longer calls the missing `redis-cli`, which marked every bump PR "Tests need review".
+- CI: an open bump PR with failing checks, or a leftover bump branch with no PR, now fails the nightly run instead of being skipped silently.
+
+### Docs
+- README lists every `createCacheHandler` option, including `commandTimeout`, `defaultTTL`, `tagTTL`, `errorLogIntervalMs` and `suppressIsrWarning`.
+
 ## [16.5.0] - 2026-10-18
 
 ### Removed (BREAKING)
