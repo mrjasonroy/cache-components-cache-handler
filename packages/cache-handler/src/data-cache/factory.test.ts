@@ -1,18 +1,30 @@
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { closeAllRedisConnections } from "../shared/connection.js";
 import type { DataCacheHandler } from "./types.js";
 
-const createFakeRedis = () => ({
-  get: vi.fn(),
-  set: vi.fn(),
-  del: vi.fn(),
-  exists: vi.fn(),
-  ttl: vi.fn(),
-  hget: vi.fn(),
-  hset: vi.fn(),
-  hgetall: vi.fn(),
-  expire: vi.fn(),
-  on: vi.fn(),
-});
+/**
+ * Enough of an ioredis client for the factory and the shared connection: the
+ * data commands, events, `status`, `sendCommand` and the close methods.
+ */
+class FakeIoredis extends EventEmitter {
+  status = "connecting";
+  get = vi.fn();
+  getBuffer = vi.fn();
+  set = vi.fn();
+  del = vi.fn();
+  exists = vi.fn();
+  ttl = vi.fn();
+  hget = vi.fn();
+  hset = vi.fn();
+  hgetall = vi.fn();
+  expire = vi.fn();
+  sendCommand = vi.fn();
+  quit = vi.fn(async () => "OK");
+  disconnect = vi.fn();
+}
+
+const createFakeRedis = () => new FakeIoredis();
 
 interface ResilienceConfig {
   retryStrategy: (times: number) => number | null;
@@ -75,6 +87,12 @@ vi.mock("./redis.js", async () => {
 import { createCacheHandler } from "./factory.js";
 
 describe("createCacheHandler factory", () => {
+  afterEach(async () => {
+    // Connections are shared per process; each test starts with none.
+    await closeAllRedisConnections();
+    vi.restoreAllMocks();
+  });
+
   beforeEach(() => {
     redisConstructorMock.mockClear();
     redisConstructorMock.mockImplementation(() => createFakeRedis());
@@ -159,6 +177,57 @@ describe("createCacheHandler factory", () => {
     expectResilientClient(redisConstructorMock.mock.calls[0][0] as ResilienceConfig);
   });
 
+  test("fails fast while disconnected: no offline queue, 1s command timeout by default", () => {
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      "redis://cache:6379",
+      expect.objectContaining({ enableOfflineQueue: false, commandTimeout: 1000 }),
+    );
+  });
+
+  test("handlers created with the same options share one client", () => {
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    createCacheHandler({ type: "valkey", url: "redis://cache:6379" });
+    expect(redisConstructorMock).toHaveBeenCalledTimes(1);
+
+    createCacheHandler({ type: "redis", url: "redis://other:6379" });
+    createCacheHandler({ type: "redis", url: "redis://cache:6379", commandTimeout: 250 });
+    createCacheHandler({ type: "redis", url: "redis://cache:6379", password: "secret" });
+    expect(redisConstructorMock).toHaveBeenCalledTimes(4);
+  });
+
+  test("a closed connection is reopened on next use", async () => {
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    await closeAllRedisConnections();
+    createCacheHandler({ type: "redis", url: "redis://cache:6379" });
+    expect(redisConstructorMock).toHaveBeenCalledTimes(2);
+  });
+
+  test("uses a passed client instead of opening one, and never closes it", async () => {
+    const client = createFakeRedis();
+    createCacheHandler({
+      type: "redis",
+      client: client as unknown as NonNullable<Parameters<typeof createCacheHandler>[0]["client"]>,
+    });
+    expect(redisConstructorMock).not.toHaveBeenCalled();
+    await closeAllRedisConnections();
+    expect(client.quit).not.toHaveBeenCalled();
+  });
+
+  test("never connects during next build or with CACHE_REDIS=off", () => {
+    process.env.NEXT_PHASE = "phase-production-build";
+    expect(createCacheHandler({ type: "redis", url: "redis://cache:6379" }).get).toBeTypeOf(
+      "function",
+    );
+    Reflect.deleteProperty(process.env, "NEXT_PHASE");
+    process.env.CACHE_REDIS = "off";
+    createCacheHandler({ type: "elasticache", endpoint: "cache.internal" });
+    Reflect.deleteProperty(process.env, "CACHE_REDIS");
+    expect(redisConstructorMock).not.toHaveBeenCalled();
+    expect(redisHandlerFactoryMock).not.toHaveBeenCalled();
+  });
+
   test("passes commandTimeout through to the client", () => {
     createCacheHandler({ type: "redis", commandTimeout: 250 });
     expect(redisConstructorMock).toHaveBeenCalledWith(
@@ -171,21 +240,19 @@ describe("createCacheHandler factory", () => {
   // reconnect attempt; with one that swallows, a dead Redis is invisible.
   test("logs client connection errors, rate-limited", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
     const client = createFakeRedis();
     redisConstructorMock.mockImplementation(() => client);
 
     createCacheHandler({ type: "redis" });
 
-    const errorListeners = client.on.mock.calls.filter((call) => call[0] === "error");
-    expect(errorListeners).toHaveLength(1);
-    const listener = errorListeners[0][1] as (error: Error) => void;
-    listener(new Error("ECONNREFUSED"));
-    listener(new Error("ECONNREFUSED"));
-    listener(new Error("ECONNREFUSED"));
+    expect(client.listenerCount("error")).toBeGreaterThan(0);
+    client.emit("error", new Error("ECONNREFUSED"));
+    client.emit("error", new Error("ECONNREFUSED"));
+    client.emit("error", new Error("ECONNREFUSED"));
 
     expect(errorSpy).toHaveBeenCalledTimes(1);
     expect(String(errorSpy.mock.calls[0][0])).toContain("connection");
-    errorSpy.mockRestore();
   });
 
   // ElastiCache differs from plain Redis only in how it maps env vars to the ioredis
@@ -257,7 +324,8 @@ describe("createCacheHandler factory", () => {
 
     createCacheHandler({ type: "elasticache" });
 
-    expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
+    expect(redisConstructorMock).toHaveBeenCalledTimes(1);
+    expect(redisConstructorMock.mock.calls[0][0]).not.toHaveProperty("tls");
   });
 
   test("disables TLS when options.tls is false (overrides the on-by-default)", () => {
@@ -265,7 +333,8 @@ describe("createCacheHandler factory", () => {
 
     createCacheHandler({ type: "elasticache", tls: false });
 
-    expect(redisConstructorMock).toHaveBeenCalledWith(expect.objectContaining({ tls: undefined }));
+    expect(redisConstructorMock).toHaveBeenCalledTimes(1);
+    expect(redisConstructorMock.mock.calls[0][0]).not.toHaveProperty("tls");
   });
 
   test("throws when no ElastiCache endpoint is configured", () => {

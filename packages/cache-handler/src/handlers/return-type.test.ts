@@ -1,120 +1,9 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { asClient, resetCacheState } from "../testing/env.js";
+import { FakeRedis } from "../testing/fake-redis.js";
 import type { CacheHandlerGetResult, CacheValue } from "../types.js";
 import { type MemoryCacheHandler, createMemoryCacheHandler } from "./memory.js";
-import { type RedisCacheHandler, RedisCacheHandler as RedisCacheHandlerClass } from "./redis.js";
-
-/**
- * Fake Redis implementation for testing
- * Implements the subset of ioredis methods used by RedisCacheHandler
- */
-class FakeRedis {
-  private readonly store = new Map<string, string>();
-  private readonly sets = new Map<string, Set<string>>();
-
-  async get(key: string): Promise<string | null> {
-    return this.store.get(key) ?? null;
-  }
-
-  async set(key: string, value: string): Promise<string> {
-    this.store.set(key, value);
-    return "OK";
-  }
-
-  async setex(key: string, _ttl: number, value: string): Promise<string> {
-    this.store.set(key, value);
-    // Note: TTL is ignored in this simple mock
-    return "OK";
-  }
-
-  async del(...keys: string[]): Promise<number> {
-    let deleted = 0;
-    for (const key of keys) {
-      if (this.store.delete(key) || this.sets.delete(key)) {
-        deleted += 1;
-      }
-    }
-    return deleted;
-  }
-
-  async sadd(key: string, ...members: string[]): Promise<number> {
-    let set = this.sets.get(key);
-    if (!set) {
-      set = new Set();
-      this.sets.set(key, set);
-    }
-    let added = 0;
-    for (const member of members) {
-      if (!set.has(member)) {
-        set.add(member);
-        added += 1;
-      }
-    }
-    return added;
-  }
-
-  async smembers(key: string): Promise<string[]> {
-    const set = this.sets.get(key);
-    return set ? Array.from(set) : [];
-  }
-
-  async expire(key: string, _seconds: number): Promise<number> {
-    // Note: TTL is ignored in this simple mock
-    return this.store.has(key) || this.sets.has(key) ? 1 : 0;
-  }
-
-  pipeline() {
-    const operations: Array<() => Promise<unknown>> = [];
-
-    return {
-      sadd: (key: string, member: string) => {
-        operations.push(async () => {
-          let set = this.sets.get(key);
-          if (!set) {
-            set = new Set();
-            this.sets.set(key, set);
-          }
-          const added = !set.has(member);
-          set.add(member);
-          return added ? 1 : 0;
-        });
-        return this;
-      },
-      expire: (key: string, _seconds: number) => {
-        operations.push(async () => {
-          return this.store.has(key) || this.sets.has(key) ? 1 : 0;
-        });
-        return this;
-      },
-      del: (...keys: string[]) => {
-        operations.push(async () => {
-          let deleted = 0;
-          for (const key of keys) {
-            if (this.store.delete(key) || this.sets.delete(key)) {
-              deleted += 1;
-            }
-          }
-          return deleted;
-        });
-        return this;
-      },
-      exec: async () => {
-        const results = await Promise.all(operations.map((op) => op()));
-        return results.map((result) => [null, result]);
-      },
-    };
-  }
-
-  on(_event: string, _handler: (...args: unknown[]) => void) {
-    // Mock event listener
-    return this;
-  }
-
-  async quit(): Promise<string> {
-    this.store.clear();
-    this.sets.clear();
-    return "OK";
-  }
-}
+import { RedisCacheHandler } from "./redis.js";
 
 /**
  * Tests for Issue #12: Wrong return value and type for cache handler
@@ -303,19 +192,20 @@ describe("CacheHandler return type (Issue #12)", () => {
   });
 
   describe("RedisCacheHandler", () => {
+    // Next 16 computes staleness from `lastModified` and the cache control; it no longer reads
+    // `age`, so the page handler returns `{ value, lastModified, cacheControl? }`.
     let handler: RedisCacheHandler;
-    let redis: FakeRedis;
 
-    beforeEach(() => {
-      // Create FakeRedis mock and inject it into handler
-      redis = new FakeRedis();
-      handler = new RedisCacheHandlerClass({});
-      // Directly replace the redis instance with our mock
-      // biome-ignore lint/suspicious/noExplicitAny: Test mock requires access to private property
-      (handler as any).redis = redis;
+    beforeEach(async () => {
+      await resetCacheState();
+      handler = new RedisCacheHandler({ client: asClient(new FakeRedis()) });
     });
 
-    test("should return object with value, lastModified, and age properties", async () => {
+    afterEach(async () => {
+      await resetCacheState();
+    });
+
+    test("should return object with value and lastModified", async () => {
       const cacheValue: CacheValue = {
         kind: "FETCH",
         data: {
@@ -327,36 +217,18 @@ describe("CacheHandler return type (Issue #12)", () => {
         revalidate: false,
       };
 
-      await handler.set("redis-test-key", cacheValue);
-      const result = await handler.get("redis-test-key");
+      await handler.set("redis-test-key", cacheValue, { fetchCache: true, tags: [] });
+      const result = await handler.get("redis-test-key", { kind: "FETCH" });
 
-      // Should return an object, not null
       expect(result).not.toBeNull();
-
-      // Should have the correct structure
-      expect(result).toHaveProperty("value");
-      expect(result).toHaveProperty("lastModified");
-      expect(result).toHaveProperty("age");
-
-      // Value should match what was stored
       expect(result?.value).toEqual(cacheValue);
-
-      // lastModified should be a number
       expect(typeof result?.lastModified).toBe("number");
 
-      // age should be a number
-      expect(typeof result?.age).toBe("number");
-      expect(result?.age).toBeGreaterThanOrEqual(0);
-
-      // Cleanup
       await handler.delete("redis-test-key");
     });
 
     test("should return null for cache miss", async () => {
-      const result = await handler.get("non-existent-redis-key");
-
-      // Should return null, not { value: null }
-      expect(result).toBeNull();
+      expect(await handler.get("non-existent-redis-key", { kind: "FETCH" })).toBeNull();
     });
   });
 

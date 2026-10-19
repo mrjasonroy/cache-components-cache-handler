@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const fakeRedis = vi.hoisted(() =>
   vi.fn(() => ({
+    status: "connecting",
     get: vi.fn(),
     set: vi.fn(),
     del: vi.fn(),
     on: vi.fn(),
+    once: vi.fn(),
+    off: vi.fn(),
+    sendCommand: vi.fn(),
+    quit: vi.fn(async () => "OK"),
+    disconnect: vi.fn(),
   })),
 );
 
@@ -18,6 +24,9 @@ vi.mock("node:module", () => ({
   },
 }));
 
+import { RedisCacheHandler } from "../handlers/redis.js";
+import { closeAllRedisConnections } from "../shared/connection.js";
+import { resetCacheRuntimesForTests } from "../shared/runtime.js";
 import { createCacheHandler } from "./factory.js";
 import {
   ISR_WARNING_MESSAGE,
@@ -33,9 +42,11 @@ describe("ISR handler warning", () => {
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     warn.mockRestore();
     vi.unstubAllEnvs();
+    await closeAllRedisConnections();
+    resetCacheRuntimesForTests();
   });
 
   test("warns once per process in production", () => {
@@ -75,21 +86,36 @@ describe("ISR handler warning", () => {
   });
 
   describe("via createCacheHandler", () => {
-    test("redis-family handlers warn once in production", () => {
+    test("redis-family handlers warn once in production, at first use", () => {
       vi.stubEnv("NODE_ENV", "production");
 
-      createCacheHandler({ type: "redis" });
-      createCacheHandler({ type: "valkey" });
-      createCacheHandler({ type: "elasticache", endpoint: "cache.example.com" });
+      const handlers = [
+        createCacheHandler({ type: "redis" }),
+        createCacheHandler({ type: "valkey" }),
+        createCacheHandler({ type: "elasticache", endpoint: "cache.example.com" }),
+      ];
+      expect(warn).not.toHaveBeenCalled();
 
+      for (const handler of handlers) void handler.refreshTags();
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(ISR_WARNING_MESSAGE);
+    });
+
+    test("does not warn once the package's page handler exists in the process", () => {
+      vi.stubEnv("NODE_ENV", "production");
+
+      const handler = createCacheHandler({ type: "redis" });
+      // Next constructs the page handler per request, after loading cacheHandlers.
+      new RedisCacheHandler({ redis: "redis://localhost:6379" });
+      void handler.refreshTags();
+
+      expect(warn).not.toHaveBeenCalled();
     });
 
     test("memory handler never warns", () => {
       vi.stubEnv("NODE_ENV", "production");
 
-      createCacheHandler({ type: "memory" });
+      void createCacheHandler({ type: "memory" }).refreshTags();
 
       expect(warn).not.toHaveBeenCalled();
     });
@@ -97,7 +123,7 @@ describe("ISR handler warning", () => {
     test("suppressIsrWarning option silences the factory warning", () => {
       vi.stubEnv("NODE_ENV", "production");
 
-      createCacheHandler({ type: "redis", suppressIsrWarning: true });
+      void createCacheHandler({ type: "redis", suppressIsrWarning: true }).refreshTags();
 
       expect(warn).not.toHaveBeenCalled();
     });
@@ -106,7 +132,7 @@ describe("ISR handler warning", () => {
       vi.stubEnv("NODE_ENV", "production");
       vi.stubEnv("NEXT_PHASE", "phase-production-build");
 
-      createCacheHandler({ type: "redis" });
+      void createCacheHandler({ type: "redis" }).refreshTags();
 
       expect(warn).not.toHaveBeenCalled();
     });
@@ -114,7 +140,7 @@ describe("ISR handler warning", () => {
     test("does not warn outside production", () => {
       vi.stubEnv("NODE_ENV", "test");
 
-      createCacheHandler({ type: "redis" });
+      void createCacheHandler({ type: "redis" }).refreshTags();
 
       expect(warn).not.toHaveBeenCalled();
     });

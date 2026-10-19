@@ -1,355 +1,451 @@
-import type { default as Redis, RedisOptions } from "ioredis";
-import { calculateLifespan, isExpired, redisTtlSecondsFromLifespan } from "../helpers/lifespan.js";
-import { loadIoredis } from "../helpers/load-ioredis.js";
-import { jsonReplacer, jsonReviver } from "../helpers/serialization.js";
+/**
+ * The page handler: Next 16's singular `cacheHandler`, shared across instances through Redis.
+ *
+ * With Cache Components on, Next still writes every page shell (`APP_PAGE`), route handler
+ * response (`APP_ROUTE`) and explicitly cached `fetch` (`FETCH`) through the singular
+ * `cacheHandler`. The contract it implements is described in `./page-types.ts`.
+ *
+ * - Entries live under `<prefix><buildId>:page:<key>` in the binary v2 format, for
+ *   `1.5 × revalidate` capped at `expire` (`expire`, or `defaultTTL`, without a revalidate period;
+ *   never more than the tag TTL).
+ * - Tags (the `x-next-cache-tags` header, `fetch` tags and soft tags) are checked against Redis on
+ *   every `get`, in the same round trip as the entry (see {@link RedisCacheHandler.get}), so a
+ *   revalidation on any instance is seen by the next read. Next reads this handler before it
+ *   calls any `refreshTags`. While Redis is down, the process's tag store is used: it holds every
+ *   record a `get` has read, and the `"use cache"` handlers' `refreshTags` syncs it from the tag index.
+ * - A tag revalidated with `durations` (`revalidateTag(tag, "max")`) leaves the entry servable
+ *   until `expire`: it is returned with a `lastModified` far enough back that Next serves it and
+ *   regenerates it in the background. Without durations the entry is a miss.
+ * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
+ * - While Redis is down, entries go to process memory for at most 60 s, never read and dropped
+ *   once Redis is back. Without Redis (no URL, `next build`, `CACHE_REDIS=off`) everything is in
+ *   memory.
+ * - A request never fails because of the cache: an error is a miss plus a rate-limited log line.
+ */
+
+import type { Cluster, Redis, RedisOptions } from "ioredis";
+import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
+import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
+import { decodeEntry, encodeEntry } from "../shared/codec.js";
+import { TAG_TTL_SECONDS, pageKey } from "../shared/keys.js";
+import {
+  type CacheOptions,
+  type CacheRuntime,
+  FALLBACK_TTL_SECONDS,
+  MEMORY_ONLY_TAG,
+  type RuntimeOptions,
+  createDebugLog,
+  getCacheRuntime,
+  isRedisReady,
+} from "../shared/runtime.js";
 import type {
-  CacheHandler,
-  CacheHandlerContext,
-  CacheHandlerGetMeta,
-  CacheHandlerGetResult,
-  CacheHandlerOptions,
-  CacheHandlerValue,
-  CacheValue,
-} from "../types.js";
+  PageCacheControl,
+  PageCacheGetContext,
+  PageCacheHandlerContext,
+  PageCacheHandlerValue,
+  PageCacheSetContext,
+  PageCacheValue,
+} from "./page-types.js";
 
-export interface RedisCacheHandlerOptions extends CacheHandlerOptions {
+/**
+ * `NEXT_CACHE_TAGS_HEADER` in next/dist/lib/constants.
+ */
+const NEXT_CACHE_TAGS_HEADER = "x-next-cache-tags";
+
+/**
+ * Entries are kept this many times their revalidate period, capped at `expire`.
+ */
+export const EXPIRE_FACTOR = 1.5;
+
+/**
+ * Options of {@link RedisCacheHandler}: Next's constructor context plus the code-level options.
+ */
+export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, CacheOptions {
   /**
-   * Redis connection configuration or existing client (ioredis)
-   * Can be:
-   * - A Redis client instance (ioredis)
-   * - A URL string
-   * - A RedisOptions object
+   * 16.5 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
    */
-  redis?: Redis | string | RedisOptions;
+  redis?: Redis | Cluster | string | RedisOptions;
 
   /**
-   * Key prefix for all cache entries
-   * @default "nextjs:cache:"
-   */
-  keyPrefix?: string;
-
-  /**
-   * Key prefix for tag tracking
-   * @default "nextjs:tags:"
+   * @deprecated Tag records now live under `<keyPrefix>tag:` and are shared by every handler;
+   * this option is ignored.
    */
   tagPrefix?: string;
 
   /**
-   * Default TTL in seconds for entries without explicit revalidate
-   * @default undefined (no expiration)
+   * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 366 days).
+   * @default 31622400 (366 days)
    */
   defaultTTL?: number;
 
   /**
-   * Enable debug logging
-   * @default false
+   * The build ID that scopes entry keys.
+   * @default the app's BUILD_ID, read from `serverDistDir` or the environment on first use
    */
-  debug?: boolean;
+  buildId?: string;
+}
+
+interface StoredPageEntry {
+  value: PageCacheValue;
+  tags: string[];
+  lastModified: number;
+  cacheControl?: PageCacheControl;
+}
+
+interface InMemoryPage {
+  entry: StoredPageEntry;
+}
+
+function isRedisClient(value: unknown): value is Redis | Cluster {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Redis).get === "function" &&
+    typeof (value as Redis).set === "function" &&
+    typeof (value as Redis).on === "function"
+  );
 }
 
 /**
- * Redis cache handler for Next.js 16+ with Cache Components support
+ * Map the constructor options (16.6 and 16.5 forms) to runtime options.
+ */
+function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
+  const { redis } = options;
+  return {
+    url: options.url ?? (typeof redis === "string" ? redis : undefined),
+    client: options.client ?? (isRedisClient(redis) ? redis : undefined),
+    redisOptions: redis && typeof redis === "object" && !isRedisClient(redis) ? redis : undefined,
+    keyPrefix: options.keyPrefix,
+    memoryFallback: options.memoryFallback,
+    commandTimeout: options.commandTimeout,
+    debug: options.debug,
+  };
+}
+
+/**
+ * Tags of an entry: `ctx.tags` for `fetch` entries (and 16.5 callers), the `x-next-cache-tags`
+ * header for pages and route handlers.
+ */
+export function getEntryTags(data: PageCacheValue, ctx?: PageCacheSetContext): string[] {
+  if (ctx?.tags) return ctx.tags;
+  if (data.kind !== "APP_PAGE" && data.kind !== "APP_ROUTE") return [];
+  const header = data.headers?.[NEXT_CACHE_TAGS_HEADER];
+  const value = Array.isArray(header) ? header.join(",") : header;
+  return value ? String(value).split(",").filter(Boolean) : [];
+}
+
+/**
+ * The entry's revalidate period: `data.revalidate` for `fetch` entries, else
+ * `ctx.cacheControl.revalidate` (or the 16.5 `ctx.revalidate`).
+ */
+function getRevalidate(
+  data: PageCacheValue,
+  ctx?: PageCacheSetContext,
+): number | false | undefined {
+  if (data.kind === "FETCH") return data.revalidate;
+  return ctx?.cacheControl?.revalidate ?? ctx?.revalidate;
+}
+
+/**
+ * Seconds the stored entry is kept: `1.5 × revalidate` capped at `expire`; `expire` without a
+ * revalidate period; `fallback` with neither. Never more than the tag TTL.
+ */
+export function getEntryLifetime(
+  data: PageCacheValue,
+  ctx: PageCacheSetContext | undefined,
+  fallback: number = TAG_TTL_SECONDS,
+): number {
+  const expire = ctx?.cacheControl?.expire;
+  const revalidate = getRevalidate(data, ctx);
+  let lifetime: number;
+  if (typeof revalidate === "number") {
+    lifetime = Math.ceil(revalidate * EXPIRE_FACTOR);
+    if (typeof expire === "number") lifetime = Math.min(lifetime, Math.ceil(expire));
+  } else if (typeof expire === "number") {
+    lifetime = Math.ceil(expire);
+  } else {
+    lifetime = fallback;
+  }
+  return Math.min(lifetime, TAG_TTL_SECONDS);
+}
+
+/**
+ * How far past the revalidate period a stale entry's `lastModified` is moved, in ms, so Next sees
+ * it as stale despite clock rounding.
+ */
+const STALE_MARGIN_MS = 1000;
+
+/**
+ * Next's clock for entry ages (next/dist/server/lib/incremental-cache/index.js):
+ * `performance.timeOrigin + performance.now()`, which can drift from `Date.now()`.
+ */
+function nextClock(): number {
+  return performance.timeOrigin + performance.now();
+}
+
+/**
+ * The period after which Next treats this entry as stale, or `undefined` if it has none. For a
+ * `fetch`, Next uses `ctx.revalidate || value.revalidate`; the larger of the two covers both.
+ */
+function staleAfterSeconds(
+  entry: StoredPageEntry,
+  ctx: PageCacheGetContext | undefined,
+): number | undefined {
+  const periods =
+    entry.value.kind === "FETCH"
+      ? [ctx?.revalidate, entry.value.revalidate]
+      : [entry.cacheControl?.revalidate];
+  const valid = periods.filter(
+    (period): period is number => typeof period === "number" && period > 0,
+  );
+  return valid.length > 0 ? Math.max(...valid) : undefined;
+}
+
+/**
+ * Redis-backed page handler for Next 16's singular `cacheHandler`. `withCache` points
+ * `cacheHandler` at a module whose default export is this class.
  *
- * Features:
- * - Persistent caching across server restarts
- * - Tag-based revalidation with Redis Sets
- * - TTL support with automatic expiration
- * - Compatible with Redis, ElastiCache, and Valkey
- * - Connection pooling via ioredis
+ * The constructor keeps its 16.5 shape, so existing subclasses work:
+ * `new RedisCacheHandler({ ...ctx, redis, keyPrefix, tagPrefix, defaultTTL, debug })`.
+ * Without options it reads the environment (`REDIS_URL`, `CACHE_KEY_PREFIX`, ...).
  *
  * @example
- * ```typescript
- * // In cache-handler.mjs or data-cache-handler.mjs
- * import { RedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler/handlers/redis";
- *
- * // Option 1: Pass a Redis URL or config
- * export default class NextCacheHandler extends RedisCacheHandler {
- *   constructor(options) {
- *     super({
- *       ...options,
- *       redis: process.env.REDIS_URL || "redis://localhost:6379",
- *       keyPrefix: "nextjs:cache:",
- *       defaultTTL: 3600
- *     });
- *   }
- * }
- *
- * // Option 2: Pass an existing Redis client instance
- * import Redis from "ioredis";
- *
- * const redisClient = new Redis({
- *   host: "localhost",
- *   port: 6379,
- *   // ... other options
- * });
- *
- * export default class NextCacheHandler extends RedisCacheHandler {
- *   constructor(options) {
- *     super({
- *       ...options,
- *       redis: redisClient, // Pass existing client
- *       keyPrefix: "nextjs:cache:",
- *       defaultTTL: 3600
- *     });
- *   }
- * }
+ * ```js
+ * // cache/page.mjs — a custom handler file for withCache({ handlers: { page } })
+ * import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+ * import { client } from "./redis.mjs";
+ * export default createRedisCacheHandler({ client });
  * ```
  */
-export class RedisCacheHandler implements CacheHandler {
+export class RedisCacheHandler {
   public readonly name = "redis";
 
-  private redis: Redis;
-  private readonly keyPrefix: string;
-  private readonly tagPrefix: string;
-  private readonly defaultTTL?: number;
-  private readonly debug: boolean;
-  private readonly didCreateClient: boolean;
+  protected readonly runtime: CacheRuntime;
+  private readonly options: RedisCacheHandlerOptions;
+  private readonly memoryFallback: boolean;
+  private readonly log: ((...args: unknown[]) => void) | undefined;
 
   constructor(options: RedisCacheHandlerOptions = {}) {
-    // Initialize Redis connection - detect existing client via duck typing
-    // (instanceof can break across package versions or bundler setups)
-    if (
-      options.redis &&
-      typeof options.redis === "object" &&
-      typeof (options.redis as Redis).get === "function" &&
-      typeof (options.redis as Redis).set === "function" &&
-      typeof (options.redis as Redis).del === "function" &&
-      typeof (options.redis as Redis).pipeline === "function" &&
-      typeof (options.redis as Redis).on === "function"
-    ) {
-      this.redis = options.redis as Redis;
-      this.didCreateClient = false;
-    } else if (typeof options.redis === "string") {
-      this.redis = new (loadIoredis("redis"))(options.redis);
-      this.didCreateClient = true;
-    } else {
-      this.redis = new (loadIoredis("redis"))((options.redis as RedisOptions) || {});
-      this.didCreateClient = true;
-    }
-
-    this.keyPrefix = options.keyPrefix ?? "nextjs:cache:";
-    this.tagPrefix = options.tagPrefix ?? "nextjs:tags:";
-    this.defaultTTL = options.defaultTTL;
-    this.debug = options.debug ?? false;
-
-    // Attach error listener for clients we created; for external clients,
-    // add a defensive listener only if the caller forgot to add one
-    // (an EventEmitter with no error listener will crash the process)
-    if (this.didCreateClient) {
-      this.redis.on("error", (err) => {
-        console.error("[RedisCacheHandler] Redis connection error:", err);
-      });
-    } else if (this.redis.listenerCount("error") === 0) {
-      this.redis.on("error", (err) => {
-        console.error("[RedisCacheHandler] Redis connection error (shared client):", err);
-      });
-    }
-
-    if (this.debug) {
-      console.log("[RedisCacheHandler] Initialized", {
-        keyPrefix: this.keyPrefix,
-        tagPrefix: this.tagPrefix,
-        defaultTTL: this.defaultTTL,
-      });
-    }
+    registerServerDistDir(options.serverDistDir);
+    markPageHandlerCreated();
+    this.options = options;
+    this.runtime = getCacheRuntime(toRuntimeOptions(options));
+    this.memoryFallback = options.memoryFallback ?? true;
+    this.log = createDebugLog("[PageCache]:", options.debug);
   }
 
-  private log(...args: unknown[]) {
-    if (this.debug) {
-      console.log("[RedisCacheHandler]", ...args);
+  private redisKey(cacheKey: string): string {
+    return pageKey(this.runtime.keyPrefix, this.options.buildId ?? getBuildId(), cacheKey);
+  }
+
+  /**
+   * Read an entry. While Redis is ready, the records of every tag that applies are read from Redis
+   * with the entry, so a revalidation on any instance is seen by the very next `get`:
+   *
+   * 1. The entry and the records of the soft tags (the implicit `_N_T_` path tags), the fetch
+   *    tags and the entry's tags as last seen by this process, all sent at once (one round trip).
+   * 2. Only on a hit whose tags were not all read: the remaining tag records (a second round
+   *    trip, the first time a process reads that entry).
+   *
+   * Without Redis, or while it is down, tags are checked against local state only.
+   */
+  async get(cacheKey: string, ctx?: PageCacheGetContext): Promise<PageCacheHandlerValue | null> {
+    const { connection, stores } = this.runtime;
+    const softTags = ctx?.softTags ?? ctx?.implicitTags ?? [];
+    const fetchTags = ctx?.kind === "FETCH" ? (ctx.tags ?? []) : [];
+
+    let entry = (stores.page.get(cacheKey) as InMemoryPage | undefined)?.entry;
+    if (connection) {
+      if (await isRedisReady(this.runtime)) {
+        try {
+          entry = await this.readWithTags(cacheKey, entry, [...softTags, ...fetchTags]);
+        } catch (error) {
+          this.runtime.reportError("get", error);
+          return null;
+        }
+      } else if (!entry && this.memoryFallback) {
+        entry = (stores.pageFallback.get(cacheKey) as InMemoryPage | undefined)?.entry;
+      }
     }
-  }
-
-  private getCacheKey(key: string): string {
-    return `${this.keyPrefix}${key}`;
-  }
-
-  private getTagKey(tag: string): string {
-    return `${this.tagPrefix}${tag}`;
-  }
-
-  async get(key: string, meta?: CacheHandlerGetMeta): Promise<CacheHandlerGetResult | null> {
-    try {
-      const cacheKey = this.getCacheKey(key);
-      this.log("GET", cacheKey);
-
-      // Get the cached entry
-      const data = await this.redis.get(cacheKey);
-
-      if (!data) {
-        this.log("GET", cacheKey, "MISS");
-        return null;
-      }
-
-      // Parse the stored entry (reviver restores Map/Buffer instances)
-      const entry: CacheHandlerValue = JSON.parse(data, jsonReviver);
-
-      // Check if expired based on lifespan
-      if (entry.lifespan && isExpired(entry.lifespan)) {
-        this.log("GET", cacheKey, "EXPIRED");
-        await this.delete(key);
-        return null;
-      }
-
-      // Check if any tag (explicit or implicit) has been revalidated
-      const allTags = [...entry.tags, ...(meta?.implicitTags ?? [])];
-      const revalidatedAts = await Promise.all(
-        allTags.map((tag) => this.redis.get(this.getTagKey(tag))),
-      );
-
-      const staleTagIndex = revalidatedAts.findIndex(
-        (revalidatedAt) => revalidatedAt && Number.parseInt(revalidatedAt) > entry.lastModified,
-      );
-
-      if (staleTagIndex !== -1) {
-        this.log("GET", cacheKey, "STALE (tag revalidated)", allTags[staleTagIndex]);
-        await this.delete(key);
-        return null;
-      }
-
-      // Invalidate old APP_PAGE entries where segmentData was stored as a
-      // plain object (pre-fix serialization). Next.js expects a Map and would
-      // crash on .get() if we returned a plain object.
-      if (
-        entry.value &&
-        (entry.value as Record<string, unknown>).kind === "APP_PAGE" &&
-        (entry.value as Record<string, unknown>).segmentData !== undefined &&
-        (entry.value as Record<string, unknown>).segmentData !== null &&
-        !((entry.value as Record<string, unknown>).segmentData instanceof Map)
-      ) {
-        this.log("GET", cacheKey, "STALE (old APP_PAGE format without Map serialization)");
-        await this.delete(key);
-        return null;
-      }
-
-      this.log("GET", cacheKey, "HIT");
-
-      // Return the cache handler result with value and metadata
-      return {
-        value: entry.value,
-        lastModified: entry.lastModified,
-        age: Date.now() - entry.lastModified,
-      };
-    } catch (error) {
-      console.error("[RedisCacheHandler] GET error:", error);
+    if (!entry?.value) {
+      this.log?.("get", cacheKey, "miss");
       return null;
     }
+
+    const result = this.toResult(entry, [...entry.tags, ...softTags, ...fetchTags], ctx);
+    this.log?.("get", cacheKey, result ? "hit" : "invalidated");
+    return result;
   }
 
-  async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {
-    try {
-      const cacheKey = this.getCacheKey(key);
+  /**
+   * Read the entry from Redis (unless it is held in memory) together with the tag records that
+   * apply to it, merging them into the tag store.
+   */
+  private async readWithTags(
+    cacheKey: string,
+    inMemory: StoredPageEntry | undefined,
+    requestTags: string[],
+  ): Promise<StoredPageEntry | undefined> {
+    const { connection, stores, tags } = this.runtime;
+    if (!connection) return inMemory;
+    const key = this.redisKey(cacheKey);
+    const known = inMemory?.tags ?? stores.pageTags.get(key) ?? [];
+    const fetched = new Set([...requestTags, ...known]);
 
-      // Calculate lifespan and TTL
-      const lifespan = calculateLifespan(context?.revalidate, this.defaultTTL);
-      const tags = context?.tags ?? [];
-
-      const entry: CacheHandlerValue = {
-        lastModified: Date.now(),
-        lifespan,
-        tags,
-        value,
-      };
-
-      const serialized = JSON.stringify(entry, jsonReplacer);
-
-      // Determine TTL for Redis
-      let ttl: number | undefined;
-      if (lifespan?.expireAt) {
-        ttl = redisTtlSecondsFromLifespan(lifespan);
-        if (!ttl || ttl <= 0) {
-          this.log("SET", cacheKey, "SKIP (already expired)");
-          return;
-        }
-      }
-
-      // Store in Redis with optional TTL
-      if (ttl) {
-        await this.redis.setex(cacheKey, ttl, serialized);
-        this.log("SET", cacheKey, `TTL=${ttl}s`, `kind=${value.kind}`);
-      } else {
-        await this.redis.set(cacheKey, serialized);
-        this.log("SET", cacheKey, "NO_TTL", `kind=${value.kind}`);
-      }
-
-      // Track tags -> keys mapping for revalidation
-      if (tags.length > 0) {
-        const pipeline = this.redis.pipeline();
-
-        for (const tag of tags) {
-          const tagKey = this.getTagKey(tag);
-          // Use a set to store all cache keys with this tag
-          pipeline.sadd(`${tagKey}:keys`, cacheKey);
-          // Set expiration on the tag's key set if we have a TTL
-          if (ttl) {
-            pipeline.expire(`${tagKey}:keys`, ttl);
-          }
-        }
-
-        await pipeline.exec();
-        this.log("SET", cacheKey, "tags:", tags);
-      }
-    } catch (error) {
-      console.error("[RedisCacheHandler] SET error:", error);
+    let entry = inMemory;
+    if (inMemory) {
+      await tags.fetch(fetched);
+    } else {
+      const [raw] = await Promise.all([connection.client.getBuffer(key), tags.fetch(fetched)]);
+      entry = decodeEntry<StoredPageEntry>(raw);
     }
+    if (!entry?.value) return undefined;
+
+    const missing = entry.tags.filter((tag) => !fetched.has(tag));
+    if (missing.length > 0) await tags.fetch(missing);
+    if (!inMemory) stores.pageTags.set(key, entry.tags, entry.tags.length, null);
+    return entry;
   }
 
-  async revalidateTag(tag: string, _profile?: string | { expire?: number }): Promise<void> {
-    try {
-      const tagKey = this.getTagKey(tag);
+  private toResult(
+    entry: StoredPageEntry,
+    allTags: string[],
+    ctx: PageCacheGetContext | undefined,
+  ): PageCacheHandlerValue | null {
+    const state = this.runtime.tags.check(allTags, entry.lastModified, Date.now());
+    if (state === "expired") return null;
 
-      // Store revalidation timestamp
-      await this.redis.set(tagKey, Date.now().toString());
-      this.log("revalidateTag", tag);
-
-      // Delete all cache keys associated with this tag
-      const keysSetKey = `${tagKey}:keys`;
-      const cacheKeys = await this.redis.smembers(keysSetKey);
-
-      if (cacheKeys.length > 0) {
-        const pipeline = this.redis.pipeline();
-
-        for (const cacheKey of cacheKeys) {
-          pipeline.del(cacheKey);
-        }
-
-        // Clear the tag's keys set
-        pipeline.del(keysSetKey);
-
-        await pipeline.exec();
-        this.log("revalidateTag", tag, `deleted ${cacheKeys.length} entries`);
-      }
-    } catch (error) {
-      console.error("[RedisCacheHandler] revalidateTag error:", error);
+    let lastModified = entry.lastModified;
+    if (state === "stale") {
+      // Served once more and regenerated in the background: Next treats an entry as stale once
+      // `lastModified + revalidate` has passed on its own clock. Without a revalidate period it
+      // cannot be marked stale, so it is a miss.
+      const revalidate = staleAfterSeconds(entry, ctx);
+      if (revalidate === undefined) return null;
+      lastModified = Math.min(
+        lastModified,
+        Math.floor(nextClock() - revalidate * 1000 - STALE_MARGIN_MS),
+      );
     }
+
+    return entry.cacheControl
+      ? { value: entry.value, lastModified, cacheControl: entry.cacheControl }
+      : { value: entry.value, lastModified };
   }
 
-  async delete(key: string): Promise<void> {
+  /**
+   * Store an entry. `null` data is ignored.
+   */
+  async set(
+    cacheKey: string,
+    data: PageCacheValue | null,
+    ctx?: PageCacheSetContext,
+  ): Promise<void> {
+    if (!data) return;
+    const { connection, stores } = this.runtime;
+    const tags = getEntryTags(data, ctx);
+    const lifetime = getEntryLifetime(data, ctx, this.options.defaultTTL);
+    // Already expired; Redis rejects `EX 0`.
+    if (lifetime <= 0) return;
+
+    const entry: StoredPageEntry = { value: data, tags, lastModified: Date.now() };
+    // Next reads a page's periods back from `get`, so an instance that did not render the page
+    // revalidates it on the page's own schedule.
+    if (!ctx?.fetchCache && ctx?.cacheControl) entry.cacheControl = ctx.cacheControl;
+
+    if (!connection || tags.includes(MEMORY_ONLY_TAG)) {
+      stores.page.set(
+        cacheKey,
+        { entry },
+        encodeEntry(entry).byteLength,
+        entry.lastModified + lifetime * 1000,
+      );
+      this.log?.("set", cacheKey, "memory", { lifetime });
+      return;
+    }
+
+    let encoded: Buffer | undefined;
+    if (await isRedisReady(this.runtime)) {
+      try {
+        encoded = encodeEntry(entry);
+        const key = this.redisKey(cacheKey);
+        await connection.client.set(key, encoded, "EX", lifetime);
+        stores.pageTags.set(key, tags, tags.length, null);
+        this.log?.("set", cacheKey, "redis", { tags, lifetime });
+        return;
+      } catch (error) {
+        this.runtime.reportError("set", error);
+      }
+    }
+
+    if (!this.memoryFallback) return;
+    const size = (encoded ?? encodeEntry(entry)).byteLength;
+    const until = entry.lastModified + Math.min(lifetime, FALLBACK_TTL_SECONDS) * 1000;
+    stores.pageFallback.set(cacheKey, { entry }, size, until);
+    this.log?.("set", cacheKey, "fallback memory");
+  }
+
+  /**
+   * Invalidate `tags` in every handler of this process and, through Redis, every instance.
+   * `durations` (`{ expire }`) keeps entries servable, stale, until `expire` seconds have passed.
+   */
+  async revalidateTag(
+    tags: string | string[],
+    durations?: { expire?: number } | string,
+  ): Promise<void> {
+    const list = Array.isArray(tags) ? tags : [tags];
+    // A profile name (16.5 callers) cannot be resolved here; treat it as an immediate expiry.
+    const resolved = typeof durations === "object" ? durations : undefined;
+    this.log?.("revalidateTag", list, resolved);
+    await this.runtime.tags.update(list, resolved);
+  }
+
+  /**
+   * Called by Next at the start of each request. Nothing is cached per request.
+   */
+  resetRequestCache(): void {}
+
+  /**
+   * Delete one entry.
+   */
+  async delete(cacheKey: string): Promise<void> {
+    const { connection, stores } = this.runtime;
+    stores.page.delete(cacheKey);
+    stores.pageFallback.delete(cacheKey);
+    if (!connection || !connection.isReady()) return;
     try {
-      const cacheKey = this.getCacheKey(key);
-      await this.redis.del(cacheKey);
-      this.log("DELETE", cacheKey);
+      await connection.client.del(this.redisKey(cacheKey));
     } catch (error) {
-      console.error("[RedisCacheHandler] DELETE error:", error);
+      this.runtime.reportError("delete", error);
     }
   }
 
   /**
-   * Close the Redis connection
-   * Call this when shutting down your application
-   * Note: Only closes connections created by this handler, not shared clients
+   * Close the connection if this package opened it. The connection is shared by every handler in
+   * the process; call this only at shutdown. A client you passed in is never closed.
    */
   async close(): Promise<void> {
-    try {
-      // Only close if we created the client
-      if (this.didCreateClient) {
-        await this.redis.quit();
-        this.log("Connection closed");
-      } else {
-        this.log("Skipping close (using shared client)");
-      }
-    } catch (error) {
-      console.error("[RedisCacheHandler] close error:", error);
-    }
+    await this.runtime.connection?.close();
   }
+}
+
+/**
+ * Create a page handler class with code-level options, for a custom `cacheHandler` file.
+ *
+ * @example
+ * ```js
+ * // cache/page.mjs
+ * import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+ * import { client } from "./redis.mjs";
+ * export default createRedisCacheHandler({ client });
+ * ```
+ */
+export function createRedisCacheHandler(
+  options: RedisCacheHandlerOptions = {},
+): typeof RedisCacheHandler {
+  return class ConfiguredRedisCacheHandler extends RedisCacheHandler {
+    constructor(ctx: RedisCacheHandlerOptions = {}) {
+      super({ ...ctx, ...options });
+    }
+  };
 }

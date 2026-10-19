@@ -3,54 +3,15 @@
  * Automatically configures handlers based on type and environment variables
  */
 
-import type { RedisOptions } from "ioredis";
-import { loadIoredis } from "../helpers/load-ioredis.js";
-import { createErrorReporter } from "./error-reporter.js";
+import type { Cluster, Redis } from "ioredis";
+import { getClientConnection, getRedisConnection } from "../shared/connection.js";
+import { resolveConnectionOptions, shouldUseRedis } from "../shared/env.js";
+import { createFallbackDataCacheHandler } from "./fallback.js";
 import { createIoredisAdapter } from "./ioredis-adapter.js";
 import { type IsrWarningOptions, warnMissingIsrHandlerOnce } from "./isr-warning.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import { createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
-
-/**
- * Default per-command timeout for Redis/Valkey/ElastiCache clients, in ms.
- */
-const DEFAULT_COMMAND_TIMEOUT_MS = 2000;
-
-/**
- * Connection settings shared by every ioredis client the factory creates.
- *
- * A cache must never take the site down with it:
- * - `retryStrategy` never returns `null`. Returning `null` ends the client for
- *   good (status `end`, every later command fails "Connection is closed."), so a
- *   routine failover would disable caching until the process restarts. Instead
- *   it backs off linearly, 200ms per attempt, capped at 5s.
- * - `maxRetriesPerRequest: 1` and `commandTimeout` make commands fail fast while
- *   Redis is unreachable, so a render gets a cache miss instead of hanging.
- *   ioredis applies `commandTimeout` to commands waiting in the offline queue
- *   too, so the queue only smooths over the initial connect and brief blips.
- */
-function resilientClientOptions(commandTimeout: number): RedisOptions {
-  return {
-    retryStrategy: (times: number) => Math.min(times * 200, 5000),
-    maxRetriesPerRequest: 1,
-    enableOfflineQueue: true,
-    commandTimeout,
-  };
-}
-
-/**
- * Log client-level errors (failed connects, dropped connections). Without an
- * "error" listener ioredis prints "Unhandled error event" on every reconnect
- * attempt; this keeps the errors visible but rate-limited.
- */
-function reportClientErrors(
-  redis: { on(event: "error", listener: (error: Error) => void): unknown },
-  errorLogIntervalMs?: number,
-) {
-  const reportError = createErrorReporter("[RedisDataCache]:", errorLogIntervalMs);
-  redis.on("error", (error) => reportError("connection", error));
-}
 
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
 
@@ -116,11 +77,33 @@ export interface CacheHandlerOptions extends IsrWarningOptions {
 
   /**
    * Per-command timeout in ms for redis/valkey/elasticache. A command that gets
-   * no reply in time fails and the read is treated as a cache miss, so a slow or
-   * unreachable Redis cannot hold up page renders.
-   * @default 2000
+   * no reply in time fails and the call falls back to memory (or misses), so a
+   * slow or unreachable Redis cannot hold up page renders.
+   * @default 1000
    */
   commandTimeout?: number;
+
+  /**
+   * An ioredis `Redis` or `Cluster` to use instead of opening a connection
+   * (redis/valkey/elasticache). You own its lifecycle and options; it is never closed,
+   * disconnected or reconfigured. The handler's own commands on it are bounded by
+   * `commandTimeout`, and 3 timeouts in a row switch to the memory fallback for 2 s at a time.
+   */
+  client?: Redis | Cluster;
+
+  /**
+   * While Redis is down, serve and store entries in process memory, each for at
+   * most `fallbackTTL` seconds. That memory is emptied when Redis is back. With
+   * `false`, calls made during an outage are misses.
+   * @default true
+   */
+  memoryFallback?: boolean;
+
+  /**
+   * Longest time in seconds an entry written while Redis is down is served.
+   * @default 60
+   */
+  fallbackTTL?: number;
 
   /**
    * TTL in seconds for entries without a finite `expire` (redis/valkey/elasticache)
@@ -144,7 +127,47 @@ export interface CacheHandlerOptions extends IsrWarningOptions {
 }
 
 /**
+ * Check the ISR warning on the handler's first call, when the request's page handler (if the app
+ * uses this package's) has already been constructed.
+ */
+function warnOnFirstUse(handler: DataCacheHandler, options: IsrWarningOptions): DataCacheHandler {
+  let checked = false;
+  const check = () => {
+    if (checked) return;
+    checked = true;
+    warnMissingIsrHandlerOnce(options);
+  };
+  return {
+    get(cacheKey, softTags) {
+      check();
+      return handler.get(cacheKey, softTags);
+    },
+    set(cacheKey, pendingEntry) {
+      check();
+      return handler.set(cacheKey, pendingEntry);
+    },
+    refreshTags() {
+      check();
+      return handler.refreshTags();
+    },
+    getExpiration(tags) {
+      check();
+      return handler.getExpiration(tags);
+    },
+    updateTags(tags, durations) {
+      check();
+      return handler.updateTags(tags, durations);
+    },
+  };
+}
+
+/**
  * Create a cache handler with zero configuration
+ *
+ * The Redis-family types run on the process's shared connection (one per set of
+ * connection options, see `../shared/connection.ts`) and fall back to bounded
+ * process memory while Redis is down (see `./fallback.ts`). During `next build`
+ * and with `CACHE_REDIS=off` they use process memory and never connect.
  *
  * @example
  * ```javascript
@@ -160,7 +183,7 @@ export interface CacheHandlerOptions extends IsrWarningOptions {
  * ```
  */
 export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandler {
-  const { type, debug = false, commandTimeout = DEFAULT_COMMAND_TIMEOUT_MS } = options;
+  const { type, debug = false } = options;
 
   switch (type) {
     case "memory":
@@ -170,69 +193,23 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
       });
 
     case "redis":
-    case "valkey": {
-      const Redis = loadIoredis(type);
-      warnMissingIsrHandlerOnce(options);
-
-      const url =
-        options.url || process.env.REDIS_URL || process.env.VALKEY_URL || "redis://localhost:6379";
-
-      const password = options.password ?? process.env.REDIS_PASSWORD;
-      const tlsEnabled = options.tls ?? false;
-
-      const redis = new Redis(url, {
-        ...resilientClientOptions(commandTimeout),
-        ...(password ? { password } : {}),
-        ...(tlsEnabled ? { tls: {} } : {}),
-      });
-      reportClientErrors(redis, options.errorLogIntervalMs);
-      const redisAdapter = createIoredisAdapter(redis);
-
-      return createRedisDataCacheHandler({
-        redis: redisAdapter,
-        keyPrefix: options.keyPrefix,
-        tagPrefix: options.tagPrefix,
-        defaultTTL: options.defaultTTL,
-        tagTTL: options.tagTTL,
-        errorLogIntervalMs: options.errorLogIntervalMs,
-        debug,
-      });
-    }
-
+    case "valkey":
     case "elasticache": {
-      const Redis = loadIoredis(type);
-      warnMissingIsrHandlerOnce(options);
-
-      const endpoint = options.endpoint || process.env.ELASTICACHE_ENDPOINT;
-      if (!endpoint) {
-        throw new Error(
-          "ElastiCache endpoint is required. Set ELASTICACHE_ENDPOINT environment variable or pass 'endpoint' option.",
-        );
+      // `next build` and `CACHE_REDIS=off` never connect: entries stay in this process.
+      if (!shouldUseRedis()) {
+        return createMemoryDataCacheHandler({
+          maxSize: options.maxSize ?? 100 * 1024 * 1024,
+          debug,
+        });
       }
-
-      const port =
-        options.port ||
-        (process.env.ELASTICACHE_PORT ? Number.parseInt(process.env.ELASTICACHE_PORT, 10) : 6379);
-
-      const tls = options.tls ?? process.env.ELASTICACHE_TLS !== "false";
-
-      const password =
-        options.password || process.env.ELASTICACHE_AUTH_TOKEN || process.env.REDIS_PASSWORD;
-
-      const redis = new Redis({
-        ...resilientClientOptions(commandTimeout),
-        host: endpoint,
-        port,
-        tls: tls ? {} : undefined,
-        password,
-        connectTimeout: 10000,
-      });
-      reportClientErrors(redis, options.errorLogIntervalMs);
-
-      const redisAdapter = createIoredisAdapter(redis);
-
-      return createRedisDataCacheHandler({
-        redis: redisAdapter,
+      const connection = options.client
+        ? getClientConnection(
+            options.client,
+            options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout },
+          )
+        : getRedisConnection(resolveConnectionOptions({ ...options, type }));
+      const redis = createRedisDataCacheHandler({
+        redis: createIoredisAdapter(connection.client),
         keyPrefix: options.keyPrefix,
         tagPrefix: options.tagPrefix,
         defaultTTL: options.defaultTTL,
@@ -240,6 +217,17 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         errorLogIntervalMs: options.errorLogIntervalMs,
         debug,
       });
+
+      return warnOnFirstUse(
+        createFallbackDataCacheHandler({
+          redis,
+          connection,
+          memoryFallback: options.memoryFallback,
+          fallbackTTL: options.fallbackTTL,
+          errorLogIntervalMs: options.errorLogIntervalMs,
+        }),
+        options,
+      );
     }
 
     default:

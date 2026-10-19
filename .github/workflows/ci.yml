@@ -57,36 +57,89 @@ jobs:
       - name: Run unit tests
         run: pnpm test
 
+  redis-integration:
+    runs-on: ubuntu-latest
+    needs: lint-and-typecheck
+    # The package's real-Redis suite (src/integration/*.redis.test.ts). It stops, pauses and
+    # restarts the server itself, so Redis is a named `docker run` container, not a service.
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["redis:7-alpine", "valkey/valkey:8-alpine"]
+    env:
+      CACHE_TEST_REDIS_URL: redis://localhost:6379
+      CACHE_TEST_REDIS_CONTAINER: cache-test-redis
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start ${{ matrix.image }}
+        run: |
+          docker run -d --name "$CACHE_TEST_REDIS_CONTAINER" -p 6379:6379 "${{ matrix.image }}"
+          for _ in $(seq 1 30); do
+            if docker exec "$CACHE_TEST_REDIS_CONTAINER" sh -c 'redis-cli ping 2>/dev/null || valkey-cli ping' | grep -q PONG; then
+              echo "Redis is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready"; docker logs "$CACHE_TEST_REDIS_CONTAINER"; exit 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Run Redis integration suite
+        run: pnpm --filter @mrjasonroy/cache-components-cache-handler test:redis
+
+      - name: Redis logs
+        if: failure()
+        run: docker logs "$CACHE_TEST_REDIS_CONTAINER" || true
+
   e2e-tests:
     runs-on: ubuntu-latest
     needs: unit-tests
+    # Every lane is a production build (`next build` + `next start`) wired with `withCache`.
+    # The Redis lanes run Redis as a named container (not a service) so the outage spec can stop
+    # it, start it only after `next build` to prove the build never needs Redis, and run a second
+    # `next start` on 3001 for the cross-instance specs.
     strategy:
       fail-fast: false
       matrix:
         include:
           - backend: memory
-            cache_handler: memory
-            service_image: ""
-            redis_url: ""
+            image: ""
+            use_cache: memory
+            custom_handlers: "0"
 
           - backend: redis
-            cache_handler: redis
-            service_image: redis:7-alpine
-            redis_url: redis://localhost:6379
+            image: redis:7-alpine
+            use_cache: memory
+            custom_handlers: "0"
 
+          # Valkey also covers `useCache: "redis"` (plain "use cache" stored in Redis).
           - backend: valkey
-            cache_handler: redis
-            service_image: valkey/valkey:7-alpine
-            redis_url: redis://localhost:6379
+            image: valkey/valkey:8-alpine
+            use_cache: redis
+            custom_handlers: "0"
 
-    services:
-      cache-service:
-        image: ${{ matrix.service_image || 'alpine:latest' }}
-        ports:
-          - 6379:6379
-        options: >-
-          ${{ matrix.service_image && contains(matrix.service_image, 'redis') && '--health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
-          ${{ matrix.service_image && contains(matrix.service_image, 'valkey') && '--health-cmd "valkey-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5' || '' }}
+          # The escape hatch: withCache({ handlers }) pointing at apps/e2e-test-app/cache/*.mjs.
+          - backend: redis-custom-handlers
+            image: redis:7-alpine
+            use_cache: memory
+            custom_handlers: "1"
+
+    env:
+      E2E_USE_CACHE: ${{ matrix.use_cache }}
+      E2E_CUSTOM_HANDLERS: ${{ matrix.custom_handlers }}
+      E2E_FLUSH_TOKEN: ci-e2e-flush-token
 
     steps:
       - uses: actions/checkout@v4
@@ -109,21 +162,63 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm setup:e2e
 
+      # Only the Redis lanes get REDIS_URL at all; the memory lane must see it unset, not empty.
+      - name: Configure Redis lane
+        if: matrix.image != ''
+        run: |
+          echo "REDIS_URL=redis://localhost:6379" >> "$GITHUB_ENV"
+          echo "E2E_REDIS_CONTAINER=cache-redis" >> "$GITHUB_ENV"
+
+      # Custom handler files own their ioredis client, which connects as soon as it is created,
+      # so that lane gets Redis before the build. The built-in handlers must not touch Redis
+      # during `next build`; the other lanes build with REDIS_URL set and nothing listening.
+      - name: Start ${{ matrix.image }} (before build)
+        if: matrix.image != '' && matrix.custom_handlers == '1'
+        run: |
+          docker run -d --name "$E2E_REDIS_CONTAINER" -p 6379:6379 "${{ matrix.image }}"
+          for _ in $(seq 1 30); do
+            if docker exec "$E2E_REDIS_CONTAINER" sh -c 'redis-cli ping 2>/dev/null || valkey-cli ping' | grep -q PONG; then
+              echo "Redis is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready"; docker logs "$E2E_REDIS_CONTAINER"; exit 1
+
       - name: Build e2e app
-        env:
-          CACHE_HANDLER: ${{ matrix.cache_handler }}
-          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm build
 
+      - name: Start ${{ matrix.image }} (after build)
+        if: matrix.image != '' && matrix.custom_handlers != '1'
+        run: |
+          docker run -d --name "$E2E_REDIS_CONTAINER" -p 6379:6379 "${{ matrix.image }}"
+          for _ in $(seq 1 30); do
+            if docker exec "$E2E_REDIS_CONTAINER" sh -c 'redis-cli ping 2>/dev/null || valkey-cli ping' | grep -q PONG; then
+              echo "Redis is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready"; docker logs "$E2E_REDIS_CONTAINER"; exit 1
+
       - name: Run e2e tests
-        env:
-          CACHE_HANDLER: ${{ matrix.cache_handler }}
-          REDIS_URL: ${{ matrix.redis_url }}
         run: |
           cd apps/e2e-test-app
           pnpm test:e2e
+
+      # Last, because it stops Redis under both instances. playwright.config.ts selects only
+      # the @outage spec when E2E_OUTAGE=1.
+      - name: Run Redis outage e2e test
+        if: matrix.image != ''
+        env:
+          E2E_OUTAGE: "1"
+        run: |
+          cd apps/e2e-test-app
+          pnpm test:e2e
+
+      - name: Redis logs
+        if: failure() && matrix.image != ''
+        run: docker logs "$E2E_REDIS_CONTAINER" || true
 
       - name: Upload test results
         if: failure()
@@ -177,7 +272,7 @@ jobs:
               --tls-auth-clients no \
               --requirepass "$ELASTICACHE_AUTH_TOKEN"
           echo "Waiting for Redis (TLS + auth) to accept connections..."
-          for i in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if docker exec redis-tls redis-cli --tls --cacert /tls/ca.crt \
                 -a "$ELASTICACHE_AUTH_TOKEN" ping 2>/dev/null | grep -q PONG; then
               echo "Redis is up"; exit 0
@@ -204,9 +299,9 @@ jobs:
       - name: Install Playwright browsers
         run: pnpm setup:e2e
 
+      # withCache picks ElastiCache up from ELASTICACHE_* alone (no REDIS_URL).
       - name: Build e2e app with ElastiCache handler (TLS + auth)
         env:
-          CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
           ELASTICACHE_TLS: "true"
@@ -217,7 +312,6 @@ jobs:
 
       - name: Run e2e tests with ElastiCache handler (TLS + auth)
         env:
-          CACHE_HANDLER: elasticache
           ELASTICACHE_ENDPOINT: localhost
           ELASTICACHE_PORT: "6379"
           ELASTICACHE_TLS: "true"
@@ -237,22 +331,25 @@ jobs:
 
   test-summary:
     runs-on: ubuntu-latest
-    needs: [e2e-tests, e2e-elasticache]
+    needs: [e2e-tests, e2e-elasticache, redis-integration]
     if: always()
     steps:
       - name: Check test results
+        env:
+          E2E_RESULT: ${{ needs.e2e-tests.result }}
+          ELASTICACHE_RESULT: ${{ needs.e2e-elasticache.result }}
+          REDIS_INTEGRATION_RESULT: ${{ needs.redis-integration.result }}
         run: |
-          echo "E2E Matrix Tests: ${{ needs.e2e-tests.result }}"
-          echo "ElastiCache Tests: ${{ needs.e2e-elasticache.result }}"
-
-          E2E_RESULT="${{ needs.e2e-tests.result }}"
-          ELASTICACHE_RESULT="${{ needs.e2e-elasticache.result }}"
+          echo "E2E Matrix Tests: $E2E_RESULT"
+          echo "ElastiCache Tests: $ELASTICACHE_RESULT"
+          echo "Redis Integration: $REDIS_INTEGRATION_RESULT"
 
           # Accept both 'success' and 'skipped' as valid results
-          if [[ "$E2E_RESULT" != "success" && "$E2E_RESULT" != "skipped" ]] || \
-             [[ "$ELASTICACHE_RESULT" != "success" && "$ELASTICACHE_RESULT" != "skipped" ]]; then
-            echo "❌ Some tests failed"
-            exit 1
-          fi
+          for result in "$E2E_RESULT" "$ELASTICACHE_RESULT" "$REDIS_INTEGRATION_RESULT"; do
+            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              echo "❌ Some tests failed"
+              exit 1
+            fi
+          done
 
-          echo "✅ All tests passed (memory, redis, valkey, elasticache)!"
+          echo "✅ All tests passed (memory, redis, valkey, custom handlers, elasticache, redis integration)!"

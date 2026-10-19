@@ -7,6 +7,8 @@ import type { LifespanParameters } from "../types.js";
  * @param revalidate - Revalidation period in seconds, or false to disable
  * @param defaultTTL - Default TTL in seconds if revalidate is undefined
  * @returns Lifespan parameters or null if no expiration
+ *
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
  */
 export function calculateLifespan(
   revalidate: number | false | undefined,
@@ -42,6 +44,8 @@ export function calculateLifespan(
  *
  * @param lifespan - Lifespan parameters (null means never expires)
  * @returns True if expired, false otherwise
+ *
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
  */
 export function isExpired(lifespan: LifespanParameters | null): boolean {
   if (!lifespan) {

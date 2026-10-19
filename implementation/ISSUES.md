@@ -78,3 +78,18 @@ expiration deadline* (used by `getExpiration`).
 A skipped test documenting the expected behavior lives in
 `packages/cache-handler/src/data-cache/redis.test.ts`
 (`re-caches a tag after revalidateTag with a future expire`).
+
+## ISSUE-2: Known limits of shared tag coordination and `flushCache` (16.6.0)
+
+**Status:** Open (by design) · **Severity:** Low · **Area:** `shared/tag-store.ts`, `shared/flush.ts`
+
+These are documented in the README; they are listed here so they are not rediscovered as bugs.
+
+- **Outage invalidations stay local.** A `revalidateTag` while Redis is down reaches only the
+  instance that made it (a warning is logged). Other instances keep serving their copy until it
+  ages out (at most 60 s for outage memory; until `revalidate` for local `"use cache"` values).
+- **Clock skew over 5 s** between instances can delay an invalidation on other instances until
+  the tag is updated again (`SYNC_SKEW_MS`).
+- **`flushCache` empties only the calling process's memory.** Other instances keep their local
+  `"use cache"` values until `revalidate` or a tag invalidation. A cross-instance flush would need
+  a broadcast (for example a reserved tag written on flush).

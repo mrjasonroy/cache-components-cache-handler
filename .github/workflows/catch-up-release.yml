@@ -140,8 +140,8 @@ jobs:
 
           # Build and test with Redis
           cd apps/e2e-test-app
-          CACHE_HANDLER=redis pnpm build
-          CACHE_HANDLER=redis pnpm test:e2e
+          REDIS_URL=redis://localhost:6379 pnpm build
+          REDIS_URL=redis://localhost:6379 pnpm test:e2e
 
       - name: Create branch and commit
         if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true

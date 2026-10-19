@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
+## [16.6.0] - 2026-10-19
+
+### Added
+
+- **`withCache(nextConfig)`: one call configures the whole cache.** It points `cacheHandler` at the page handler, `cacheHandlers.remote` at Redis, `cacheHandlers.default` at per-instance memory with shared tag invalidation, and sets `cacheMaxMemorySize: 0`. Set `REDIS_URL` in production and pages, route handlers, cached `fetch`, `"use cache"` and `"use cache: remote"` are all shared across instances. Without it everything stays in memory. Options: `useCache: "memory" | "redis"`, `pages: false`, and `handlers` for your own handler files. Runtime settings come from the environment (`REDIS_URL`, `CACHE_KEY_PREFIX`, `CACHE_REDIS=off`, `CACHE_DEBUG=1`), so they work the same under `next start`, standalone and Docker.
+- **A working Next 16 page handler.** `RedisCacheHandler` is rewritten in place to the Next 16 `cacheHandler` contract, which finishes the DEC-2 "fix rather than remove". It honours `x-next-cache-tags` (implicit path tags included), soft tags, `fetch` tags and `cacheControl`, so `revalidateTag` and `revalidatePath` now invalidate pages and route handlers on every instance. Each read checks the tag records in Redis in the same round trip as the entry, so the next read on any instance sees a revalidation, with no added latency. `revalidateTag(tag, "max")` serves the page once more and regenerates it in the background. Entries are kept for `1.5 × revalidate`, capped at `expire`. The class name and constructor are unchanged, so 16.5.1 subclasses keep working. `createRedisCacheHandler(options)` builds one for a custom handler file.
+- **Redis outages are absorbed.** Every handler shares one connection per process and fails fast: a command times out after 1 s, a connection that times out 3 times in a row is dropped and redialled, and startup waits at most 500 ms. While Redis is down, handlers serve from per-instance memory, each entry for at most 60 s, and log errors at most once a minute. When Redis comes back that memory is dropped. A request never fails because of the cache. The build phase never connects to Redis.
+- **Distributed tag coordination for `"use cache"`**, following Next's [documented pattern](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination). Values stay in each instance's memory. `updateTags` writes the invalidation to Redis, `refreshTags` syncs it into local state once per request, and `getExpiration` reads local state only, so `revalidateTag` on one instance clears every instance's copy without a Redis call per lookup.
+- **Entries scoped by build ID.** A deploy never serves the previous build's pages or RSC payloads. Tag records are shared across builds, so a revalidation during a rolling deploy reaches both.
+- **A binary entry format (v2).** Bytes are stored raw instead of base64 JSON: about 25% less Redis memory and network, and a page shell `get` about 40% faster.
+- **`flushCache({ scope })`** deletes the current build's keys (`"build"`, the default) or everything under the prefix (`"all"`) with SCAN + UNLINK, Cluster included, and empties the calling process's in-memory stores. Put it behind your own authenticated route; the package ships no endpoint.
+- `createRemoteCacheHandler`, `createLocalCacheHandler` and `MEMORY_ONLY_TAG` (keeps an entry out of Redis) for custom handler files.
+- `createCacheHandler` gains the shared connection, the outage fallback and three options: `client`, `memoryFallback` and `fallbackTTL`. It keeps its 16.5 key layout and format.
+- CI runs Next.js's own caching suites through its deploy-test harness, with two instances behind a proxy, and fails on any suite that passes on plain `next start` but not with the package (`tests/next-deploy/README.md`). A real-Redis outage suite runs on Redis 7 and Valkey 8, and the e2e app now runs two instances against one Redis and stops Redis mid-run.
+
+### Changed
+
+- **The cache starts cold on upgrade.** The new layout is `<prefix><buildId>:page:` / `:data:`, plus two tag keys, `<prefix>tags` and `<prefix>tag-index`. The 16.5 page handler's keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read and expire on their own. `createCacheHandler` keys are unaffected.
+- `createCacheHandler`'s `commandTimeout` default drops from 2000 to 1000 ms.
+- The page handler's `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
+- A `RedisCacheHandler` created without a `redis` option reads `REDIS_URL` and runs in memory when it is unset. In 16.5 it connected to `localhost:6379`. Its `tagPrefix` option is ignored, and `defaultTTL` defaults to 366 days and applies only to entries with neither `revalidate` nor `expire`.
+- `createCacheHandler`'s production warning now points at `withCache` for pages.
+- **Sizing:** a page read now sends one `HMGET` of its tag records alongside the entry's `GET`, in the same round trip (2 commands instead of 1). Every tag record lives in one hash per prefix, so tag reads all go to one key: about 2% of a core at 2,000 page reads/s. See the README's Sizing section.
+
+### Deprecated
+
+Still exported and still working, removed on the Next 17 line. Each has JSDoc pointing at its replacement:
+
+- `createCacheConfig`, `createCacheConfigWithProfiles` → `withCache`.
+- `CompositeHandler`, `createCompositeHandler` → built in; every handler has the memory fallback.
+- `MemoryCacheHandler`, `createMemoryCacheHandler` → `withCache` without `REDIS_URL`.
+- The Next 14 helpers and types (`bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`, `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, `CacheHandler*`, `CacheValue`, `LifespanParameters`) → no replacement.
+
+### Docs
+
+- The README is rewritten around `withCache`, with migration notes from 16.5.x, from 16.5.1 `RedisCacheHandler` subclasses, and from `@fortedigital/nextjs-cache-handler` / `@neshca/cache-handler`. It also documents the outage behaviour and the key layout for operators.
+
 ## [16.5.1] - 2026-10-19
 
 ### Fixed

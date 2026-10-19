@@ -1,12 +1,50 @@
 /**
  * @mrjasonroy/cache-components-cache-handler
  *
- * Cache handlers for Next.js 16+: "use cache" / Cache Components (`cacheHandlers` in
- * next.config) and ISR (`cacheHandler`).
+ * Cache handlers for Next.js 16+: pages and route handlers (`cacheHandler`), "use cache" and
+ * "use cache: remote" (`cacheHandlers`). `withCache(nextConfig)` configures all of them.
  */
 
 // =============================================================================
-// ISR cache handlers (`cacheHandler` in next.config)
+// The one public way: withCache, plus the handlers it points Next at
+// =============================================================================
+
+export {
+  createLocalCacheHandler,
+  type LocalCacheHandlerOptions,
+} from "./data-cache/local.js";
+export {
+  createRemoteCacheHandler,
+  type RemoteCacheHandlerOptions,
+} from "./data-cache/remote.js";
+export {
+  createRedisCacheHandler,
+  RedisCacheHandler,
+  type RedisCacheHandlerOptions,
+} from "./handlers/redis.js";
+export type {
+  PageCacheControl,
+  PageCacheGetContext,
+  PageCacheHandlerContext,
+  PageCacheHandlerValue,
+  PageCacheSetContext,
+  PageCacheValue,
+} from "./handlers/page-types.js";
+export {
+  type NextConfigFunction,
+  type WithCacheConfig,
+  type WithCacheOptions,
+  withCache,
+} from "./helpers/with-cache.js";
+export {
+  type FlushCacheOptions,
+  type FlushCacheResult,
+  flushCache,
+} from "./shared/flush.js";
+export { type CacheOptions, MEMORY_ONLY_TAG } from "./shared/runtime.js";
+
+// =============================================================================
+// Deprecated Next 14-era ISR handlers and helpers (kept until the Next 17 line)
 // =============================================================================
 
 export {
@@ -19,10 +57,6 @@ export {
   MemoryCacheHandler,
   type MemoryCacheHandlerOptions,
 } from "./handlers/memory.js";
-export {
-  RedisCacheHandler,
-  type RedisCacheHandlerOptions,
-} from "./handlers/redis.js";
 export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
 export { isImplicitTag } from "./helpers/is-implicit-tag.js";
 export { calculateLifespan, isExpired } from "./helpers/lifespan.js";

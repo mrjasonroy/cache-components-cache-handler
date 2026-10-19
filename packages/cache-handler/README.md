@@ -1,12 +1,7 @@
 # @mrjasonroy/cache-components-cache-handler
 
-Cache handler for Next.js 16+ with support for Cache Components and "use cache" directive.
-
-> Why another cache handler? I was originally going to contribute to [fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler) but that project is focused on backwards compatibility and carries a lot of legacy baggage. This repo is a ground-up rewrite that:
-> - Targets **Next.js 16+ only** (Cache Components, `"use cache"`, `cacheLife`, etc.)
-> - Ships with **true E2E coverage** (Playwright + Next 16) for every backend
-> - Keeps the surface area small: zero-config memory handler for dev, Redis/Valkey/ElastiCache factory for prod
-> - Provides an AI-first workflow so contributors (human or agent) can ship confidently
+One Redis-backed cache for a Next.js 16+ app: pages, route handlers, `"use cache"` and
+`"use cache: remote"`, shared across every instance and safe through a Redis outage.
 
 [![npm version](https://badge.fury.io/js/@mrjasonroy%2Fcache-components-cache-handler.svg)](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -16,264 +11,510 @@ Cache handler for Next.js 16+ with support for Cache Components and "use cache" 
 
 **📦 [View on npm](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler) | 🚀 [Releases](https://github.com/mrjasonroy/cache-components-cache-handler/releases)**
 
-## What This Does
-
-Implements Next.js 16+ caching APIs:
-- `"use cache"` directive
-- `cacheLife()` - Configure cache lifetime
-- `cacheTag()` - Tag cache entries
-- `revalidateTag()` - Invalidate by tags
-- `updateTag()` - Update tags
-- `revalidatePath()` - Invalidate by path
-- Cache Components and PPR
-
-## Scope
-
-This package's main API is handlers for Next.js's **`cacheHandlers`** (plural) config — the cache
-behind `"use cache"`, `"use cache: remote"`, `cacheLife()`, `cacheTag()`, `revalidateTag()`,
-`updateTag()` and `revalidatePath()` under Cache Components.
-
-The singular **`cacheHandler`** config is separate: in Next.js 16 it covers ISR pages, route handler
-responses and optimized images, and it is not used by `"use cache"`. Left unset, Next uses its
-default per-instance cache for those, which is **not shared across instances**. The package also
-exports ISR handlers for it (`RedisCacheHandler`, `MemoryCacheHandler`, `CompositeHandler`); see
-[ISR handlers](#isr-handlers) for their current limits, or bring your own (see
-[Using your own ISR `cacheHandler`](#using-your-own-isr-cachehandler-alongside-this-package)).
-
-## Supported Backends
-
-All backends are **integration tested** with Next.js 16+ in CI so you can trust a release tag.
-
-| Backend | Use Case | Key Features |
-|---------|----------|--------------|
-| **Memory** | Development, Single-instance | Zero config, fast, no external dependencies |
-| **Redis** | Production, Distributed | Industry standard, high performance, cluster-safe (single-key commands only) |
-| **Valkey** | Production, Open Source | Redis-compatible, LGPL licensed, drop-in replacement |
-| **AWS ElastiCache** | Production, Managed | Fully managed, IAM auth, auto-scaling, high availability |
-
-## Install
+## Quick start
 
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler
-
-# For Redis/Valkey/ElastiCache, also install ioredis
-npm install ioredis
+npm install @mrjasonroy/cache-components-cache-handler ioredis
 ```
 
-## Quick Start
-
-### Zero-Config (Recommended)
-
-```javascript
-// data-cache-handler.mjs
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-// Memory (dev)
-export default createCacheHandler({ type: "memory" });
-
-// Redis (production)
-export default createCacheHandler({ type: "redis" });
-
-// Valkey (production)
-export default createCacheHandler({ type: "valkey" });
-
-// ElastiCache (AWS)
-export default createCacheHandler({ type: "elasticache" });
-```
-
-```javascript
-// next.config.js
-export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-    remote: "./data-cache-handler.mjs",
-  },
-  cacheMaxMemorySize: 0, // Disable Next's built-in in-memory handler
-};
-```
-
-**Environment Variables:**
-- `REDIS_URL` / `VALKEY_URL` - Primary connection string for Redis-compatible stores (Valkey works with the same URI format, e.g. `redis://localhost:6380` when using the provided docker-compose service)
-- `REDIS_PASSWORD` - Password/token used when your URL lacks credentials (works for every backend)
-- `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT` - AWS ElastiCache hostname + port
-- `ELASTICACHE_TLS` - `"true"`/`"false"` toggle (defaults to `true` for ElastiCache)
-- `ELASTICACHE_AUTH_TOKEN` - Password/token for IAM-authenticated ElastiCache clusters
-
-### Advanced: Custom Configuration
-
-Need more control? You can override any option:
-
-```javascript
-// data-cache-handler.mjs
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-export default createCacheHandler({
-  type: "elasticache",
-  endpoint: "cache.prod-cluster.cache.amazonaws.com",
-  port: 6380,
-  tls: true,
-  password: process.env.CACHE_AUTH_TOKEN,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-  debug: process.env.NODE_ENV === "development",
-});
-```
-
-#### Options
-
-| Option | Default | Applies to | What it does |
-|--------|---------|------------|--------------|
-| `type` | (required) | all | `"memory"`, `"redis"`, `"valkey"` or `"elasticache"` |
-| `url` | `REDIS_URL` / `VALKEY_URL` | redis, valkey | Connection URL |
-| `endpoint` / `port` | `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT`, `6379` | elasticache | Host and port |
-| `tls` | `true` for elasticache, else `false` | redis family | Use TLS |
-| `password` | `ELASTICACHE_AUTH_TOKEN` / `REDIS_PASSWORD` | redis family | Auth token or password |
-| `keyPrefix` | `"nextjs:data-cache:"` | redis family | Prefix for entry keys |
-| `tagPrefix` | `"nextjs:tags:"` | redis family | Prefix for tag records |
-| `commandTimeout` | `2000` (ms) | redis family | A command with no reply in time fails and the read is a cache miss, so a slow or unreachable Redis can't hold up renders |
-| `defaultTTL` | `86400` (s) | redis family | TTL for entries without a finite `expire` |
-| `tagTTL` | `31622400` (s, 366 days) | redis family | TTL for tag revalidation records, refreshed on each revalidation; entry TTLs are capped at it |
-| `errorLogIntervalMs` | `60000` | redis family | Redis errors are always logged, at most once per operation per interval |
-| `suppressIsrWarning` | `false` | redis family | Turns off the one-time production warning about a missing shared ISR `cacheHandler` |
-| `maxSize` | 100 MB | memory | Memory budget |
-| `debug` | `false` | all | Debug logging |
-
-The client created by `createCacheHandler` reconnects forever with backoff capped at 5s and
-fails a command after one retry, so a Redis outage gives cache misses instead of hung requests.
-
-## ISR handlers
-
-16.5.0 removed the ISR `cacheHandler` exports (`MemoryCacheHandler`, `RedisCacheHandler`,
-`CompositeHandler`, `createMemoryCacheHandler`, the ISR helpers and types). That broke builds that
-imported them under a `^16.x` range, so **16.5.1 restores them unchanged**, along with the
-`isrHandlerPath` option of `createCacheConfig` / `createCacheConfigWithProfiles`. If you pinned
-16.5.0 and removed `cacheHandler`, you can put it back.
-
-**Known limits on Next 16** (being fixed): these handlers implement a Next 14-era contract, so
-`revalidateTag` does not invalidate ISR entries, and entries are stored without a TTL. They do
-share ISR pages across instances. `createCacheHandler` logs a one-time production reminder about
-ISR when it creates a Redis/Valkey/ElastiCache handler, because it cannot see your `next.config`;
-pass `suppressIsrWarning: true` once a shared ISR `cacheHandler` is configured (or if you run a
-single instance).
-
-### Using your own ISR `cacheHandler` alongside this package
-
-`cacheHandler` (singular, ISR) and `cacheHandlers` (plural, `"use cache"`) are independent settings,
-so you can point the first at your own shared handler and the second at this package:
-
-```javascript
+```js
 // next.config.mjs
-import { createRequire } from "node:module";
+import { withCache } from "@mrjasonroy/cache-components-cache-handler";
 
-const require = createRequire(import.meta.url);
+export default withCache({ cacheComponents: true });
+```
 
-export default {
-  cacheComponents: true,
-  // Your own shared ISR handler (ISR pages, route handler responses, optimized images)
-  cacheHandler: require.resolve("./isr-cache-handler.mjs"),
-  // This package, for "use cache" and "use cache: remote"
-  cacheHandlers: {
-    default: require.resolve("./data-cache-handler.mjs"),
-    remote: require.resolve("./data-cache-handler.mjs"),
+```bash
+REDIS_URL=redis://cache:6379   # unset → everything stays in memory (dev, CI, previews)
+```
+
+That's it. Pages, route handlers, `"use cache"` and `"use cache: remote"` are all cached.
+`revalidateTag`, `updateTag` and `revalidatePath` work across every instance. A Redis outage
+degrades to memory instead of taking the site down. `ioredis` is only needed when you use Redis.
+
+## What goes where
+
+`withCache` merges these settings into the config you pass:
+
+| Next.js setting | Points at | What it does |
+|---|---|---|
+| `cacheHandler` (singular) | the page handler (`RedisCacheHandler`) | Page shells (`APP_PAGE`), route handler responses (`APP_ROUTE`) and cached `fetch` (`FETCH`) are stored in Redis. It honours `x-next-cache-tags`, soft tags, `cacheControl` and `revalidateTag(tag, { expire })`. |
+| `cacheHandlers.remote` | the remote handler (`createRemoteCacheHandler`) | `"use cache: remote"` entries are stored in Redis, shared by every instance. |
+| `cacheHandlers.default` | the local handler (`createLocalCacheHandler`) | `"use cache"` values are kept in each instance's memory. Tag invalidation still reaches every instance ([how](#distributed-tag-coordination-for-use-cache)). |
+| `cacheMaxMemorySize: 0` | — | Turns off Next's built-in page LRU, so every page goes through the handler. |
+
+What you get without configuring anything:
+
+- **One Redis connection per process**, shared by every handler. It is registered on
+  `globalThis`, so Next loading the handler modules more than once never opens a second one.
+- **Entries scoped by build.** Entries live under the build ID that wrote them, so a deploy never
+  serves the previous build's pages or RSC payloads. Tag records sit above the build ID, so a
+  `revalidateTag` during a rolling deploy reaches the old build and the new one.
+- **No Redis during `next build`.** The build uses memory and never connects to or waits on Redis.
+- **Outages absorbed.** The app keeps serving from per-instance memory, each entry kept there for
+  at most 60 s. Errors are logged at most once a minute, not once per request. When Redis comes
+  back, that memory is dropped and Redis is authoritative again ([table](#when-redis-goes-down)).
+- **Fast failure.** A command times out after 1 s. A connection that times out 3 times in a row
+  is dropped and redialled. At startup a handler waits at most 500 ms for the first connection.
+- **A compact binary format.** Entries are stored as raw bytes rather than base64 JSON: about 25%
+  less Redis memory and network, and a page shell `get` about 40% faster.
+
+## Configuration
+
+### `withCache(nextConfig, options?)`
+
+These options are read when `next.config` loads. They decide which handler files Next is pointed
+at. Runtime settings come from the [environment](#environment-variables).
+
+| Option | Default | What it does |
+|---|---|---|
+| `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
+| `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. `false` leaves both unset. |
+| `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](#custom-handlers). Relative paths resolve against `process.cwd()`. |
+
+`withCache` throws if the config already sets `cacheHandler` or `cacheHandlers`, because two
+configs fighting over the cache is always a bug. Use `handlers` instead.
+
+```js
+// Keep plain "use cache" in Redis too (every entry is visible with redis-cli)
+export default withCache({ cacheComponents: true }, { useCache: "redis" });
+
+// "use cache" only; leave pages to Next's default cache
+export default withCache({ cacheComponents: true }, { pages: false });
+```
+
+### Environment variables
+
+Next loads handler files by path. It cannot pass them objects from `next.config`, and a standalone
+`server.js` never runs `next.config` at all. So the built-in handlers read their runtime settings
+from the environment, the same under `next start`, standalone and Docker.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `REDIS_URL` (or `VALKEY_URL`) | unset → memory only | `redis://` or `rediss://` URL, password included. |
+| `REDIS_PASSWORD` | — | Password when the URL has none. |
+| `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN` | port `6379` | Host form, used when no URL is set. TLS is on. |
+| `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
+| `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
+| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch. |
+| `CACHE_DEBUG` | unset | `1` logs hits, misses and state changes. It never logs the URL. |
+
+There are no tuning variables for timeouts or TTLs: the defaults above are the product. If you
+need different ones, write a [custom handler file](#custom-handlers).
+
+Redis is used whenever a URL or endpoint is set, except during `next build` and with
+`CACHE_REDIS=off`. If a dev `.env` file carries `REDIS_URL`, either remove it there or set
+`CACHE_REDIS=off`.
+
+## Distributed tag coordination for `"use cache"`
+
+Plain `"use cache"` keeps its values in each instance's memory, which is what Next intends for
+it. Invalidation is still shared, following Next's
+[Distributed Tag Coordination](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination)
+pattern:
+
+- **Values live in per-instance memory**: an LRU of up to 10,000 entries. Like Next's built-in
+  handler, a value is dropped once its `revalidate` period has passed, and the next request
+  renders it again.
+- **`updateTags` writes the invalidation to Redis**: a timestamp record per tag, plus an entry in
+  a log of recent invalidations.
+- **`refreshTags` syncs once per request.** Next calls it before the first `"use cache"` read. It
+  reads the log entries newer than the last sync and copies them into local state. Concurrent
+  requests share one sync.
+- **`getExpiration` reads only local state**, so there is no Redis call per cache lookup. It
+  returns the most recent time any of the tags was invalidated.
+
+So `revalidateTag` on instance A also invalidates B's memory copy.
+
+The page handler and the remote handler use the same per-process tag store. Pages are stricter
+than `"use cache"`: Next reads the page handler before it calls any `refreshTags`, so the page
+handler checks the tag records in Redis on every read
+([Pages and route handlers](#pages-and-route-handlers)). Next calls `updateTags` on every handler and then the page handler's
+`revalidateTag` for one `revalidateTag()` call. Identical updates within 100 ms are written to
+Redis once.
+
+Limits worth knowing:
+
+- During a Redis outage only local tags apply. An invalidation made then reaches its own instance
+  only, and a warning is logged. The first sync after Redis returns catches up.
+- The log keeps the newest 10,000 tags and nothing older than 366 days. If invalidations may have
+  been trimmed away since an instance last synced, that instance does a full resync.
+- Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
+  instances until the tag is invalidated again.
+
+## Pages and route handlers
+
+The page handler implements Next 16's singular `cacheHandler` contract:
+
+- **Lifetime.** An entry is kept for `1.5 × revalidate`, capped at the profile's `expire`. That
+  keeps a stale-while-revalidate window without keeping dead pages forever. An entry with `expire`
+  but no `revalidate` is kept for `expire`. With neither, it is kept for `defaultTTL` (366 days).
+  Nothing is kept longer than 366 days.
+- **Tags, checked in Redis on every read.** A `get` sends the entry `GET` together with one
+  `HGETALL` per tag record that applies: the soft tags (`revalidatePath`'s implicit path tags), the
+  `fetch` tags, and the entry's own tags (the `x-next-cache-tags` header) as this process last saw
+  them. They go out together, so a revalidation on any instance is seen by the very next read at
+  no extra latency. The first time a process reads an entry it did not write, it learns the
+  entry's tags from the entry itself, so that read takes a second round trip. While Redis is down,
+  pages are checked against local tag state, which a background sync keeps current (at most once a
+  second while Redis is up).
+- **`revalidateTag(tag, "max")`** (or any `{ expire }`) leaves the page servable until `expire`:
+  it is served once more and regenerated in the background. `revalidateTag(tag)`, `updateTag` and
+  `revalidatePath` make it a miss. A page without a `revalidate` period cannot be served stale, so
+  it is a miss either way.
+- **Schedule.** A page's `cacheControl` is stored with it, so an instance that did not render the
+  page revalidates it on the page's own schedule.
+- Cached `fetch` entries share the `page:` key namespace.
+
+## When Redis goes down
+
+| Situation | Reads | Writes | `revalidateTag` |
+|---|---|---|---|
+| `next build` | memory | memory | memory |
+| Redis down at boot | memory (each entry at most 60 s) | memory | applied locally, with a warning: other instances keep their copy until it ages out |
+| Redis lost mid-run | the same; switches within one command timeout | the same | the same |
+| Redis stalled (accepts, never answers) | 1 s timeout per command → miss; after 3 timeouts in a row, drop and redial → memory | the same | the same |
+| Redis back | Redis; the outage memory is dropped | Redis | Redis and local |
+
+A request never fails because of the cache. A cache error is always a miss plus a rate-limited log
+line. With `memoryFallback: false` in a [custom handler](#custom-handlers), reads and writes made
+during an outage are misses instead.
+
+## Flushing the cache
+
+```ts
+import { flushCache } from "@mrjasonroy/cache-components-cache-handler";
+
+await flushCache();                  // this build's entries
+await flushCache({ scope: "all" });  // every key under CACHE_KEY_PREFIX, tag records included
+```
+
+`flushCache` uses SCAN + UNLINK and scans every master of a Cluster. It returns `{ deleted }`, the
+number of Redis keys deleted. It also empties **this process's** in-memory stores. Other
+instances keep their in-memory `"use cache"` values until those reach `revalidate`, or until a
+tag invalidation reaches them. Without Redis it only empties the memory stores and returns how
+many entries they held. If Redis is configured but unavailable, it throws and deletes nothing.
+
+| Option | Default | Meaning |
+|---|---|---|
+| `scope` | `"build"` | `"build"` deletes `<prefix><buildId>:*`. `"all"` deletes every key under the prefix. |
+| `buildId` | the app's `BUILD_ID` | The build that `scope: "build"` deletes. |
+| `url`, `client`, `keyPrefix` | the environment | Which Redis and prefix, as in [`CacheOptions`](#custom-handlers). |
+
+The package ships no HTTP endpoint. The route is yours to write and to authenticate:
+
+```ts
+// app/api/admin/cache/flush/route.ts
+import { flushCache } from "@mrjasonroy/cache-components-cache-handler";
+
+export async function POST(request: Request) {
+  if (request.headers.get("authorization") !== `Bearer ${process.env.CACHE_FLUSH_TOKEN}`) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+  return Response.json(await flushCache());
+}
+```
+
+`scope: "all"` matches by prefix, so it also deletes keys written under the same prefix by
+`createCacheHandler` and by 16.5.x's `RedisCacheHandler`.
+
+## Custom handlers
+
+Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster,
+IAM auth) or different timeouts. Write one file per handler and give the paths to `withCache`:
+
+```js
+// cache/redis.mjs: one client for both files, parked on globalThis because Next can load the
+// two handler modules separately
+import Redis from "ioredis";
+
+const key = Symbol.for("my-app.redis");
+globalThis[key] ??= new Redis(process.env.REDIS_URL, { commandTimeout: 1000 });
+export const client = globalThis[key];
+```
+
+```js
+// cache/page.mjs
+import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { client } from "./redis.mjs";
+
+export default createRedisCacheHandler({ client });
+```
+
+```js
+// cache/remote.mjs
+import { createRemoteCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { client } from "./redis.mjs";
+
+export default createRemoteCacheHandler({ client });
+```
+
+```js
+// cache/default.mjs
+import { createLocalCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { client } from "./redis.mjs";
+
+export default createLocalCacheHandler({ client });
+```
+
+```js
+// next.config.mjs
+import { withCache } from "@mrjasonroy/cache-components-cache-handler";
+
+export default withCache(
+  { cacheComponents: true },
+  {
+    handlers: {
+      page: "./cache/page.mjs",
+      remote: "./cache/remote.mjs",
+      default: "./cache/default.mjs",
+    },
   },
-  cacheMaxMemorySize: 0,
-};
+);
 ```
 
-```javascript
-// data-cache-handler.mjs
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+Handlers that share a client and key prefix share one connection and one tag store. A handler
+you don't replace keeps reading the environment. So if you pass a `client` and leave `REDIS_URL`
+unset, also provide `default`; otherwise `"use cache"` tag invalidation stays local to each
+instance.
 
-export default createCacheHandler({
-  type: "redis",
-  suppressIsrWarning: true, // a shared ISR cacheHandler is configured in next.config
-});
+A client you pass in is yours. The package never closes it and does not install its timeout
+watchdog, and `commandTimeout` does not apply to it. Set `commandTimeout` (and a `retryStrategy`)
+on the client itself.
+
+All three factories take `CacheOptions`:
+
+| Option | Default | Meaning |
+|---|---|---|
+| `url` | `REDIS_URL` / `VALKEY_URL` / the ElastiCache env; unset → memory only | Redis URL, password included. |
+| `client` | — | Your own ioredis `Redis` or `Cluster`. Overrides `url`. |
+| `keyPrefix` | `CACHE_KEY_PREFIX` / `nextjs:` | Prefix for every key. |
+| `memoryFallback` | `true` | Serve from memory (each entry at most 60 s) while Redis is down. `false` → miss instead. |
+| `commandTimeout` | `1000` | Per-command timeout in ms, for a connection the package opens. |
+| `debug` | `CACHE_DEBUG=1` | Log hits, misses and state changes. |
+
+`createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
+`BUILD_ID`), the build that scopes entry keys. `createRedisCacheHandler` also takes `defaultTTL`,
+in seconds, for entries with neither `revalidate` nor `expire` (default 366 days).
+
+`CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `withCache(nextConfig, options?)` | function | Configures the whole cache. [Configuration](#configuration). |
+| `createRedisCacheHandler(options?)` | function → class | The page handler with code-level options, for a custom `cacheHandler` file. |
+| `RedisCacheHandler` | class | The page handler. Same constructor as 16.5.x, so subclasses still work. |
+| `createRemoteCacheHandler(options?)` | function → `DataCacheHandler` | Redis data handler plus memory fallback, for `"use cache: remote"`. |
+| `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
+| `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](#flushing-the-cache). |
+| `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
+| `createCacheHandler({ type })` | function → `DataCacheHandler` | The 16.5 data handler factory, still supported ([legacy setup](#legacy-setup-deprecated)). |
+| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | The 16.5 building blocks behind `createCacheHandler`. |
+| `CacheOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
+
+The [deprecated exports](#deprecated) are still exported.
+
+## Key layout (for operators)
+
+```
+<prefix><buildId>:page:<key>   page, route handler or cached fetch entry
+<prefix><buildId>:data:<key>   "use cache: remote" entry (and "use cache" with useCache: "redis")
+<prefix>tag:<tag>              tag record: a hash of stale / expired times in ms; shared by every build, 366-day TTL
+<prefix>tags:log               sorted set of recently invalidated tags, scored by time (newest 10,000)
 ```
 
-See Next's [`cacheHandler` docs](https://nextjs.org/docs/app/api-reference/config/next-config-js/incrementalCacheHandlerPath)
-for the ISR handler contract.
+`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
+is read from the build output that `next start` and a standalone `server.js` use, and it is
+`development` under `next dev`. Every key has a TTL. Remote entries expire at `expire`; page
+entries as described under [Pages and route handlers](#pages-and-route-handlers).
+
+`createCacheHandler` keeps its 16.5 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
+
+### Sizing
+
+Redis command volume, not latency, is what grows with traffic. Per read:
+
+| Read | Redis commands |
+|---|---|
+| Page, route handler or cached `fetch` | 1 `GET` plus 1 `HGETALL` per tag that applies (soft tags, `fetch` tags, the entry's tags), sent together. A page with 5 implicit and 4 explicit tags costs 10 commands where a bare `GET` would be 1. |
+| `"use cache: remote"` | 1 `GET`. Tags are checked against local state. |
+| `"use cache"` (memory) | none. One tag sync per request, which reads only invalidations newer than the last one. |
+
+The extra commands share the entry's round trip, so page latency is unchanged; size Redis for the
+command rate. Each `HGETALL` is a single key, so on a Cluster they spread across nodes.
+[DEC-3](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/implementation/DECISIONS.md) has the measurements.
+
+## Migrating
+
+### From 16.5.x (`createCacheConfig` and a handler file)
+
+```diff
+- import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
+- import { resolve } from "node:path";
+- const cacheConfig = createCacheConfig({
+-   dataCacheHandlerPath: resolve(process.cwd(), "./data-cache-handler.mjs"),
+- });
+- export default { cacheComponents: true, ...cacheConfig };
++ import { withCache } from "@mrjasonroy/cache-components-cache-handler";
++ export default withCache({ cacheComponents: true });
+```
+
+Then delete `data-cache-handler.mjs`. Two things change:
+
+- `"use cache"` now goes to memory and `"use cache: remote"` to Redis. Pass `{ useCache: "redis" }`
+  to keep both in Redis.
+- Pages and route handlers now go through Redis too. Pass `{ pages: false }` to opt out.
+
+The cache starts cold, because the key layout is new. Every deploy starts cold anyway, because
+entries are scoped by build ID, so there is no migration step.
+
+If you keep `createCacheHandler` for now, it keeps working. It now uses the shared connection and
+the memory fallback, and its `commandTimeout` default drops from 2000 to 1000 ms.
+
+### From a 16.5.1 `RedisCacheHandler` subclass
+
+Nothing breaks: the class name and constructor are the same, and the internals now implement the
+Next 16 contract. You can delete the subclass and use `withCache`. If you keep it:
+
+- With no `redis` option, the handler reads `REDIS_URL`. If that is unset it runs in memory; in
+  16.5 it connected to `localhost:6379`.
+- `tagPrefix` is ignored. Tag records live under `<keyPrefix>tag:`.
+- `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
+
+Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read and expire on their own.
+
+### From `@fortedigital/nextjs-cache-handler` or `@neshca/cache-handler`
+
+```diff
+- cacheHandler: require.resolve("./cache-handler.mjs"),   // CacheHandler.onCreation(...)
+- cacheMaxMemorySize: 0,
++ export default withCache({ cacheComponents: true });
+```
+
+Delete `cache-handler.mjs`. `REDIS_URL` is read directly. neshca's `instrumentation.ts`
+`registerInitialCache` pre-population isn't needed: a miss on a prerendered page renders it once
+and stores it.
+
+## Deprecated
+
+Kept until the Next 17 line, with JSDoc pointing at the replacement:
+
+| Deprecated | Use instead | Why |
+|---|---|---|
+| `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. They keep working. |
+| `CompositeHandler`, `createCompositeHandler` | built in | The memory fallback is now inside every handler. |
+| `MemoryCacheHandler`, `createMemoryCacheHandler` | `withCache` without `REDIS_URL` | Memory only is the no-URL mode. |
+| `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`, `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, and the Next 14 `CacheHandler*` / `CacheValue` / `LifespanParameters` types | none | Internals of the Next 14 handlers. They still work. |
+
+`RedisCacheHandler` is **not** deprecated. It is the page handler `withCache` uses.
+
+### Legacy setup (deprecated)
+
+The 16.5 wiring still works: a handler file that exports `createCacheHandler({ type })` (`type` is
+`"memory"`, `"redis"`, `"valkey"` or `"elasticache"`), wired with `createCacheConfig` or by hand
+into `cacheHandlers`. It covers `"use cache"` only, not pages. In production it logs a one-time
+reminder to use `withCache`; pass `suppressIsrWarning: true` to silence it.
+
+`createCacheHandler` reads `REDIS_URL` / `VALKEY_URL`, `REDIS_PASSWORD` and the `ELASTICACHE_*`
+variables, and honours `CACHE_REDIS=off` and the build phase. It does not read `CACHE_KEY_PREFIX`
+or `CACHE_DEBUG`. Its options:
+
+| Option | Default | What it does |
+|---|---|---|
+| `url` | `REDIS_URL` / `VALKEY_URL`, else `redis://localhost:6379` | Connection URL (redis, valkey) |
+| `endpoint` / `port` | `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT`, `6379` | Host and port (elasticache) |
+| `tls` | `true` for elasticache, else `false` | Use TLS |
+| `password` | `ELASTICACHE_AUTH_TOKEN` / `REDIS_PASSWORD` | Auth token or password |
+| `client` | — | Your own ioredis `Redis` or `Cluster`; you own its lifecycle |
+| `keyPrefix` / `tagPrefix` | `"nextjs:data-cache:"` / `"nextjs:tags:"` | Key prefixes |
+| `commandTimeout` | `1000` (ms) | Per-command timeout |
+| `memoryFallback` / `fallbackTTL` | `true` / `60` (s) | Serve from memory during an outage, each entry for at most `fallbackTTL` |
+| `defaultTTL` | `86400` (s) | TTL for entries without a finite `expire` |
+| `tagTTL` | `31622400` (s, 366 days) | TTL for tag records; entry TTLs are capped at it |
+| `errorLogIntervalMs` | `60000` | Redis errors are logged at most once per operation per interval |
+| `suppressIsrWarning` | `false` | Silence the one-time production reminder |
+| `maxSize` | 100 MB | Memory budget (memory) |
+| `debug` | `false` | Debug logging |
 
 ## Usage
 
-```typescript
-// Basic caching
-async function ProductList() {
-  "use cache";
-  const products = await db.products.findMany();
-  return <ProductGrid products={products} />;
-}
+Nothing about how you write cached code changes. The package sits behind Next's own APIs:
 
-// With cache lifetime
-import { cacheLife } from "next/cache";
+```tsx
+import { cacheLife, cacheTag, revalidateTag } from "next/cache";
 
 async function BlogPost({ id }: { id: string }) {
   "use cache";
-  cacheLife("hours"); // 1 hour
+  cacheLife("hours");
+  cacheTag(`post:${id}`);
   const post = await db.posts.findUnique({ where: { id } });
   return <Article post={post} />;
 }
 
-// With tags for selective invalidation
-import { cacheTag } from "next/cache";
-
-async function UserProfile({ userId }: { userId: string }) {
-  "use cache";
-  cacheTag("user-profile", `user:${userId}`);
-  const user = await db.user.findUnique({ where: { id: userId } });
-  return <Profile user={user} />;
+async function ProductList() {
+  "use cache: remote"; // shared by every instance through Redis
+  return <ProductGrid products={await db.products.findMany()} />;
 }
 
-// Invalidate from API route
-import { revalidateTag } from "next/cache";
-
-export async function POST(request: Request) {
-  const { userId } = await request.json();
-  revalidateTag(`user:${userId}`);
-  return Response.json({ revalidated: true });
+// In a Server Action or route handler
+export async function savePost(id: string) {
+  await db.posts.update(/* ... */);
+  revalidateTag(`post:${id}`, "max"); // every instance, every handler
 }
 ```
 
-## Cache Handler API
+## Supported backends
 
-This library implements the Next.js 16+ `DataCacheHandler` interface:
+| Backend | How |
+|---|---|
+| **Memory** | No `REDIS_URL`: dev, CI, previews, single instance |
+| **Redis 7+** | `REDIS_URL=redis://…` or `rediss://…` |
+| **Valkey** | `VALKEY_URL` or `REDIS_URL`, same URL format |
+| **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on |
+| **Redis Cluster, Sentinel** | Your own ioredis client through a [custom handler](#custom-handlers). `flushCache` scans every master. |
 
-```typescript
-interface DataCacheHandler {
-  // Retrieve cached entry for a cache key
-  get(cacheKey: string, softTags: string[]): Promise<DataCacheEntry | undefined>;
+## How it's tested
 
-  // Store a cache entry (handles streaming responses)
-  set(cacheKey: string, pendingEntry: Promise<DataCacheEntry>): Promise<void>;
+- **Unit tests** for every module: the codec, the connection, the fallback, the tag store, the page
+  handler's Next 16 contract, `withCache` and `flushCache`.
+- **A real-Redis outage suite** in CI on Redis 7 and Valkey 8: Redis down at boot, lost mid-run,
+  stalled (`docker pause`) and back; a tag revalidation reaching the page, remote and local
+  handlers; the build phase never connecting; build-ID scoping and tags crossing builds.
+- **End-to-end tests on production builds** (`next build && next start`) with Playwright, against
+  memory, Redis, Valkey and TLS + AUTH ElastiCache mode. They cover pages, `"use cache"`,
+  `"use cache: remote"`, `revalidateTag`, `revalidatePath`, two instances sharing Redis, and Redis
+  stopped mid-run.
+- **Next.js's own caching suites** through its deploy-test harness: each suite runs against a
+  plain `next start` baseline and against the package with two instances behind a proxy, and a
+  suite that passes on the baseline must pass with the package. See
+  [tests/next-deploy/README.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/tests/next-deploy/README.md).
 
-  // Called periodically to refresh local tag manifest
-  refreshTags(): Promise<void>;
+| Workflow | What it verifies |
+|---|---|
+| `.github/workflows/ci.yml` | Lint, format, typecheck, unit tests, the Redis outage suite and the e2e matrix |
+| `.github/workflows/next-deploy-tests.yml` | Next.js's caching suites in deploy mode |
+| `.github/workflows/nextjs-canary-test.yml` | Daily compatibility runs against Next.js canary and latest |
+| `.github/workflows/nextjs-version-check.yml` | Nightly scan for new Next.js releases; opens bump PRs |
+| `.github/workflows/publish.yml` | Trusted publishing with provenance |
 
-  // Get maximum revalidation timestamp for tags
-  getExpiration(tags: string[]): Promise<Timestamp>;
+## Why this package
 
-  // Called when revalidateTag() invalidates tags
-  updateTags(tags: string[], durations?: { expire?: number }): Promise<void>;
-}
-```
-
-When you call `revalidateTag('my-tag')` in your application, Next.js internally calls our `updateTags(['my-tag'])` implementation, which marks all cache entries with that tag as stale.
+I was originally going to contribute to
+[fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler), but that
+project is focused on backwards compatibility and carries a lot of legacy baggage. This one is
+written for Next.js 16+ only (Cache Components, `"use cache"`, `cacheLife`), ships with real
+end-to-end coverage for every backend, and keeps the surface small: one `withCache` call.
 
 ## Documentation
 
 - [GitHub Repository](https://github.com/mrjasonroy/cache-components-cache-handler)
+- [Installation & Setup](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/installation.md)
+- [Usage Examples](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/usage.md)
+- [API Reference](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/api-reference.md)
 - [Redis Configuration](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/redis.md)
-- [Valkey & ElastiCache Setup](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/redis.md#valkey)
 - [Contributing](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CONTRIBUTING.md)
-
-## CI & Test Matrix
-
-| Workflow | What it Verifies |
-|----------|------------------|
-| **CI** | Biome lint + format check, typecheck, Vitest, and Playwright e2e suites against Memory, Redis, Valkey, and ElastiCache-mode backends |
-| **Next.js Canary Test** | Daily compatibility runs against Next.js canary/rc/latest to catch upstream breakage |
-| **Next.js Version Check** | Nightly scan for new Next.js releases, opens PRs to bump peer deps |
-| **Publish** | Trusted publishing with provenance – release tags must pass the full matrix before npm sees them |
 
 ## Development
 
@@ -284,6 +525,8 @@ pnpm install
 pnpm build
 pnpm test
 ```
+
+See [docs/development.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/development.md) for details.
 
 ## Contributing
 
@@ -298,4 +541,5 @@ MIT © [Jason Roy](https://github.com/mrjasonroy)
 
 ## Acknowledgments
 
-Forked from/Inspired by [@fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler), but focusing only on supporting Next.js 16+ and the new caching system.
+Inspired by [@fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler),
+but focused only on Next.js 16+ and its new caching system.

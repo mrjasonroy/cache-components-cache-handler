@@ -49,6 +49,8 @@ export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
  *   defaultTTL: 3600 // 1 hour
  * });
  * ```
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
  */
 export class MemoryCacheHandler implements CacheHandler {
   public readonly name = "local-lru";
@@ -200,6 +202,8 @@ export class MemoryCacheHandler implements CacheHandler {
  *   defaultTTL: 3600
  * });
  * ```
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
  */
 export function createMemoryCacheHandler(options?: MemoryCacheHandlerOptions): MemoryCacheHandler {
   return new MemoryCacheHandler(options);

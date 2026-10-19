@@ -1,301 +1,155 @@
 # Redis Configuration
 
-Install a Redis client as a peer dependency:
+`withCache` connects to Redis from the environment and needs `ioredis` installed:
 
 ```bash
 npm install ioredis
-# or, if you prefer node-redis:
-npm install redis
 ```
 
-## Which client and how to pass it
+Most deployments only set `REDIS_URL`. This page covers the other connection forms, running
+Redis, and what operators see in it.
 
-`createRedisDataCacheHandler` expects a **node-redis-style** `RedisClient` — its
-`set()` takes options as an object (`set(key, value, { EX: seconds })`).
+## Connection from the environment
 
-- **node-redis** (`redis`) speaks this natively — pass the client directly.
-- **ioredis** uses positional args (`set(key, value, "EX", seconds)`), so wrap it
-  with `createIoredisAdapter()`. Passing a raw ioredis client will make Redis
-  reject writes with `ERR syntax error` and silently break TTLs.
+| Variable | Meaning |
+|---|---|
+| `REDIS_URL` / `VALKEY_URL` | `redis://` or `rediss://` (TLS) URL. Takes precedence over the ElastiCache form. |
+| `REDIS_PASSWORD` | Password when the URL has none. |
+| `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | Host form. Port `6379`, TLS on unless `ELASTICACHE_TLS=false`. |
 
-The zero-config `createCacheHandler({ type: "redis" })` uses ioredis internally
-and applies this adapter for you.
-
-## Basic Setup (for "use cache" directive)
-
-Using **ioredis** (wrap with `createIoredisAdapter`):
-
-```javascript
-// data-cache-handler.mjs
-import Redis from "ioredis";
-import {
-  createRedisDataCacheHandler,
-  createIoredisAdapter,
-} from "@mrjasonroy/cache-components-cache-handler";
-
-const redis = new Redis(process.env.REDIS_URL || "redis://localhost:6379");
-
-export default createRedisDataCacheHandler({
-  redis: createIoredisAdapter(redis),
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
-```
-
-Using **node-redis** (pass the client directly):
-
-```javascript
-// data-cache-handler.mjs
-import { createClient } from "redis";
-import { createRedisDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-const redis = createClient({ url: process.env.REDIS_URL || "redis://localhost:6379" });
-await redis.connect();
-
-export default createRedisDataCacheHandler({
-  redis,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-});
-```
-
-```javascript
-// next.config.js
-export default {
-  cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-  },
-};
-```
-
-## Connection Options
-
-### URL Format (Recommended)
-
-```javascript
-const redis = new Redis(process.env.REDIS_URL);
-// Examples:
-// redis://localhost:6379
-// redis://:password@host:6379/0
-// rediss://host:6380 (TLS)
-```
-
-### Object Configuration
-
-```javascript
-const redis = new Redis({
-  host: "localhost",
-  port: 6379,
-  password: "your-password",
-  db: 0,
-});
-```
-
-## TLS/SSL
-
-```javascript
-const redis = new Redis({
-  host: "your-host.com",
-  port: 6380,
-  tls: {
-    rejectUnauthorized: false, // For self-signed certs
-  },
-});
-```
-
-Or use `rediss://` protocol:
-
-```javascript
-const redis = new Redis("rediss://your-host.com:6380");
-```
-
-## Error Handling
-
-```javascript
-const redis = new Redis(process.env.REDIS_URL);
-
-redis.on("error", (err) => {
-  console.error("Redis Error:", err);
-});
-
-redis.on("connect", () => {
-  console.log("Redis Connected");
-});
-
-redis.on("ready", () => {
-  console.log("Redis Ready");
-});
-```
-
-## Handler Options
-
-```javascript
-export default createRedisDataCacheHandler({
-  redis,                          // node-redis client, or createIoredisAdapter(ioredisClient)
-  keyPrefix: "myapp:cache:",      // Namespace for cache keys
-  tagPrefix: "myapp:tags:",       // Namespace for cache tags
-  defaultTTL: 86400,              // Default TTL in seconds (24 hours)
-  debug: false,                   // Enable debug logging
-});
-```
-
-## Local Development with Docker
+URL examples:
 
 ```bash
-docker run -d -p 6379:6379 redis:7-alpine
+REDIS_URL=redis://localhost:6379
+REDIS_URL=redis://:password@cache.internal:6379/0
+REDIS_URL=rediss://default:password@cache.example.com:6380   # TLS
 ```
 
-Or use docker-compose.yml:
+The package opens one connection per process and shares it between every handler. It reconnects
+forever, with backoff capped at 5 s. A command times out after 1 s, and a connection that times
+out 3 times in a row is dropped and redialled. What the app does meanwhile is in the README under
+[When Redis goes down](../README.md#when-redis-goes-down).
 
-```yaml
-version: "3"
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-```
+## Valkey
 
-Start:
+Valkey speaks the Redis protocol. Point `REDIS_URL` or `VALKEY_URL` at it; nothing else changes.
+CI runs the outage suite and the e2e suite on Valkey 8 as well as Redis 7.
 
 ```bash
-docker compose up -d
+VALKEY_URL=redis://valkey.internal:6379
 ```
 
-## Production Considerations
+## AWS ElastiCache
 
-### Connection Pooling
+ElastiCache usually gives you a hostname and an auth token instead of a URL:
 
-`ioredis` handles connection pooling automatically. No additional configuration needed.
+```bash
+ELASTICACHE_ENDPOINT=master.my-cache.abc123.use1.cache.amazonaws.com
+ELASTICACHE_AUTH_TOKEN=...
+```
 
-### Redis Sentinel (High Availability)
+That covers cluster-mode-disabled ElastiCache (one primary with replicas). Use the primary
+endpoint, not a reader endpoint. For cluster-mode-enabled ElastiCache, use a `Cluster` client as
+shown below.
 
-For automatic failover, configure ioredis and wrap it with `createIoredisAdapter`:
+## Your own client
 
-```javascript
+For Sentinel, Cluster, IAM auth or other ioredis options, build the client yourself and pass it to
+[custom handler files](../README.md#custom-handlers). Give all three handlers the same client so
+they share one connection and one tag store.
+
+A client you pass in is yours. The package never closes it, does not install its timeout watchdog,
+and does not apply `commandTimeout` to it. Set those on the client:
+
+```js
+// cache/redis.mjs
 import Redis from "ioredis";
-import {
-  createRedisDataCacheHandler,
-  createIoredisAdapter,
-} from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = new Redis({
+const key = Symbol.for("my-app.redis");
+globalThis[key] ??= new Redis(process.env.REDIS_URL, {
+  commandTimeout: 1000,
+  maxRetriesPerRequest: 1,
+  retryStrategy: (times) => Math.min(times * 200, 5000),
+});
+export const client = globalThis[key];
+```
+
+Parking the client on `globalThis` keeps it to one connection when Next loads the handler modules
+separately.
+
+### Redis Sentinel
+
+```js
+globalThis[key] ??= new Redis({
   sentinels: [
     { host: "sentinel-1", port: 26379 },
     { host: "sentinel-2", port: 26379 },
     { host: "sentinel-3", port: 26379 },
   ],
   name: "mymaster",
+  commandTimeout: 1000,
 });
-
-export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
 ```
 
-### Redis Cluster (Horizontal Scaling)
+### Redis Cluster
 
-For distributed deployments (`Cluster` also satisfies `createIoredisAdapter`):
-
-```javascript
+```js
 import { Cluster } from "ioredis";
-import {
-  createRedisDataCacheHandler,
-  createIoredisAdapter,
-} from "@mrjasonroy/cache-components-cache-handler";
 
-const redis = new Cluster([
-  { host: "node1", port: 6379 },
-  { host: "node2", port: 6379 },
-  { host: "node3", port: 6379 },
-]);
-
-export default createRedisDataCacheHandler({ redis: createIoredisAdapter(redis) });
+globalThis[key] ??= new Cluster(
+  [
+    { host: "node1", port: 6379 },
+    { host: "node2", port: 6379 },
+    { host: "node3", port: 6379 },
+  ],
+  { redisOptions: { commandTimeout: 1000 } },
+);
 ```
 
-**Cluster-mode is safe by design.** Redis Cluster and ElastiCache (cluster-mode
-enabled) shard keys across hash slots and reject any command spanning more than
-one slot with a `CROSSSLOT` error. This handler only ever issues **single-key
-commands** — no multi-key `del`/`mget`/transactions — so cluster mode works
-without hash tags or extra configuration. That invariant is enforced by a test
-(`redis.test.ts` → "only ever issues single-key commands"), so it can't
-regress silently.
+Cluster mode needs no hash tags. Every command the handlers send touches a single key, so none
+can fail with `CROSSSLOT`. `flushCache` and the tag store's full resync scan every master.
 
-### Key Expiration
-
-Keys are automatically expired based on cache lifetime settings. Monitor Redis memory usage.
-
-### Monitoring
+## Running Redis locally
 
 ```bash
-# Redis CLI
+docker run -d -p 6379:6379 redis:7-alpine
+```
+
+In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Commander on 8081.
+
+## What's in Redis
+
+```
+<prefix><buildId>:page:<key>   page, route handler or cached fetch entry
+<prefix><buildId>:data:<key>   "use cache: remote" entry
+<prefix>tag:<tag>              tag record (hash of stale / expired times in ms), 366-day TTL
+<prefix>tags:log               sorted set of recently invalidated tags
+```
+
+`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every key has a TTL, so Redis can run with
+`maxmemory-policy volatile-lru` or `allkeys-lru`. Entries are binary and not human-readable.
+`CACHE_DEBUG=1` on the app logs what is read and written.
+
+```bash
 redis-cli info memory
-redis-cli info stats
-
-# Check cache keys
-redis-cli --scan --pattern "myapp:cache:*" | wc -l
-
-# Check tag keys
-redis-cli --scan --pattern "myapp:tags:*" | wc -l
+redis-cli --scan --pattern 'nextjs:*:page:*' | wc -l   # page entries, every build
+redis-cli --scan --pattern 'nextjs:tag:*' | wc -l      # tag records
+redis-cli zrevrange nextjs:tags:log 0 9 withscores     # the 10 most recent invalidations
 ```
 
-## AWS ElastiCache
+Expect far more `HGETALL` than `GET` in `INFO commandstats`: every page read also reads the
+records of the tags that apply to it. See [Sizing](../README.md#sizing).
 
-For ElastiCache you typically get a hostname + token instead of a URI. Use the zero-config factory and let it wire TLS/passwords for you:
+Old builds' entries are not deleted on deploy; they expire on their own. To clear them sooner, use
+[`flushCache`](../README.md#flushing-the-cache).
 
-```javascript
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+## Managed Redis services
 
-export default createCacheHandler({
-  type: "elasticache",
-  endpoint: process.env.ELASTICACHE_ENDPOINT,
-  port: Number(process.env.ELASTICACHE_PORT ?? 6379),
-  tls: process.env.ELASTICACHE_TLS !== "false",
-  password: process.env.ELASTICACHE_AUTH_TOKEN ?? process.env.REDIS_PASSWORD,
-  keyPrefix: "prod:cache:",
-  tagPrefix: "prod:tags:",
-});
-```
+Any service that speaks the Redis protocol over TCP works with a `rediss://` URL, including
+Upstash's Redis endpoint (not its REST API). Services that only offer an HTTP API do not.
 
-This covers **cluster-mode-disabled** ElastiCache (a single primary with
-replicas), which behaves like single-node Redis from the client. For
-**cluster-mode-enabled** ElastiCache (sharded), use the ioredis `Cluster` client
-shown in [Redis Cluster](#redis-cluster-horizontal-scaling) above — the handler
-is slot-safe either way.
+## The 16.5 data handler
 
-## Valkey
-
-Valkey is a Redis-compatible open source fork. Switch the `type` to `"valkey"` (or set `CACHE_BACKEND=valkey`) and point at your cluster URL:
-
-```javascript
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-export default createCacheHandler({
-  type: "valkey",
-  url: process.env.VALKEY_URL ?? "redis://valkey.internal:6379",
-  password: process.env.REDIS_PASSWORD,
-});
-```
-
-## Upstash
-
-```javascript
-const redis = createClient({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  password: process.env.UPSTASH_REDIS_REST_TOKEN,
-  socket: {
-    tls: true,
-  },
-});
-```
-
-## Vercel KV (Upstash-based)
-
-```javascript
-const redis = createClient({
-  url: process.env.KV_URL,
-  token: process.env.KV_REST_API_TOKEN,
-  socket: {
-    tls: true,
-  },
-});
-```
+`createRedisDataCacheHandler` (the handler behind `createCacheHandler`) takes a node-redis-style
+client. Pass node-redis directly, or wrap ioredis with `createIoredisAdapter`. See the
+[API reference](./api-reference.md#165-data-cache-api).

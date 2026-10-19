@@ -230,8 +230,8 @@ jobs:
           # (redis-cli is not installed on the runner; calling it exited 127 and
           # marked every bump PR "Tests need review".)
           cd apps/e2e-test-app
-          CACHE_HANDLER=redis pnpm build
-          CACHE_HANDLER=redis pnpm test:e2e
+          REDIS_URL=redis://localhost:6379 pnpm build
+          REDIS_URL=redis://localhost:6379 pnpm test:e2e
         continue-on-error: true
         id: test_redis
 

@@ -50,6 +50,8 @@ export interface CacheHandlerConfig {
  *   ...cacheConfig,
  * };
  * ```
+ *
+ * @deprecated Use `withCache(nextConfig)`, which points Next at the built-in handler files itself. Still works; removed on the Next 17 line.
  */
 export function createCacheConfig(options: {
   /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
@@ -97,6 +99,8 @@ export function createCacheConfig(options: {
  *   ...cacheConfig,
  * };
  * ```
+ *
+ * @deprecated Use `withCache(nextConfig, { handlers })`. Still works; removed on the Next 17 line.
  */
 export function createCacheConfigWithProfiles(options: {
   /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */

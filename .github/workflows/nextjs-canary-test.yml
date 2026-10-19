@@ -98,7 +98,6 @@ jobs:
         id: build_redis
         if: steps.build_e2e.outcome == 'success'
         env:
-          CACHE_HANDLER: redis
           REDIS_URL: redis://localhost:6379
         run: |
           cd apps/e2e-test-app
@@ -109,7 +108,6 @@ jobs:
         id: test_redis
         if: steps.build_redis.outcome == 'success'
         env:
-          CACHE_HANDLER: redis
           REDIS_URL: redis://localhost:6379
         run: |
           cd apps/e2e-test-app

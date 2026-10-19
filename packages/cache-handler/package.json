@@ -1,6 +1,6 @@
 {
   "name": "@mrjasonroy/cache-components-cache-handler",
-  "version": "16.5.1",
+  "version": "16.6.0",
   "description": "Cache handler for Next.js 16+ with support for 'use cache' directive and Cache Components",
   "author": "Jason Roy",
   "license": "MIT",
@@ -19,6 +19,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:redis": "vitest run --no-file-parallelism src/integration",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist .turbo node_modules"
