@@ -1,0 +1,280 @@
+name: Next.js deploy tests
+
+# Runs Next.js's own caching e2e suites (vercel/next.js run-tests.js, NEXT_TEST_MODE=deploy,
+# with tests/next-deploy/e2e-deploy.sh as the deploy script) in three variants:
+#   baseline    plain `next build && next start`, no custom handlers
+#   pkg-16.5.1  the published @mrjasonroy/cache-components-cache-handler@16.5.1, wired the 16.5.1
+#               way, 2 `next start` instances on one Redis behind a round-robin proxy
+#   branch      this branch's package wired with withCache, same 2 instances; skipped (not failed)
+#               while packages/cache-handler/src does not export withCache yet
+# The job fails only on a regression of branch vs baseline (minus known-failures.txt).
+# Details: tests/next-deploy/README.md
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "tests/next-deploy/**"
+      - ".github/workflows/next-deploy-tests.yml"
+      - "packages/cache-handler/src/**"
+  workflow_dispatch:
+    inputs:
+      nextjsRef:
+        description: "vercel/next.js tag to test against (a published release)"
+        type: string
+        default: v16.4.2
+      suite_filter:
+        description: "Extended regex over tests/next-deploy/suites.txt lines (empty = all)"
+        type: string
+        default: ""
+      use_cache:
+        description: "withCache useCache option for the branch variant"
+        type: choice
+        options: [memory, redis]
+        default: memory
+      instances:
+        description: "next start instances behind the proxy (pkg-16.5.1 and branch)"
+        type: choice
+        options: ["2", "1"]
+        default: "2"
+
+concurrency:
+  group: next-deploy-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Keep in step with the next version apps/e2e-test-app tests against.
+  NEXT_REF: ${{ inputs.nextjsRef || 'v16.4.2' }}
+  SUITE_FILTER: ${{ inputs.suite_filter || '' }}
+  NEXT_DEPLOY_USE_CACHE: ${{ inputs.use_cache || 'memory' }}
+  NEXT_DEPLOY_INSTANCES: ${{ inputs.instances || '2' }}
+  # Must match the shard list in the suites matrix.
+  SHARDS: "4"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
+jobs:
+  build-nextjs:
+    name: Build next.js ${{ inputs.nextjsRef || 'v16.4.2' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Built once per ref and shared with every shard through the cache (key = the tag, which
+      # never moves).
+      - name: Restore next.js build
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: next.js
+          key: next-deploy-nextjs-build-${{ runner.os }}-${{ env.NEXT_REF }}-v1
+
+      - name: Checkout vercel/next.js ${{ env.NEXT_REF }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: vercel/next.js
+          ref: ${{ env.NEXT_REF }}
+          path: next.js
+          fetch-depth: 1
+
+      - name: Setup Node.js
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # As the testing-adapters docs prescribe: install, build, install again (links built bins).
+      - name: Install and build next.js
+        if: steps.cache.outputs.cache-hit != 'true'
+        working-directory: next.js
+        run: |
+          corepack enable
+          pnpm install && pnpm build && pnpm install
+
+  prepare-branch:
+    name: Pack this branch's package
+    runs-on: ubuntu-latest
+    outputs:
+      skip_reason: ${{ steps.gate.outputs.skip_reason }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The source is mid-rewrite: until withCache is exported there is nothing to wire, and the
+      # branch variant reports "skipped" instead of failing.
+      - name: Check for withCache
+        id: gate
+        run: |
+          # The public entry point must name it; a helper file alone is not wired up yet.
+          if grep -qE '\bwithCache\b' packages/cache-handler/src/index.ts; then
+            echo "withCache found; the branch variant runs."
+          else
+            echo "skip_reason=packages/cache-handler/src does not export withCache yet" >> "$GITHUB_OUTPUT"
+            echo "No withCache export; the branch variant is skipped."
+          fi
+
+      - name: Setup pnpm
+        if: steps.gate.outputs.skip_reason == ''
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.skip_reason == ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Build and pack
+        if: steps.gate.outputs.skip_reason == ''
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @mrjasonroy/cache-components-cache-handler build
+          mkdir -p "$RUNNER_TEMP/pkg"
+          pnpm --filter @mrjasonroy/cache-components-cache-handler pack --pack-destination "$RUNNER_TEMP/pkg"
+          ls -l "$RUNNER_TEMP/pkg"
+
+      - name: Upload package
+        if: steps.gate.outputs.skip_reason == ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-package
+          path: ${{ runner.temp }}/pkg/*.tgz
+          retention-days: 7
+          if-no-files-found: error
+
+  suites:
+    name: ${{ matrix.variant }} (shard ${{ matrix.shard }}/4)
+    needs: [build-nextjs, prepare-branch]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, pkg-16.5.1, branch]
+        shard: [1, 2, 3, 4]
+
+    # The handler variants share it; each deployment gets its own CACHE_KEY_PREFIX. The baseline
+    # variant ignores it.
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      NEXT_REPO_DIR: ${{ github.workspace }}/next.js
+      RESULTS_DIR: ${{ github.workspace }}/results
+      NEXT_DEPLOY_REDIS_URL: redis://127.0.0.1:6379
+      NEXT_DEPLOY_SKIP_REASON: ${{ matrix.variant == 'branch' && needs.prepare-branch.outputs.skip_reason || '' }}
+      SUITE_TIMEOUT: "1800"
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+        with:
+          path: handler
+
+      # The next.js checkout with its node_modules and build is several GB, plus one install
+      # per deployed test app.
+      - name: Free disk space
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Restore next.js build
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        uses: actions/cache/restore@v4
+        with:
+          path: next.js
+          key: next-deploy-nextjs-build-${{ runner.os }}-${{ env.NEXT_REF }}-v1
+          fail-on-cache-miss: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # next.js pins pnpm 10.33 in packageManager, and so do the test apps it generates.
+      - name: Enable corepack
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        run: corepack enable
+
+      - name: Locate pnpm store
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        id: pnpm-store
+        working-directory: next.js
+        run: echo "dir=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      # Every deployed test app runs `pnpm install` (next, react, the package); a warm store
+      # makes that mostly offline.
+      - name: Cache test-app pnpm store
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-store.outputs.dir }}
+          key: next-deploy-apps-pnpm-${{ runner.os }}-${{ env.NEXT_REF }}-${{ matrix.variant }}
+
+      - name: Install Playwright browsers
+        if: env.NEXT_DEPLOY_SKIP_REASON == ''
+        working-directory: next.js
+        run: pnpm playwright install --with-deps chromium
+
+      - name: Download this branch's package
+        if: matrix.variant == 'branch' && env.NEXT_DEPLOY_SKIP_REASON == ''
+        uses: actions/download-artifact@v4
+        with:
+          name: branch-package
+          path: ${{ runner.temp }}/pkg
+
+      - name: Locate package tarball
+        if: matrix.variant == 'branch' && env.NEXT_DEPLOY_SKIP_REASON == ''
+        run: echo "CACHE_HANDLER_TARBALL=$(ls "$RUNNER_TEMP"/pkg/*.tgz)" >> "$GITHUB_ENV"
+
+      - name: Run suites
+        run: handler/tests/next-deploy/run-suites.sh "${{ matrix.variant }}" "${{ matrix.shard }}" "$SHARDS"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-deploy-${{ matrix.variant }}-${{ matrix.shard }}
+          path: results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  report:
+    name: Results and regression gate
+    needs: suites
+    if: always() && needs.suites.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download shard results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: next-deploy-*
+          path: shard-results
+          merge-multiple: true
+
+      - name: Aggregate and compare
+        run: |
+          mkdir -p shard-results
+          node tests/next-deploy/report.mjs shard-results tests/next-deploy/known-failures.txt \
+            "$SHARDS" next-deploy-results
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: next-deploy-results
+          path: next-deploy-results
+          retention-days: 90
+          if-no-files-found: ignore

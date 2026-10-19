@@ -1,0 +1,2 @@
+# Suites (lines from suites.txt) that may pass on `baseline` and fail on `branch` without
+# failing the job. Each entry needs a reason and a link to the issue tracking it. Empty to start.
