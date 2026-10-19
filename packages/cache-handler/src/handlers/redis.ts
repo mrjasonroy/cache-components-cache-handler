@@ -134,11 +134,12 @@ function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
 
 /**
  * Tags of an entry: `ctx.tags` for `fetch` entries (and 16.5 callers), the `x-next-cache-tags`
- * header for pages and route handlers.
+ * header for App Router pages, route handlers and Pages Router pages (the kinds Next's own
+ * `FileSystemCache` checks header tags for).
  */
 export function getEntryTags(data: PageCacheValue, ctx?: PageCacheSetContext): string[] {
   if (ctx?.tags) return ctx.tags;
-  if (data.kind !== "APP_PAGE" && data.kind !== "APP_ROUTE") return [];
+  if (data.kind !== "APP_PAGE" && data.kind !== "APP_ROUTE" && data.kind !== "PAGES") return [];
   const header = data.headers?.[NEXT_CACHE_TAGS_HEADER];
   const value = Array.isArray(header) ? header.join(",") : header;
   return value ? String(value).split(",").filter(Boolean) : [];

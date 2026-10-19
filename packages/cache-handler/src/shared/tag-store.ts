@@ -13,8 +13,11 @@
  * Only `flushCache({ scope: "all" })` removes them.
  *
  * - `update` (from `updateTags` and the page handler's `revalidateTag`) records the invalidation in
- *   local state, then sends one HSET of every tag and one ZADD to the index. An update Redis did
- *   not acknowledge (an outage, an error) is sent again with the next update or on reconnect.
+ *   local state, then sends one script call that merges every tag's update into its record and
+ *   one `ZADD GT` to the index. Both only ever move a record forward, so a write that reaches
+ *   Redis after a newer one never undoes it (see `./tag-update.ts`). An update Redis did not
+ *   acknowledge (an outage, an error) is sent again, the same way, with the next update or on
+ *   reconnect.
  * - `fetch` reads named records with one HMGET and merges them. The page and remote handlers send
  *   it with their entry GET, in one round trip, because Next reads the singular `cacheHandler`
  *   before any `refreshTags` (next/dist/server/async-storage/work-store.js creates refreshTags
@@ -42,6 +45,13 @@
 import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
 import type { RedisConnection } from "./connection.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
+import {
+  type TagUpdate,
+  UPDATE_TAGS_SCRIPT,
+  UPDATE_TAGS_SHA,
+  mergeUpdate,
+  updateArgs,
+} from "./tag-update.js";
 
 /**
  * Tags read per round trip by a sync.
@@ -102,6 +112,15 @@ export function applyUpdate(
   if (!durations) record.expired = now;
   else if (durations.expire !== undefined) record.expired = now + durations.expire * 1000;
   return record;
+}
+
+/**
+ * The update made at `now` with `durations`: `expired` is left out when it keeps the stored one.
+ */
+function toUpdate(now: number, durations?: Durations): TagUpdate {
+  if (!durations) return { stale: now, expired: now };
+  if (durations.expire !== undefined) return { stale: now, expired: now + durations.expire * 1000 };
+  return { stale: now };
 }
 
 /**
@@ -223,13 +242,14 @@ export class TagStore {
   }
 
   /**
-   * Send every queued update to Redis: one HSET and one ZADD, whatever the number of tags. Updates
-   * that fail stay queued, for the next update or the next reconnect.
+   * Send every queued update to Redis: one script call and one `ZADD GT`, whatever the number of
+   * tags. Both merge forward only, so this write cannot undo a newer one from another instance
+   * that Redis acknowledged first. Updates that fail stay queued, for the next update or the next
+   * reconnect, and are sent the same way.
    *
    * Each update is applied again at the time it is sent, here and in Redis. An update replayed
-   * after an outage then carries the newest `stale` (so the HSET cannot replace a later update
-   * from another instance with an older record); it can only invalidate entries cached since the
-   * original update once more.
+   * after an outage then carries the newest `stale`: it reaches every instance as a new
+   * invalidation, and can only invalidate entries cached since the original update once more.
    */
   private async send(): Promise<void> {
     const connection = this.connection;
@@ -251,19 +271,19 @@ export class TagStore {
     const batch = new Map(this.unsent);
     this.unsent.clear();
     const now = Date.now();
-    const fields: Record<string, string> = {};
+    const updates = new Map<string, TagUpdate>();
     const scores: (string | number)[] = [];
     for (const [tag, durations] of batch) {
-      const record = applyUpdate(this.records.get(tag), now, durations ?? undefined);
-      this.records.set(tag, record);
-      fields[tag] = encodeRecord(record);
+      const update = toUpdate(now, durations ?? undefined);
+      updates.set(tag, update);
+      this.records.set(tag, mergeUpdate(this.records.get(tag), update));
       scores.push(now, tag);
     }
     try {
       const client = connection.client;
       await Promise.all([
-        client.hset(tagsKey(this.keyPrefix), fields),
-        client.zadd(tagIndexKey(this.keyPrefix), ...scores),
+        this.writeRecords(updateArgs(updates)),
+        client.zadd(tagIndexKey(this.keyPrefix), "GT", ...scores),
       ]);
     } catch (error) {
       for (const [tag, durations] of batch) {
@@ -271,6 +291,21 @@ export class TagStore {
         else if (durations === null) this.unsent.set(tag, null);
       }
       this.reportError("updateTags", error);
+    }
+  }
+
+  /**
+   * Merge updates into their records in Redis with {@link UPDATE_TAGS_SCRIPT}: EVALSHA, and EVAL
+   * when the server has not cached the script (NOSCRIPT).
+   */
+  private async writeRecords(args: string[]): Promise<void> {
+    const client = (this.connection as RedisConnection).client;
+    const key = tagsKey(this.keyPrefix);
+    try {
+      await client.evalsha(UPDATE_TAGS_SHA, 1, key, ...args);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("NOSCRIPT")) throw error;
+      await client.eval(UPDATE_TAGS_SCRIPT, 1, key, ...args);
     }
   }
 

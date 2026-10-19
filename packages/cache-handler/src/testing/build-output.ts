@@ -24,8 +24,8 @@ function write(path: string, data: string | Buffer, builtAt: number): void {
 }
 
 /**
- * Write an `APP_PAGE` (`/blog`, tagged `products` plus its implicit tags) and an `APP_ROUTE`
- * (`/sitemap.xml`) built `ageMs` ago.
+ * Write an `APP_PAGE` (`/blog`, tagged `products` plus its implicit tags), an `APP_ROUTE`
+ * (`/sitemap.xml`) and a Pages Router `PAGES` page (`/about`) built `ageMs` ago.
  */
 export function writeBuildOutput(ageMs = 60 * 60 * 1000): BuildOutput {
   const serverDistDir = join(mkdtempSync(join(tmpdir(), "cch-build-")), "server");
@@ -62,6 +62,11 @@ export function writeBuildOutput(ageMs = 60 * 60 * 1000): BuildOutput {
     builtAt,
   );
 
+  // Pages Router: `pages/<key>.html` and `.json`, no `.meta` (next/dist/export/routes/pages.js).
+  const pages = join(serverDistDir, "pages");
+  write(join(pages, "about.html"), "<html>built about</html>", builtAt);
+  write(join(pages, "about.json"), JSON.stringify({ pageProps: { title: "about" } }), builtAt);
+
   const nodeRequire = createRequire(import.meta.url);
   const { nodeFs } = nodeRequire("next/dist/server/lib/node-fs-methods.js") as { nodeFs: unknown };
   return { serverDistDir, fs: nodeFs, builtAt };
@@ -80,4 +85,10 @@ export const appRouteCtx = {
   kind: "APP_ROUTE",
   isFallback: false,
   softTags: ["_N_T_/layout", "_N_T_/sitemap.xml/route", "_N_T_/sitemap.xml"],
+};
+
+/** The get context Next passes for a prerendered Pages Router page. */
+export const pagesCtx = {
+  kind: "PAGES",
+  isFallback: false,
 };

@@ -1,6 +1,6 @@
 /**
  * The tag store's Redis commands against a real Redis: the sync's score-cursor paging (exclusive
- * `(` bounds, ties across pages).
+ * `(` bounds, ties across pages), and the monotonic record script and `ZADD GT`.
  *
  * Runs only when `CACHE_TEST_REDIS_URL` points at a disposable Redis (see outage.redis.test.ts).
  */
@@ -10,7 +10,20 @@ import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { getClientConnection } from "../shared/connection.js";
 import { tagIndexKey, tagsKey } from "../shared/keys.js";
-import { SYNC_PAGE_SIZE, SYNC_SKEW_MS, TagStore } from "../shared/tag-store.js";
+import {
+  SYNC_PAGE_SIZE,
+  SYNC_SKEW_MS,
+  type TagRecord,
+  TagStore,
+  decodeRecord,
+  encodeRecord,
+} from "../shared/tag-store.js";
+import {
+  type TagUpdate,
+  UPDATE_TAGS_SCRIPT,
+  mergeUpdate,
+  updateArgs,
+} from "../shared/tag-update.js";
 import { resetCacheState } from "../testing/env.js";
 
 const url = process.env.CACHE_TEST_REDIS_URL;
@@ -83,5 +96,107 @@ describe.runIf(Boolean(url))("TagStore (real Redis)", () => {
       reader.disconnect();
       writer.disconnect();
     }
+  });
+
+  test("an older write that reaches Redis after a newer acknowledged one does not replace it", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    // A server without the script cached: the first write falls back from EVALSHA to EVAL.
+    await raw.script("FLUSH");
+    const slow = new Redis(url as string);
+    const fast = new Redis(url as string);
+    const fresh = new Redis(url as string);
+    try {
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let onHeld = () => {};
+      const held = new Promise<void>((resolve) => {
+        onHeld = resolve;
+      });
+      for (const name of ["hset", "zadd", "eval", "evalsha"] as const) {
+        const original = slow[name].bind(slow) as (...args: unknown[]) => Promise<unknown>;
+        vi.spyOn(slow, name).mockImplementation((async (...args: unknown[]) => {
+          onHeld();
+          await gate;
+          return original(...args);
+        }) as never);
+      }
+
+      const t = Date.now();
+      const writeA = storeOn(slow).update(["products"]);
+      await held;
+      vi.setSystemTime(t + 2);
+      await storeOn(fast).update(["products"]);
+      release();
+      await writeA;
+
+      expect(await raw.hget(tagsKey(prefix), "products")).toBe(`${t + 2},${t + 2}`);
+      expect(await raw.zscore(tagIndexKey(prefix), "products")).toBe(String(t + 2));
+      const reader = storeOn(fresh);
+      await reader.fetch(["products"]);
+      expect(reader.check(["products"], t + 1)).toBe("expired");
+    } finally {
+      slow.disconnect();
+      fast.disconnect();
+      fresh.disconnect();
+    }
+  });
+
+  test("after SCRIPT FLUSH the write still lands, and later writes use EVALSHA alone", async () => {
+    const client = new Redis(url as string);
+    try {
+      const tags = storeOn(client);
+      await tags.update(["a"]);
+      await raw.script("FLUSH");
+      const evalCalls = vi.spyOn(client, "eval");
+      const evalshaCalls = vi.spyOn(client, "evalsha");
+
+      await tags.update(["b"]);
+      expect(evalshaCalls).toHaveBeenCalledTimes(1);
+      expect(evalCalls).toHaveBeenCalledTimes(1);
+      expect(decodeRecord(await raw.hget(tagsKey(prefix), "b"))?.stale).toBeDefined();
+
+      await tags.update(["c"]);
+      expect(evalshaCalls).toHaveBeenCalledTimes(2);
+      expect(evalCalls).toHaveBeenCalledTimes(1);
+      expect(decodeRecord(await raw.hget(tagsKey(prefix), "c"))?.stale).toBeDefined();
+      for (const [, numKeys] of [...evalCalls.mock.calls, ...evalshaCalls.mock.calls]) {
+        expect(numKeys).toBe(1);
+      }
+    } finally {
+      client.disconnect();
+    }
+  });
+
+  test("the script merges exactly as mergeUpdate", async () => {
+    const t = 1_700_000_000_000;
+    const stored: (TagRecord | undefined)[] = [
+      undefined,
+      { stale: t },
+      { stale: t, expired: t },
+      { stale: t, expired: t + 60_000 },
+    ];
+    const updates: TagUpdate[] = [];
+    for (const stale of [t - 1, t, t + 1]) {
+      updates.push({ stale }, { stale, expired: stale }, { stale, expired: stale + 30_000 });
+    }
+    const cases = stored.flatMap((current) => updates.map((update) => ({ current, update })));
+    const key = tagsKey(prefix);
+    const fields: Record<string, string> = {};
+    const batch = new Map<string, TagUpdate>();
+    cases.forEach(({ current, update }, i) => {
+      if (current) fields[`c${i}`] = encodeRecord(current);
+      batch.set(`c${i}`, update);
+    });
+    await raw.hset(key, fields);
+    expect(await raw.eval(UPDATE_TAGS_SCRIPT, 1, key, ...updateArgs(batch))).toBe(cases.length);
+
+    const raws = await raw.hmget(key, ...batch.keys());
+    cases.forEach(({ current, update }, i) => {
+      expect(decodeRecord(raws[i]), JSON.stringify({ current, update })).toEqual(
+        mergeUpdate(current, update),
+      );
+    });
   });
 });

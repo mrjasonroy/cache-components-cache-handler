@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { pageKey } from "../shared/keys.js";
@@ -6,6 +7,7 @@ import {
   type BuildOutput,
   appPageCtx,
   appRouteCtx,
+  pagesCtx,
   writeBuildOutput,
 } from "../testing/build-output.js";
 import { asClient, resetCacheState } from "../testing/env.js";
@@ -139,6 +141,39 @@ describe("page handler: prerendered build output", () => {
 
     await handler.revalidateTag("products");
     expect(await handler.get("/blog", appPageCtx)).toBeNull();
+  });
+
+  test("a prerendered Pages Router page is served from the build output", async () => {
+    const result = await handlerFor(new FakeRedis()).get("/about", pagesCtx);
+
+    expect(result?.value.kind).toBe("PAGES");
+    expect(result?.value.html).toBe("<html>built about</html>");
+    expect(result?.value.pageData).toEqual({ pageProps: { title: "about" } });
+    expect(result?.lastModified).toBe(build.builtAt);
+  });
+
+  test("a Pages Router page's header tags are checked, across a restart, before any Redis entry exists", async () => {
+    // next@16.4.2 writes no `.meta` for PAGES and its reader returns no headers, but the value
+    // type carries them and Next's own reader checks them: give the read value tag headers.
+    const { default: FileSystemCache } = createRequire(import.meta.url)(
+      "next/dist/server/lib/incremental-cache/file-system-cache.js",
+    ) as { default: { prototype: { get: (...args: unknown[]) => Promise<unknown> } } };
+    const read = FileSystemCache.prototype.get;
+    vi.spyOn(FileSystemCache.prototype, "get").mockImplementation(async function (
+      this: unknown,
+      ...args: unknown[]
+    ) {
+      const found = (await read.apply(this, args)) as { value: Record<string, unknown> } | null;
+      if (found?.value.kind === "PAGES") found.value.headers = { "x-next-cache-tags": "products" };
+      return found;
+    });
+
+    const fake = new FakeRedis();
+    await handlerFor(fake).revalidateTag("products");
+
+    await restart();
+    expect(await handlerFor(fake).get("/about", pagesCtx)).toBeNull();
+    expect(await fake.getBuffer(pageKey("nextjs:", "development", "/about"))).toBeNull();
   });
 
   test("routes that were not prerendered, and FETCH entries, are misses", async () => {

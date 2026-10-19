@@ -3,7 +3,10 @@
  * one instance to simulate several Next instances on one Redis. Test-only; not built.
  */
 
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { decodeRecord, encodeRecord } from "../shared/tag-store.js";
+import { UPDATE_TAGS_SCRIPT, mergeUpdate } from "../shared/tag-update.js";
 
 type Value = Buffer | Map<string, string> | Map<string, number>;
 
@@ -41,6 +44,8 @@ export class FakeRedis extends EventEmitter {
   /** Batches of commands sent together (issued in one synchronous run): round trips. */
   roundTrips = 0;
   private batchOpen = false;
+  /** Scripts this "server" has cached, by SHA1: EVALSHA of any other is NOSCRIPT. */
+  private readonly scripts = new Set<string>();
 
   private live(key: string): Item | undefined {
     const item = this.items.get(key);
@@ -183,13 +188,61 @@ export class FakeRedis extends EventEmitter {
     );
   }
 
-  async zadd(key: string, ...scoreMembers: (string | number)[]): Promise<number> {
+  /**
+   * EVAL, for the one script the package sends ({@link UPDATE_TAGS_SCRIPT}), emulated in
+   * TypeScript. The real script runs in the real-Redis suite.
+   */
+  async eval(script: string, numKeys: number, ...keysAndArgs: string[]): Promise<number> {
+    this.run("eval");
+    const sha = createHash("sha1").update(script).digest("hex");
+    this.scripts.add(sha);
+    return this.runScript(sha, numKeys, keysAndArgs);
+  }
+
+  async evalsha(sha: string, numKeys: number, ...keysAndArgs: string[]): Promise<number> {
+    this.run("evalsha");
+    if (!this.scripts.has(sha)) throw new Error("NOSCRIPT No matching script. Please use EVAL.");
+    return this.runScript(sha, numKeys, keysAndArgs);
+  }
+
+  /** `SCRIPT FLUSH`: the server forgets every cached script (a restart or failover does too). */
+  async script(subcommand: "FLUSH"): Promise<"OK"> {
+    this.run("script");
+    if (subcommand === "FLUSH") this.scripts.clear();
+    return "OK";
+  }
+
+  private runScript(sha: string, numKeys: number, keysAndArgs: string[]): number {
+    const known = createHash("sha1").update(UPDATE_TAGS_SCRIPT).digest("hex");
+    if (sha !== known || numKeys !== 1) throw new Error("FakeRedis: unknown script");
+    const [key, ...args] = keysAndArgs;
+    let item = this.live(key);
+    if (!item || !(item.value instanceof Map)) {
+      item = { value: new Map<string, string>() };
+      this.items.set(key, item);
+    }
+    const hash = item.value as Map<string, string>;
+    for (let i = 0; i + 2 < args.length; i += 3) {
+      const [tag, stale, expired] = args.slice(i, i + 3);
+      const update = { stale: Number(stale), ...(expired ? { expired: Number(expired) } : {}) };
+      hash.set(tag, encodeRecord(mergeUpdate(decodeRecord(hash.get(tag)), update)));
+    }
+    return args.length / 3;
+  }
+
+  async zadd(key: string, ...args: (string | number)[]): Promise<number> {
     this.run("zadd");
+    // GT: only ever raise a member's score (a new member is added).
+    const gt = args[0] === "GT";
+    const scoreMembers = gt ? args.slice(1) : args;
     if (scoreMembers.length === 0)
       throw new Error("ERR wrong number of arguments for 'zadd' command");
     const zset = this.zset(key, true);
     for (let i = 0; i + 1 < scoreMembers.length; i += 2) {
-      zset?.set(String(scoreMembers[i + 1]), Number(scoreMembers[i]));
+      const member = String(scoreMembers[i + 1]);
+      const score = Number(scoreMembers[i]);
+      const current = zset?.get(member);
+      if (!gt || current === undefined || score > current) zset?.set(member, score);
     }
     return scoreMembers.length / 2;
   }

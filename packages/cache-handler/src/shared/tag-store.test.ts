@@ -19,6 +19,33 @@ function storeOn(fake: FakeRedis): TagStore {
   return new TagStore(getClientConnection(asClient(fake)), PREFIX);
 }
 
+/**
+ * Holds `fake`'s write commands (whichever of them the store uses) until `release`: a write delayed
+ * in transit. `held` resolves once the first write is waiting.
+ */
+function holdWrites(fake: FakeRedis): { held: Promise<void>; release: () => void } {
+  let release = () => {};
+  let onHeld = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    onHeld = resolve;
+  });
+  for (const name of ["hset", "zadd", "eval", "evalsha"] as const) {
+    const original = fake[name]?.bind(fake) as
+      | ((...args: unknown[]) => Promise<unknown>)
+      | undefined;
+    if (!original) continue;
+    vi.spyOn(fake, name).mockImplementation((async (...args: unknown[]) => {
+      onHeld();
+      await gate;
+      return original(...args);
+    }) as never);
+  }
+  return { held, release };
+}
+
 describe("applyUpdate", () => {
   test("no durations: stale and expired now", () => {
     expect(applyUpdate(undefined, 1000)).toEqual({ stale: 1000, expired: 1000 });
@@ -101,10 +128,12 @@ describe("TagStore", () => {
     expect(decodeRecord("x,y")).toBeUndefined();
   });
 
-  test("an update of N tags is one HSET and one ZADD; the tag keys never expire", async () => {
+  test("an update of N tags is one script call and one ZADD; the tag keys never expire", async () => {
     const fake = new FakeRedis();
-    await storeOn(fake).update(["a", "b", "c"], { expire: 10 });
-    expect(fake.commands.sort()).toEqual(["hset", "zadd"]);
+    const tags = storeOn(fake);
+    await tags.update(["a", "b", "c"], { expire: 10 });
+    // EVALSHA, NOSCRIPT on a server that has not seen the script, then EVAL.
+    expect([...fake.commands].sort()).toEqual(["eval", "evalsha", "zadd"]);
     expect(await fake.hmget(tagsKey(PREFIX), "a")).toEqual([
       `${Date.now()},${Date.now() + 10_000}`,
     ]);
@@ -118,6 +147,11 @@ describe("TagStore", () => {
     ]);
     expect(fake.ttlOf(tagsKey(PREFIX))).toBe(-1);
     expect(fake.ttlOf(tagIndexKey(PREFIX))).toBe(-1);
+
+    // The server has the script now: one EVALSHA.
+    fake.commands.length = 0;
+    await tags.update(["d"]);
+    expect([...fake.commands].sort()).toEqual(["evalsha", "zadd"]);
   });
 
   test("no tag record is ever deleted automatically, however old", async () => {
@@ -137,7 +171,7 @@ describe("TagStore", () => {
     expect(await shared.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).toContain("old");
     expect(tags.get("old")).toEqual({ stale: old, expired: old });
     expect(tags.get("new")).toBeDefined();
-    for (const command of ["hdel", "zrem", "del", "unlink", "expire", "eval"]) {
+    for (const command of ["hdel", "zrem", "del", "unlink", "expire"]) {
       expect(shared.commands).not.toContain(command);
     }
   });
@@ -146,9 +180,9 @@ describe("TagStore", () => {
     const fake = new FakeRedis();
     const tags = storeOn(fake);
     await Promise.all([tags.update(["a", "b"]), tags.update(["b", "a"]), tags.update(["a", "b"])]);
-    expect(fake.commands.filter((c) => c === "hset")).toHaveLength(1);
+    expect(fake.commands.filter((c) => c === "zadd")).toHaveLength(1);
     await tags.update(["a", "b"]);
-    expect(fake.commands.filter((c) => c === "hset")).toHaveLength(2);
+    expect(fake.commands.filter((c) => c === "zadd")).toHaveLength(2);
   });
 
   test("a second identical revalidation 20 ms later still invalidates entries written between", async () => {
@@ -370,12 +404,89 @@ describe("TagStore", () => {
     const fake = new FakeRedis();
     const tags = storeOn(fake);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const hset = vi.spyOn(fake, "hset");
+    const zadd = vi.spyOn(fake, "zadd");
     await Promise.all([tags.update(["a"]), tags.update(["b"])]);
 
-    expect(hset).toHaveBeenCalledTimes(1);
+    expect(zadd).toHaveBeenCalledTimes(1);
     expect(errors).not.toHaveBeenCalled();
     expect(await fake.hmget(tagsKey(PREFIX), "a", "b")).not.toContain(null);
+  });
+
+  test("every script call names exactly one key, the tags hash: it cannot be CROSSSLOT", async () => {
+    const fake = new FakeRedis();
+    const evalCalls = vi.spyOn(fake, "eval");
+    const evalshaCalls = vi.spyOn(fake, "evalsha");
+    const tags = storeOn(fake);
+    await tags.update(["a", "b"]);
+    await tags.update(["c"], { expire: 60 });
+    fake.failWith = new Error("READONLY");
+    await tags.update(["d"]);
+    fake.failWith = undefined;
+    vi.setSystemTime(Date.now() + 1_000);
+    await tags.update(["e", "f", "g"]);
+
+    const calls = [...evalCalls.mock.calls, ...evalshaCalls.mock.calls];
+    expect(calls.length).toBeGreaterThanOrEqual(4);
+    for (const [, numKeys, key] of calls) {
+      expect(numKeys).toBe(1);
+      expect(key).toBe(tagsKey(PREFIX));
+    }
+  });
+
+  test("after the script cache is flushed, the write still lands and later writes use EVALSHA", async () => {
+    const fake = new FakeRedis();
+    const tags = storeOn(fake);
+    await tags.update(["a"]);
+    await fake.script("FLUSH");
+
+    fake.commands.length = 0;
+    vi.setSystemTime(Date.now() + 1_000);
+    await tags.update(["a"]);
+    expect([...fake.commands].sort()).toEqual(["eval", "evalsha", "zadd"]);
+    expect(await fake.hmget(tagsKey(PREFIX), "a")).toEqual([`${Date.now()},${Date.now()}`]);
+
+    fake.commands.length = 0;
+    await tags.update(["b"]);
+    expect([...fake.commands].sort()).toEqual(["evalsha", "zadd"]);
+  });
+
+  test("an older write that reaches Redis after a newer acknowledged one does not replace it", async () => {
+    const shared = new FakeRedis();
+    const slow = new FakeRedis(shared.items);
+    const tagsA = storeOn(slow);
+    const tagsB = storeOn(new FakeRedis(shared.items));
+    const released = holdWrites(slow);
+
+    // A revalidates at T; its write is delayed in transit.
+    const t = Date.now();
+    const writeA = tagsA.update(["products"]);
+    await released.held;
+
+    // An entry is cached at T+1; B revalidates at T+2 and Redis acknowledges it.
+    vi.setSystemTime(t + 2);
+    await tagsB.update(["products"]);
+
+    // A's write arrives last.
+    released.release();
+    await writeA;
+
+    expect(await shared.hmget(tagsKey(PREFIX), "products")).toEqual([`${t + 2},${t + 2}`]);
+    expect(await shared.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf", "WITHSCORES")).toEqual([
+      "products",
+      String(t + 2),
+    ]);
+    const reader = storeOn(new FakeRedis(shared.items));
+    await reader.fetch(["products"]);
+    expect(reader.check(["products"], t + 1)).toBe("expired");
+  });
+
+  test("an older revalidation with durations does not replace a newer immediate one", async () => {
+    const shared = new FakeRedis();
+    const t = Date.now();
+    await storeOn(shared).update(["x"]);
+    vi.setSystemTime(t - 5);
+    await storeOn(new FakeRedis(shared.items)).update(["x"], { expire: 60 });
+    expect(await shared.hmget(tagsKey(PREFIX), "x")).toEqual([`${t},${t}`]);
   });
 
   test("an update made during an outage reaches Redis on reconnect, newer than any before", async () => {
