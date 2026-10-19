@@ -4,7 +4,9 @@
  * Layout: `NCH` (3 bytes) · version (1 byte) · header length (uint32 BE) · header (UTF-8 JSON)
  * · blobs. Every `Buffer`/`Uint8Array` in the value is moved out of the JSON into the blob
  * section and replaced by `{ "__nch_b": [offset, length] }`; a `Map` becomes
- * `{ "__nch_m": [[key, value], ...] }`. Bytes are stored raw, never as base64 or byte arrays.
+ * `{ "__nch_m": [[key, value], ...] }`. Bytes are stored raw, never as base64 or byte arrays,
+ * and bytes repeated within the entry are stored once: several references may point into the
+ * same range.
  *
  * A reader accepts only this magic and version, so an entry in any other format (16.5's JSON,
  * a future version, a foreign value under the same key) reads as a miss, never as data.
@@ -24,25 +26,19 @@ const MAP_MARKER = "__nch_m";
  * Encode `value` (any JSON-compatible value that may also hold `Buffer`, `Uint8Array` and `Map`).
  */
 export function encodeEntry(value: unknown): Buffer {
-  const blobs: Uint8Array[] = [];
-  let offset = 0;
+  const { blobs, refs } = layoutBlobs(collectBytes(value));
 
   // Bytes and Maps are swapped out before `JSON.stringify`, not in a replacer: the replacer runs
   // after `Buffer.prototype.toJSON`, which turns every byte into an array element first.
   const prepare = (current: unknown): unknown => {
-    if (current instanceof Uint8Array) {
-      blobs.push(current);
-      const ref = { [BLOB_MARKER]: [offset, current.byteLength] };
-      offset += current.byteLength;
-      return ref;
-    }
+    if (current instanceof Uint8Array) return { [BLOB_MARKER]: refs.get(current) };
     if (current instanceof Map) {
       return {
         [MAP_MARKER]: Array.from(current.entries(), ([key, item]) => [prepare(key), prepare(item)]),
       };
     }
     if (Array.isArray(current)) return current.map(prepare);
-    if (current && typeof current === "object" && !("toJSON" in current)) {
+    if (isPlainObject(current)) {
       const copy: Record<string, unknown> = {};
       for (const [key, item] of Object.entries(current)) copy[key] = prepare(item);
       return copy;
@@ -59,6 +55,78 @@ export function encodeEntry(value: unknown): Buffer {
   preamble.writeUInt32BE(headerBytes.length, MAGIC.length + 1);
 
   return Buffer.concat([preamble, headerBytes, ...blobs]);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !("toJSON" in (value as object));
+}
+
+/**
+ * Every byte array in `value`, in the order {@link encodeEntry} meets them.
+ */
+function collectBytes(value: unknown): Uint8Array[] {
+  const found: Uint8Array[] = [];
+  const walk = (current: unknown): void => {
+    if (current instanceof Uint8Array) {
+      found.push(current);
+    } else if (current instanceof Map) {
+      for (const [key, item] of current) {
+        walk(key);
+        walk(item);
+      }
+    } else if (Array.isArray(current)) {
+      for (const item of current) walk(item);
+    } else if (isPlainObject(current)) {
+      for (const item of Object.values(current)) walk(item);
+    }
+  };
+  walk(value);
+  return found;
+}
+
+/**
+ * Place each byte array in the blob section and return its `[offset, length]` reference. Bytes
+ * already stored are referenced, not stored again: an equal array, or one equal to a stored array
+ * minus its first byte. Next 16 writes both into every App Router page entry: `rscData` is the
+ * flight data, prefixed with a one-byte marker under Cache Components, and `segmentData['/_full']`
+ * is the same flight data (`collect-segment-data.js`), about a quarter of the entry.
+ *
+ * Longest first, so the longer array is the one stored whichever order the value holds them in.
+ * The references are ordinary v2 references, so any v2 reader decodes the entry.
+ */
+function layoutBlobs(arrays: Uint8Array[]): {
+  blobs: Uint8Array[];
+  refs: Map<Uint8Array, [number, number]>;
+} {
+  const blobs: Uint8Array[] = [];
+  const refs = new Map<Uint8Array, [number, number]>();
+  // Stored arrays by length, so a lookup compares bytes only against arrays it could match.
+  const byLength = new Map<number, { bytes: Uint8Array; offset: number }[]>();
+  let offset = 0;
+
+  const unique = [...new Set(arrays)].sort((a, b) => b.byteLength - a.byteLength);
+  for (const bytes of unique) {
+    const length = bytes.byteLength;
+    const same = byLength.get(length)?.find((stored) => Buffer.compare(stored.bytes, bytes) === 0);
+    if (same) {
+      refs.set(bytes, [same.offset, length]);
+      continue;
+    }
+    const prefixed = byLength
+      .get(length + 1)
+      ?.find((stored) => Buffer.compare(stored.bytes.subarray(1), bytes) === 0);
+    if (prefixed) {
+      refs.set(bytes, [prefixed.offset + 1, length]);
+      continue;
+    }
+    blobs.push(bytes);
+    refs.set(bytes, [offset, length]);
+    const stored = byLength.get(length) ?? [];
+    stored.push({ bytes, offset });
+    byLength.set(length, stored);
+    offset += length;
+  }
+  return { blobs, refs };
 }
 
 /**
