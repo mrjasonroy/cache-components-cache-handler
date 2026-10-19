@@ -46,7 +46,7 @@ jobs:
           pnpm add next@${{ matrix.nextjs-version }}
           cd ../..
 
-          cd apps/legacy-cache-test
+          cd apps/redis-example
           pnpm add next@${{ matrix.nextjs-version }}
           cd ../..
 

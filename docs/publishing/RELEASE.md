@@ -111,8 +111,8 @@ cd apps/e2e-test-app
 pnpm add next@16.1.0
 cd ../..
 
-# Update legacy-cache-test
-cd apps/legacy-cache-test
+# Update redis-example
+cd apps/redis-example
 pnpm add next@16.1.0
 cd ../..
 

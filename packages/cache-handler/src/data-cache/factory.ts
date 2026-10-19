@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import type { RedisOptions } from "ioredis";
 import { createErrorReporter } from "./error-reporter.js";
 import { createIoredisAdapter } from "./ioredis-adapter.js";
+import { type IsrWarningOptions, warnMissingIsrHandlerOnce } from "./isr-warning.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import { createRedisDataCacheHandler } from "./redis.js";
 import type { DataCacheHandler } from "./types.js";
@@ -68,7 +69,7 @@ function reportClientErrors(
 
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
 
-export interface CacheHandlerOptions {
+export interface CacheHandlerOptions extends IsrWarningOptions {
   /**
    * Cache backend type
    */
@@ -106,7 +107,7 @@ export interface CacheHandlerOptions {
 
   /**
    * Key prefix for cache entries
-   * @default "nextjs:cache:"
+   * @default "nextjs:data-cache:"
    */
   keyPrefix?: string;
 
@@ -186,6 +187,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
     case "redis":
     case "valkey": {
       const Redis = loadIoredis(type);
+      warnMissingIsrHandlerOnce(options);
 
       const url =
         options.url || process.env.REDIS_URL || process.env.VALKEY_URL || "redis://localhost:6379";
@@ -214,6 +216,7 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
 
     case "elasticache": {
       const Redis = loadIoredis(type);
+      warnMissingIsrHandlerOnce(options);
 
       const endpoint = options.endpoint || process.env.ELASTICACHE_ENDPOINT;
       if (!endpoint) {

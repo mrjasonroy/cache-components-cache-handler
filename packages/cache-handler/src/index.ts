@@ -1,52 +1,9 @@
 /**
- * @mrjasonroy/better-nextjs-cache-handler
- * Modern cache handler for Next.js 16+ with support for ISR and 'use cache' directive
+ * @mrjasonroy/cache-components-cache-handler
+ *
+ * Data cache handlers for Next.js 16+ "use cache" / Cache Components, configured via
+ * `cacheHandlers` in next.config. The legacy ISR `cacheHandler` (singular) is not provided.
  */
-
-// =============================================================================
-// ISR Cache Handlers (for Incremental Static Regeneration)
-// =============================================================================
-
-export {
-  CompositeHandler,
-  type CompositeHandlerOptions,
-  createCompositeHandler,
-} from "./handlers/composite.js";
-// Handlers
-export {
-  createMemoryCacheHandler,
-  MemoryCacheHandler,
-  type MemoryCacheHandlerOptions,
-} from "./handlers/memory.js";
-export {
-  RedisCacheHandler,
-  type RedisCacheHandlerOptions,
-} from "./handlers/redis.js";
-export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
-// Helpers
-export { isImplicitTag } from "./helpers/is-implicit-tag.js";
-export { jsonReplacer, jsonReviver } from "./helpers/serialization.js";
-export { calculateLifespan, isExpired } from "./helpers/lifespan.js";
-export {
-  type CacheHandlerConfig,
-  createCacheConfig,
-  createCacheConfigWithProfiles,
-} from "./helpers/next-config.js";
-// Types
-export type {
-  CacheHandler,
-  CacheHandlerContext,
-  CacheHandlerGetMeta,
-  CacheHandlerOptions,
-  CacheHandlerValue,
-  CacheValue,
-  LifespanParameters,
-} from "./types.js";
-export { IMPLICIT_TAG_PREFIX } from "./types.js";
-
-// =============================================================================
-// Data Cache Handlers (for "use cache" directive)
-// =============================================================================
 
 // Zero-config factory (recommended)
 export {
@@ -55,7 +12,7 @@ export {
   createCacheHandler,
 } from "./data-cache/factory.js";
 
-// Advanced: Direct handler creation
+// Advanced: direct handler creation
 export {
   createMemoryDataCacheHandler,
   type MemoryDataCacheHandlerOptions,
@@ -75,3 +32,10 @@ export type {
   DataCacheHandler,
   Timestamp,
 } from "./data-cache/types.js";
+
+// next.config helpers
+export {
+  type CacheHandlerConfig,
+  createCacheConfig,
+  createCacheConfigWithProfiles,
+} from "./helpers/next-config.js";

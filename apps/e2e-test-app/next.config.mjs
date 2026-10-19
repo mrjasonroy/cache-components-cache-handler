@@ -8,9 +8,6 @@ const __dirname = dirname(__filename);
 const nextConfig = {
   cacheComponents: true,
 
-  // ISR cache handler (for traditional Next.js caching)
-  cacheHandler: resolve(__dirname, "./cache-handler.mjs"),
-
   // Disable default in-memory caching for "use cache"
   cacheMaxMemorySize: 0,
 

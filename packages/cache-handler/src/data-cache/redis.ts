@@ -168,7 +168,7 @@ function bufferToStream(buffer: Buffer): ReadableStream<Uint8Array> {
  * ```typescript
  * // redis-cache-handler.mjs
  * import { createClient } from 'redis';
- * import { createRedisDataCacheHandler } from '@mrjasonroy/better-nextjs-cache-handler/data-cache';
+ * import { createRedisDataCacheHandler } from '@mrjasonroy/cache-components-cache-handler';
  *
  * const redis = createClient({
  *   url: process.env.REDIS_URL

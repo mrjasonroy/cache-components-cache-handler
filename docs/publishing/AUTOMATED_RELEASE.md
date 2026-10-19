@@ -76,7 +76,7 @@ When Next.js releases a new version (e.g., 16.1.0):
    # Update apps
    cd ../../apps/e2e-test-app
    pnpm add next@16.1.0
-   cd ../legacy-cache-test
+   cd ../redis-example
    pnpm add next@16.1.0
 
    # Commit and push
