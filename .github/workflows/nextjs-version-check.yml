@@ -172,6 +172,11 @@ jobs:
           pnpm add next@${{ steps.check_version.outputs.latest_version }}
           cd ../..
 
+          # The package's unit tests run against the Next it supports (a dev dependency)
+          cd packages/cache-handler
+          pnpm add -D next@${{ steps.check_version.outputs.latest_version }}
+          cd ../..
+
           # Bump package version to match Next.js version, but never lower it: the
           # package can ship its own release ahead of Next (e.g. 16.5.0 while Next
           # is on 16.4.x), and publishing a lower version would move npm `latest` back.

@@ -90,6 +90,11 @@ jobs:
           pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
           cd ../..
 
+          # The package's unit tests run against the Next it supports (a dev dependency)
+          cd packages/cache-handler
+          pnpm add -D next@${{ steps.versions.outputs.latest_nextjs }}
+          cd ../..
+
       - name: Update package version
         if: steps.versions.outputs.needs_update == 'true'
         run: |
