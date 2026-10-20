@@ -284,7 +284,8 @@ for revalidations in flight and sends any Redis has not acknowledged one last ti
 revalidation Redis still refuses (it is down, or read-only during a failover) is not lost: this
 process keeps applying it, and the handlers send it once Redis takes writes again, if you use
 them after the close. `closeCache()` does not fail because Redis is down. It is safe to call more than once,
-and concurrently. A `client` you passed in is never
+and concurrently: a call made while a close runs closes, after it, any connection a cache call
+opened meanwhile. A `client` you passed in is never
 closed; close it yourself. Handlers created before it keep working: on their next call they
 reconnect, all onto one new connection. The deprecated `createCacheHandler` is the exception: it
 keeps its closed connection and serves from memory, so create it again after `closeCache()`.
@@ -383,7 +384,7 @@ second connection to the same server, and the package logs a warning when that h
 `BUILD_ID`), the build that scopes entry keys. Both also take `defaultTTL`, in seconds:
 `createRedisCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
 and maximum 365 days), and `createRemoteCacheHandler` keeps an entry whose `expire` is infinite
-that long (default 24 hours, maximum 365 days).
+that long (default 24 hours, maximum 365 days; anything but a number greater than 0 throws).
 
 `CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
 

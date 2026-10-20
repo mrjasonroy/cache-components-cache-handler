@@ -252,11 +252,18 @@ const TUNING_OPTIONS = [
   "errorLogIntervalMs",
 ] as const;
 
-/** A registry key without the tuning: two keys with the same server key reach the same server. */
-function serverKey(key: string): string {
-  const options = JSON.parse(key) as Record<string, unknown>;
-  for (const name of TUNING_OPTIONS) delete options[name];
-  return stableStringify(options);
+/**
+ * A registry key without the tuning: two keys with the same server key reach the same server.
+ * `undefined` for a key that is not JSON (an option holding a symbol, or `undefined` in an array).
+ */
+function serverKey(key: string): string | undefined {
+  try {
+    const options = JSON.parse(key) as Record<string, unknown>;
+    for (const name of TUNING_OPTIONS) delete options[name];
+    return stableStringify(options);
+  } catch {
+    return undefined;
+  }
 }
 
 /** Servers already warned about, by server key: one warning per server per module graph. */
@@ -269,7 +276,8 @@ const warnedSplits = new Set<string>();
  */
 function warnOnSplit(registry: Registry, key: string): void {
   const server = serverKey(key);
-  if (warnedSplits.has(server)) return;
+  // Only a warning: a key it cannot read is skipped, never a reason to fail the connection.
+  if (server === undefined || warnedSplits.has(server)) return;
   if (![...registry.keys()].some((other) => other !== key && serverKey(other) === server)) return;
   warnedSplits.add(server);
   console.warn(
@@ -625,8 +633,16 @@ export function getRedisConnection(options: RedisConnectionOptions = {}): RedisC
  * Close and forget every shared connection. For tests and graceful shutdown.
  */
 export async function closeAllRedisConnections(): Promise<void> {
+  await Promise.all(detachAllRedisConnections().map((connection) => connection.close()));
+}
+
+/**
+ * Forget every shared connection without closing it, and return them: a connection asked for
+ * from now on is a new one.
+ */
+export function detachAllRedisConnections(): RedisConnection[] {
   const registry = getRegistry();
   const connections = [...registry.values()];
   registry.clear();
-  await Promise.all(connections.map((connection) => connection.close()));
+  return connections;
 }

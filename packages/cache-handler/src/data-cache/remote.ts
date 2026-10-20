@@ -55,7 +55,8 @@ export interface RemoteCacheHandlerOptions extends CacheOptions {
 
   /**
    * Seconds to keep an entry whose `expire` is infinite (a `cacheLife` without `expire`). An entry
-   * with a finite `expire` is kept until it expires. Both are capped at 365 days.
+   * with a finite `expire` is kept until it expires. Both are capped at 365 days. Anything but a
+   * finite number greater than 0 throws when the handler is created.
    * @default 86400 (24 hours)
    */
   defaultTTL?: number;
@@ -88,6 +89,15 @@ interface InMemoryEntry {
 export function createRemoteCacheHandler(
   options: RemoteCacheHandlerOptions = {},
 ): DataCacheHandler {
+  const { defaultTTL } = options;
+  if (
+    defaultTTL !== undefined &&
+    (typeof defaultTTL !== "number" || !Number.isFinite(defaultTTL) || defaultTTL <= 0)
+  ) {
+    throw new Error(
+      `createRemoteCacheHandler: defaultTTL must be a finite number of seconds greater than 0, got ${String(defaultTTL)}`,
+    );
+  }
   if (isEdgeRuntime()) return missHandler;
   // Read on every call: after `closeCache()` it is a new runtime, on a new connection.
   const currentRuntime = liveCacheRuntime(options);

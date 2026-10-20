@@ -90,6 +90,28 @@ describe("closeCache", () => {
     expect(runtimes().size).toBe(0);
   });
 
+  test("a closeCache that joins one in progress also closes a connection opened meanwhile", async () => {
+    getCacheRuntime(options);
+    const first = closeCache();
+    // A cache call during the close opens a new connection, which a later closeCache closes.
+    getCacheRuntime(options);
+    await Promise.all([first, closeCache()]);
+    expect(redis.created).toHaveLength(2);
+    expect(redis.created.map((client) => vi.mocked(client.quit).mock.calls.length)).toEqual([1, 1]);
+    expect(runtimes().size).toBe(0);
+
+    // Opened once the first close has quit its connection, and before it resolves.
+    getCacheRuntime(options);
+    const third = closeCache();
+    await vi.waitFor(() => expect(redis.created[2].quit).toHaveBeenCalled());
+    getCacheRuntime(options);
+    await Promise.all([third, closeCache()]);
+    expect(redis.created).toHaveLength(4);
+    expect(redis.created.map((client) => vi.mocked(client.quit).mock.calls.length)).toEqual([
+      1, 1, 1, 1,
+    ]);
+  });
+
   test("empties the memory stores", async () => {
     const runtime = getCacheRuntime({ keyPrefix: "app:" });
     runtime.stores.local.set("a", 1, 1, null);

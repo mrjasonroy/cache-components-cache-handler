@@ -126,6 +126,15 @@ describe("createRemoteCacheHandler", () => {
     expect(fake.ttlOf("nextjs:b1:data:long")).toBe(MAX_ENTRY_AGE_SECONDS);
   });
 
+  test.each([Number.NaN, 0, -60, Number.POSITIVE_INFINITY, "600" as unknown as number])(
+    "defaultTTL %s is refused when the handler is created",
+    (defaultTTL) => {
+      expect(() => createRemoteCacheHandler({ buildId: "b1", defaultTTL })).toThrow(
+        /defaultTTL must be a finite number of seconds greater than 0/,
+      );
+    },
+  );
+
   test("a failed render is not stored", async () => {
     const fake = new FakeRedis();
     const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });

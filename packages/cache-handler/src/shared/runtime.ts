@@ -11,8 +11,8 @@ import {
   type RedisClientLike,
   type RedisConnection,
   type RedisConnectionOptions,
-  closeAllRedisConnections,
   connectionKey,
+  detachAllRedisConnections,
   findRedisConnection,
   getClientConnection,
   getRedisConnection,
@@ -374,13 +374,14 @@ function createRuntime(
   };
 }
 
-let closing: Promise<void> | undefined;
+/** The last close requested while one may still run; the next one starts once it has finished. */
+let lastClose: Promise<void> | undefined;
 
 /**
  * Close every Redis connection this package opened in this process, empty its in-process memory
  * stores and drop its tag state, so that a test runner, script or custom server can exit. A
  * client the application passed in (`client`) is never closed or disconnected. Safe to call more
- * than once; concurrent calls share one close.
+ * than once: a call made while another runs closes, after it, whatever was opened meanwhile.
  *
  * Handlers are not broken by it: a handler created before the call opens a new connection on its
  * next use, and every handler of a connection and key prefix shares the new one, as before.
@@ -393,25 +394,35 @@ let closing: Promise<void> | undefined;
  * ```
  */
 export function closeCache(): Promise<void> {
-  closing ??= (async () => {
-    const registry = getRegistry();
-    const runtimes = [...registry.values()];
-    registry.clear();
-    // Before anything is awaited, so a runtime created meanwhile adopts the tag state too.
-    const pending = getPendingTags();
-    for (const runtime of runtimes) {
-      runtime.closed = true;
-      const handover = runtime.tags.handOver();
-      if (runtime.handoverKey !== undefined) pending.set(runtime.handoverKey, handover);
-    }
-    clearAllMemoryStores();
-    await Promise.allSettled(runtimes.map((runtime) => runtime.tags.drain()));
-    for (const runtime of runtimes) runtime.dispose();
-    await closeAllRedisConnections();
-  })().finally(() => {
-    closing = undefined;
-  });
-  return closing;
+  // A cache call during a close opens a new connection; a later call must close that one too, so
+  // it runs a close of its own after the current one rather than sharing it.
+  // The first starts at once, so the handlers' state is handed over before the caller goes on.
+  const close = lastClose ? lastClose.then(closeOnce, closeOnce) : closeOnce();
+  lastClose = close;
+  const settled = () => {
+    if (lastClose === close) lastClose = undefined;
+  };
+  close.then(settled, settled);
+  return close;
+}
+
+async function closeOnce(): Promise<void> {
+  // Everything up to the first await runs at once, so a cache call made during the close gets a
+  // new runtime, on a new connection, that adopts the tag state handed over here.
+  const registry = getRegistry();
+  const runtimes = [...registry.values()];
+  registry.clear();
+  const connections = detachAllRedisConnections();
+  const pending = getPendingTags();
+  for (const runtime of runtimes) {
+    runtime.closed = true;
+    const handover = runtime.tags.handOver();
+    if (runtime.handoverKey !== undefined) pending.set(runtime.handoverKey, handover);
+  }
+  clearAllMemoryStores();
+  await Promise.allSettled(runtimes.map((runtime) => runtime.tags.drain()));
+  for (const runtime of runtimes) runtime.dispose();
+  await Promise.all(connections.map((connection) => connection.close()));
 }
 
 /**

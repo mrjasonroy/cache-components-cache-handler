@@ -127,7 +127,8 @@ Both return a Next `DataCacheHandler` (`get`, `set`, `refreshTags`, `getExpirati
 For `"use cache: remote"`, and for `"use cache"` with `useCache: "redis"`. Entries are stored in
 Redis under `<prefix><buildId>:data:<key>` until their `expire`, with the memory fallback during
 an outage. Takes `CacheOptions` plus `buildId` and `defaultTTL`: the seconds to keep an entry whose
-`expire` is infinite (default `86400`, 24 hours). Every entry is kept at most 365 days.
+`expire` is infinite (default `86400`, 24 hours; anything but a finite number greater than 0 throws when the
+handler is created). Every entry is kept at most 365 days.
 
 ### `createLocalCacheHandler(options?)`
 
@@ -175,7 +176,7 @@ Redis connection the package opened in this process and empties its memory store
 waits for tag writes in flight and sends any Redis has not acknowledged once more; one still
 refused is kept, applied by this process and sent by the handlers once Redis takes it, if they
 are used again. It never rejects because Redis is down. Safe to call more than once, and
-concurrently. A `client` you passed in is never closed.
+concurrently: a call made while a close runs closes, after it, any connection opened meanwhile. A `client` you passed in is never closed.
 Handlers created before it reconnect on their next call, onto one new connection; the deprecated
 `createCacheHandler` does not, and serves from memory until it is created again.
 

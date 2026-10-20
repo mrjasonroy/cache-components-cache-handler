@@ -322,6 +322,13 @@ describe("getRedisConnection", () => {
     expect(String(warn.mock.calls[0][0])).not.toMatch(/secret|split/);
   });
 
+  test("options the split check cannot read never make opening a connection throw", () => {
+    // `[undefined]` and a symbol stringify to text that is not JSON.
+    const options = { redisOptions: { host: "odd", name: [undefined], role: Symbol("x") } };
+    expect(() => getRedisConnection(options as never)).not.toThrow();
+    expect(() => getRedisConnection({ ...options, connectTimeout: 5000 } as never)).not.toThrow();
+  });
+
   test("close removes the connection from the registry", async () => {
     const a = getRedisConnection({ url: "redis://a:6379" });
     await a.close();

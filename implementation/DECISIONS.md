@@ -6,8 +6,11 @@
 
 - **H1, `closeCache(): Promise<void>`**, exported from the package root next to `flushCache`. It
   closes every Redis connection the package opened, empties the memory stores and drops the
-  runtimes (tag stores). Idempotent: concurrent calls share one close, and a later call finds
-  nothing open. A `client` the application passed in is never closed. Handlers reconnect lazily:
+  runtimes (tag stores). Idempotent. The first call starts at once; a call made while one runs
+  starts its own close after it (Opus merge-gate L1), so a connection a cache call opened during
+  the first close is closed too, and a later call finds nothing open. A close detaches the pooled
+  connections before it awaits anything, so a cache call during it gets a new connection rather
+  than one about to be quit. A `client` the application passed in is never closed. Handlers reconnect lazily:
   the remote, local and page handlers resolve their runtime on every call
   (`liveCacheRuntime`), and a runtime that `closeCache` marked `closed` is looked up again in the
   registry, which opens one new connection and one tag store shared by every handler with the same
