@@ -548,6 +548,22 @@ export function getClientConnection(
 }
 
 /**
+ * The process-wide connection for these options if one is open, without opening one.
+ */
+export function findRedisConnection(
+  options: RedisConnectionOptions = {},
+): RedisConnection | undefined {
+  return getRegistry().get(connectionKey(options));
+}
+
+/**
+ * A new connection for these options, not shared: only the caller uses it, and closes it.
+ */
+export function openRedisConnection(options: RedisConnectionOptions = {}): RedisConnection {
+  return createRedisConnection(buildClient(options), options);
+}
+
+/**
  * Get the process-wide connection for these options, opening it on first use. Every handler
  * created with the same options shares it.
  */
@@ -557,7 +573,7 @@ export function getRedisConnection(options: RedisConnectionOptions = {}): RedisC
   const existing = registry.get(key);
   if (existing) return existing;
 
-  const connection = createRedisConnection(buildClient(options), options);
+  const connection = openRedisConnection(options);
   const close = connection.close;
   const shared: RedisConnection = {
     ...connection,

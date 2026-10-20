@@ -5,7 +5,12 @@
 import { getBuildId } from "./build-id.js";
 import { FLUSH_TAG, buildFlushTag } from "./keys.js";
 import { clearAllMemoryStores } from "./memory-store.js";
-import { type CacheOptions, getCacheRuntime, isRedisReady } from "./runtime.js";
+import {
+  type CacheOptions,
+  type CacheRuntime,
+  acquireCacheRuntime,
+  isRedisReady,
+} from "./runtime.js";
 import { escapeGlob, unlinkMatching } from "./scan.js";
 
 /**
@@ -52,7 +57,9 @@ export interface FlushCacheResult {
  * migration is retried through the Cluster client; any that still fail are reported with
  * `partial: true` and `failed`, and a warning is logged, instead of failing the whole flush.
  *
- * Put it behind your own authenticated route; the package ships no HTTP endpoint.
+ * Put it behind your own authenticated route; the package ships no HTTP endpoint. It uses the
+ * handlers' Redis connection when they have opened it, and otherwise one of its own that it closes
+ * before returning, so a script or test that calls it exits on its own.
  *
  * @example
  * ```ts
@@ -62,7 +69,19 @@ export interface FlushCacheResult {
  * ```
  */
 export async function flushCache(options: FlushCacheOptions = {}): Promise<FlushCacheResult> {
-  const runtime = getCacheRuntime(options);
+  const { runtime, shared, release } = acquireCacheRuntime(options);
+  try {
+    return await flush(runtime, shared, options);
+  } finally {
+    await release();
+  }
+}
+
+async function flush(
+  runtime: CacheRuntime,
+  shared: boolean,
+  options: FlushCacheOptions,
+): Promise<FlushCacheResult> {
   const connection = runtime.connection;
   const barrier =
     options.scope === "all" ? FLUSH_TAG : buildFlushTag(options.buildId ?? getBuildId());
@@ -90,8 +109,14 @@ export async function flushCache(options: FlushCacheOptions = {}): Promise<Flush
   // Only once Redis is flushed: a failed flush leaves this process as consistent as Redis.
   clearAllMemoryStores();
   // After the UNLINK, which deletes the tag records with `scope: "all"`. A write Redis does not
-  // take is sent again with the next update or sync, like any revalidation.
+  // take is sent again with the next update or sync, like any revalidation; but a connection of
+  // the flush's own is closed on return, so there the write must have reached Redis.
   await runtime.tags.update([barrier]);
+  if (!shared && runtime.tags.hasUnsent()) {
+    throw new Error(
+      `flushCache: deleted ${deleted} key(s) but could not record the flush in Redis, so build output may be served again; run it again`,
+    );
+  }
   if (failed === 0) return { deleted };
   console.warn(
     `flushCache: partial flush, ${failed} key(s) matching ${pattern} could not be deleted during a Cluster slot migration; run it again`,

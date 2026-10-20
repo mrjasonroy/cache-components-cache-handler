@@ -9,10 +9,13 @@ import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
 import { MAX_STORED_ENTRY_BYTES } from "./codec.js";
 import {
+  type RedisClientLike,
   type RedisConnection,
   type RedisConnectionOptions,
+  findRedisConnection,
   getClientConnection,
   getRedisConnection,
+  openRedisConnection,
 } from "./connection.js";
 import {
   isDebugEnabled,
@@ -143,34 +146,43 @@ function getRegistry(): Map<string, CacheRuntime> {
 }
 
 /**
+ * The connection these options ask for: the application's client, the options of a connection
+ * of the package's own, or `undefined` for memory only (`next build`, `CACHE_REDIS=off`).
+ */
+function connectionRequest(
+  options: RuntimeOptions,
+): { client: RedisClientLike } | { options: RedisConnectionOptions } | undefined {
+  if (!shouldUseRedis()) return undefined;
+  if (options.client) return { client: options.client };
+
+  const tuning = definedOnly({
+    commandTimeout: options.commandTimeout,
+    connectTimeout: options.connectTimeout,
+    socketTimeout: options.socketTimeout,
+    maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
+  });
+  if (options.redisOptions && !options.url) {
+    return { options: { ...tuning, redisOptions: options.redisOptions } };
+  }
+  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...tuning });
+  return connectionOptions ? { options: connectionOptions } : undefined;
+}
+
+/**
  * The connection these options ask for, or `undefined` for memory only. Never connects during
  * `next build` or with `CACHE_REDIS=off`.
  */
 export function resolveConnection(options: RuntimeOptions = {}): RedisConnection | undefined {
-  if (!shouldUseRedis()) return undefined;
-  const { commandTimeout, connectTimeout, socketTimeout, maxConsecutiveTimeouts } = options;
-  if (options.client) {
+  const request = connectionRequest(options);
+  if (!request) return undefined;
+  if ("client" in request) {
+    const { commandTimeout, maxConsecutiveTimeouts } = options;
     return getClientConnection(
-      options.client,
+      request.client,
       definedOnly({ commandTimeout, maxConsecutiveTimeouts }),
     );
   }
-
-  const tuning = definedOnly({
-    commandTimeout,
-    connectTimeout,
-    socketTimeout,
-    maxConsecutiveTimeouts,
-  });
-  if (options.redisOptions && !options.url) {
-    const connectionOptions: RedisConnectionOptions = {
-      ...tuning,
-      redisOptions: options.redisOptions,
-    };
-    return getRedisConnection(connectionOptions);
-  }
-  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...tuning });
-  return connectionOptions ? getRedisConnection(connectionOptions) : undefined;
+  return getRedisConnection(request.options);
 }
 
 /**
@@ -204,6 +216,33 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
   const existing = registry.get(key);
   if (existing) return existing;
 
+  const runtime = createRuntime(connection, keyPrefix);
+  registry.set(key, runtime);
+  return runtime;
+}
+
+/**
+ * A runtime for one operation outside the handlers (`flushCache`). The shared runtime when its
+ * connection is already open (a handler opened it) or is not the package's own (memory only, an
+ * application client); otherwise a runtime on a connection of its own, which `release` closes, so
+ * that a script that only flushes does not keep a client open, and its process alive, after.
+ * `shared` says which.
+ */
+export function acquireCacheRuntime(options: RuntimeOptions = {}): {
+  runtime: CacheRuntime;
+  shared: boolean;
+  release(): Promise<void>;
+} {
+  const request = connectionRequest(options);
+  if (!request || "client" in request || findRedisConnection(request.options)) {
+    return { runtime: getCacheRuntime(options), shared: true, release: async () => {} };
+  }
+  const connection = openRedisConnection(request.options);
+  const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix());
+  return { runtime, shared: false, release: () => connection.close() };
+}
+
+function createRuntime(connection: RedisConnection | undefined, keyPrefix: string): CacheRuntime {
   const stores: RuntimeStores = {
     page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
     pageFallback: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
@@ -218,15 +257,13 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
     stores.dataFallback.clear();
   });
 
-  const runtime: CacheRuntime = {
+  return {
     connection,
     keyPrefix,
     tags: new TagStore(connection, keyPrefix),
     stores,
     reportError: createErrorReporter("[RedisCache]:"),
   };
-  registry.set(key, runtime);
-  return runtime;
 }
 
 /**

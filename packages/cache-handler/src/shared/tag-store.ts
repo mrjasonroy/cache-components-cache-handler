@@ -236,6 +236,11 @@ export class TagStore {
     return done;
   }
 
+  /** Whether some update has not reached Redis yet. */
+  hasUnsent(): boolean {
+    return this.unsent.size > 0;
+  }
+
   /**
    * Queue an update of `tag` for Redis. An immediate update outranks one with durations.
    */

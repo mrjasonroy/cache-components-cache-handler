@@ -143,3 +143,30 @@ whose `run` throws (`shared/clock-before-next.test.ts`). The static guard also c
 taken as a reference. With several Next versions in one process, every registered storage is
 consulted on every call, including one registered after the first, and `Date` is read only when
 all of them are safe (`shared/clock-detection.test.ts`, Codex review 6).
+
+## ISSUE-5: `flushCache` kept a plain Node process alive
+
+**Status:** Fixed (16.6.0) · **Severity:** Medium · **Area:** `shared/flush.ts`, `shared/runtime.ts`
+
+Found in a site's Jest suite: `flushCache()` opened the package's shared Redis client, nothing
+closed it, and the process never exited. Once teardown removed the Redis container, ioredis
+retried `ECONNREFUSED` until the CI job timed out (18 minutes). Any script or CLI calling
+`flushCache` hung the same way.
+
+Reproduction: `src/shared/flush-exit.test.ts` runs `flushCache({ url })` from the compiled package
+in a child Node process, with Redis unreachable (a closed port) and reachable
+(`CACHE_TEST_REDIS_URL`), and requires the process to exit by itself within 8 s. Before the fix
+both were killed at the timeout.
+
+Fix: `flushCache` uses the shared connection only when a handler has already opened it (or the
+application passed its own `client`); otherwise `acquireCacheRuntime` gives it a runtime on an
+unshared connection that it closes in a `finally`. Because that connection's tag store is dropped
+with it, a flush record Redis did not take is an error there rather than a retry
+(`src/shared/flush-connection.test.ts`).
+
+Not done: `unref()` on the package's own clients. ioredis has no `unref` option, and unreffing its
+socket would let a script exit while a command it awaits is still in flight (an awaited promise
+does not keep Node alive), silently dropping a flush or a revalidation write. In a Next server the
+HTTP server keeps the process alive anyway, so it would change nothing there. A test that creates
+handlers still holds their shared client, as any handler-owned connection does; closing it would
+need a public dispose API, which is not added.

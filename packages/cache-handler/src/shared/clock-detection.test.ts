@@ -155,7 +155,7 @@ describe("clock: Next's work unit storage cannot be required", () => {
       expect(read).toBe(false);
     });
 
-    test("a safe store in one storage does not hide an unsafe one in another", async () => {
+    test("an unsafe store in the first storage is not overridden by a safe one in a later one", async () => {
       globals[later] = laterStorage;
       // Measure the offset outside the prerender first.
       expect(nowMs()).toBeGreaterThan(0);
@@ -167,7 +167,7 @@ describe("clock: Next's work unit storage cannot be required", () => {
       expect(read).toBe(false);
     });
 
-    test("an unsafe store in a later storage is not hidden by a safe one in the first", () => {
+    test("a safe store in the first storage does not hide an unsafe one in a later one", () => {
       globals[later] = laterStorage;
       const read = readsDate((check) =>
         workUnitAsyncStorage.run({ type: "cache" } as never, () =>
