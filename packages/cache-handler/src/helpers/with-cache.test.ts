@@ -27,6 +27,17 @@ describe("withCache", () => {
     }
   });
 
+  test("includes the global build stamp in standalone output, preserving user tracing entries", () => {
+    const includes = { "/*": ["./shared.json"], "/blog/*": ["./blog.json"] };
+    const config = withCache({ distDir: "build", outputFileTracingIncludes: includes });
+    expect(config.outputFileTracingIncludes).toEqual({
+      "/*": ["./shared.json", "build/server/cache-handler-build.json"],
+      "/blog/*": ["./blog.json"],
+    });
+    expect(includes["/*"]).toEqual(["./shared.json"]);
+    expect(withCache({}, { pages: false }).outputFileTracingIncludes).toBeUndefined();
+  });
+
   test('useCache: "redis" points the default handler at the remote one', () => {
     const config = withCache({}, { useCache: "redis" });
     expect(config.cacheHandlers.default).toBe(config.cacheHandlers.remote);

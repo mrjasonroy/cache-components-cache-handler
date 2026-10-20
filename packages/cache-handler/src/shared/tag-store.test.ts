@@ -155,7 +155,7 @@ describe("TagStore", () => {
     expect([...fake.commands].sort()).toEqual(["evalsha", "zadd"]);
   });
 
-  test("no tag record is ever deleted automatically, however old", async () => {
+  test("requests and sync do not prune tags; only background maintenance does", async () => {
     vi.setSystemTime(Date.UTC(2040, 0, 1));
     const shared = new FakeRedis();
     const old = Date.now() - 10 * 365 * 86_400_000;
@@ -175,6 +175,9 @@ describe("TagStore", () => {
     for (const command of ["hdel", "zrem", "del", "unlink", "expire"]) {
       expect(shared.commands).not.toContain(command);
     }
+    await tags.maintain();
+    expect(await shared.hmget(tagsKey(PREFIX), "old")).toEqual([null]);
+    expect(await shared.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).not.toContain("old");
   });
 
   test("identical updates in one synchronous run (Next's dispatch loop) write once", async () => {

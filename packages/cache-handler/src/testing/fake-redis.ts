@@ -6,8 +6,13 @@
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { nowMs } from "../shared/clock.js";
+import { PRUNE_TAGS_SCRIPT } from "../shared/tag-retention.js";
 import { decodeRecord, encodeRecord } from "../shared/tag-store.js";
-import { UPDATE_TAGS_SCRIPT, mergeUpdate } from "../shared/tag-update.js";
+import {
+  UPDATE_EXPIRING_TAGS_SCRIPT,
+  UPDATE_TAGS_SCRIPT,
+  mergeUpdate,
+} from "../shared/tag-update.js";
 
 type Value = Buffer | Map<string, string> | Map<string, number>;
 
@@ -199,14 +204,22 @@ export class FakeRedis extends EventEmitter {
    * EVAL, for the one script the package sends ({@link UPDATE_TAGS_SCRIPT}), emulated in
    * TypeScript. The real script runs in the real-Redis suite.
    */
-  async eval(script: string, numKeys: number, ...keysAndArgs: string[]): Promise<number> {
+  async eval(
+    script: string,
+    numKeys: number,
+    ...keysAndArgs: string[]
+  ): Promise<number | number[]> {
     this.run("eval");
     const sha = createHash("sha1").update(script).digest("hex");
     this.scripts.add(sha);
     return this.runScript(sha, numKeys, keysAndArgs);
   }
 
-  async evalsha(sha: string, numKeys: number, ...keysAndArgs: string[]): Promise<number> {
+  async evalsha(
+    sha: string,
+    numKeys: number,
+    ...keysAndArgs: string[]
+  ): Promise<number | number[]> {
     this.run("evalsha");
     if (!this.scripts.has(sha)) throw new Error("NOSCRIPT No matching script. Please use EVAL.");
     return this.runScript(sha, numKeys, keysAndArgs);
@@ -219,9 +232,42 @@ export class FakeRedis extends EventEmitter {
     return "OK";
   }
 
-  private runScript(sha: string, numKeys: number, keysAndArgs: string[]): number {
+  private runScript(sha: string, numKeys: number, keysAndArgs: string[]): number | number[] {
+    if (sha === createHash("sha1").update(PRUNE_TAGS_SCRIPT).digest("hex") && numKeys === 2) {
+      const [hashKey, indexKey, cutoffRaw, limitRaw, offsetRaw] = keysAndArgs;
+      const cutoff = Number(cutoffRaw);
+      const limit = Number(limitRaw);
+      const offset = Number(offsetRaw);
+      const hash = this.live(hashKey)?.value as Map<string, string> | undefined;
+      const index = this.zset(indexKey, false);
+      const candidates = this.sorted(indexKey)
+        .filter(([, score]) => score < cutoff)
+        .slice(offset, offset + limit);
+      let removed = 0;
+      for (const [tag] of candidates) {
+        if (tag === "__cch_flush__" || tag.startsWith("__cch_flush__:")) continue;
+        const raw = hash?.get(tag);
+        const record = decodeRecord(raw);
+        if (raw && (!record || Math.max(record.stale ?? 0, record.expired ?? 0) >= cutoff))
+          continue;
+        hash?.delete(tag);
+        index?.delete(tag);
+        removed++;
+      }
+      return [
+        removed,
+        candidates.length === limit ? offset + candidates.length - removed : 0,
+        hash?.size ?? 0,
+        index?.size ?? 0,
+      ];
+    }
     const known = createHash("sha1").update(UPDATE_TAGS_SCRIPT).digest("hex");
-    if (sha !== known || numKeys !== 1) throw new Error("FakeRedis: unknown script");
+    if (
+      (sha !== known &&
+        sha !== createHash("sha1").update(UPDATE_EXPIRING_TAGS_SCRIPT).digest("hex")) ||
+      numKeys !== 1
+    )
+      throw new Error("FakeRedis: unknown script");
     const [key, ...args] = keysAndArgs;
     let item = this.live(key);
     if (!item || !(item.value instanceof Map)) {

@@ -23,8 +23,9 @@ import type { DataCacheEntry } from "../data-cache/types.js";
 import type { PageCacheValue } from "../handlers/page-types.js";
 import { createRedisCacheHandler } from "../handlers/redis.js";
 import { flushCache } from "../shared/flush.js";
-import { FLUSH_TAG } from "../shared/keys.js";
+import { FLUSH_TAG, tagIndexKey, tagsKey } from "../shared/keys.js";
 import { getCacheRuntime } from "../shared/runtime.js";
+import { TAG_RETENTION_MS } from "../shared/tag-retention.js";
 import { resetCacheState } from "../testing/env.js";
 
 const url = process.env.CACHE_TEST_REDIS_URL;
@@ -106,6 +107,7 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
       remote: createRemoteCacheHandler({ ...options, buildId }),
       local: createLocalCacheHandler(options),
       connection: () => getCacheRuntime(options).connection,
+      maintainTags: () => getCacheRuntime(options).tags.maintain(),
     };
   }
 
@@ -172,8 +174,12 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     await a.remote.set("before", entry("before value"));
     await a.page.set("/before", page("before"), pageContext);
 
+    const oldTagTime = Date.now() - TAG_RETENTION_MS - 1000;
+    await raw.hset(tagsKey(prefix), "prunable", `${oldTagTime},${oldTagTime}`);
+    await raw.zadd(tagIndexKey(prefix), oldTagTime, "prunable");
     docker("stop", container as string);
     await waitFor(() => a.connection()?.isReady() === false);
+    await a.maintainTags();
 
     const started = Date.now();
     expect(await a.remote.get("before", [])).toBeUndefined();
@@ -189,6 +195,8 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
 
     docker("start", container as string);
     await waitFor(() => a.connection()?.isReady() === true);
+    await a.maintainTags();
+    expect(await raw.hget(tagsKey(prefix), "prunable")).toBeNull();
     await a.remote.set("again", entry("again value", ["other"]));
     expect(await text(await a.remote.get("again", []))).toBe("again value");
     expect(await raw.exists(`${prefix}build-1:data:again`)).toBe(1);

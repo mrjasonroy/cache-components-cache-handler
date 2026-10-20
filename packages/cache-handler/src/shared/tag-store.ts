@@ -8,9 +8,9 @@
  * - `<prefix>tag-index`, a sorted set of the same tags scored by their last update (ms). Each
  *   tag appears once.
  *
- * Neither key has a TTL and nothing deletes a tag record: a record must outlive every entry it
- * can invalidate, and the records of every tag ever revalidated are small (see DEC-3 for growth).
- * Only `flushCache({ scope: "all" })` removes them.
+ * Neither key has a key TTL. Fields expire on supported servers, and a bounded standalone
+ * background prune removes records and index members after their safety horizon (DEC-8).
+ * Flush barriers never expire; unsupported Clusters retain records until a flush.
  *
  * - `update` (from `updateTags` and the page handler's `revalidateTag`) records the invalidation in
  *   local state, then sends one script call that merges every tag's update into its record and
@@ -44,11 +44,23 @@
 
 import { nowMs } from "./clock.js";
 import type { RedisConnection } from "./connection.js";
+import { isDebugEnabled } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
-import type { LoggerSource } from "./logger.js";
+import { type LoggerSource, debugWriter, processLogger, writeLog } from "./logger.js";
+import {
+  PRUNE_TAGS_SCRIPT,
+  TAG_MAINTENANCE_INTERVAL_MS,
+  TAG_PRUNE_BATCH_SIZE,
+  TAG_RETENTION_MS,
+  disableTagFieldExpiry,
+  probeTagFieldExpiry,
+  supportsTagFieldExpiry,
+} from "./tag-retention.js";
 import {
   type TagUpdate,
+  UPDATE_EXPIRING_TAGS_SCRIPT,
+  UPDATE_EXPIRING_TAGS_SHA,
   UPDATE_TAGS_SCRIPT,
   UPDATE_TAGS_SHA,
   mergeUpdate,
@@ -160,6 +172,14 @@ export class TagStore {
   private readonly key: TagStoreKey | undefined;
   /** Set by {@link close}: updates go to the live store of the key from then on. */
   private closed = false;
+  private readonly maintenanceTimer: ReturnType<typeof setInterval> | undefined;
+  private maintaining: Promise<void> | undefined;
+  private pruneOffset = 0;
+  private crossSlot = false;
+  private lastPruneWarning = Number.NEGATIVE_INFINITY;
+  private readonly warningIntervalMs: number;
+  private readonly logger: LoggerSource;
+  private readonly log: ((...args: unknown[]) => void) | undefined;
   private syncedUpTo = 0;
   private lastSyncAt = 0;
   private synced = false;
@@ -191,6 +211,9 @@ export class TagStore {
       options.errorLogIntervalMs,
       options.logger,
     );
+    this.warningIntervalMs = options.errorLogIntervalMs ?? 60_000;
+    this.logger = options.logger ?? processLogger;
+    this.log = isDebugEnabled() ? debugWriter("[RedisCache]:", options.logger) : undefined;
     this.key = options.key;
     this.state = options.state ?? { records: new Map(), unsent: new Map() };
     this.state.owner = this;
@@ -201,6 +224,12 @@ export class TagStore {
       void this.send();
     });
     if (this.unsent.size > 0) void this.send();
+    if (connection) {
+      this.maintenanceTimer = setInterval(() => {
+        void this.maintain();
+      }, TAG_MAINTENANCE_INTERVAL_MS);
+      this.maintenanceTimer.unref?.();
+    }
   }
 
   /** Local records. */
@@ -297,6 +326,7 @@ export class TagStore {
   /** Stop following the connection's reconnects, for a store being dropped. */
   dispose(): void {
     this.stopListening?.();
+    clearInterval(this.maintenanceTimer);
   }
 
   /**
@@ -415,11 +445,76 @@ export class TagStore {
   private async writeRecords(args: string[]): Promise<void> {
     const client = (this.connection as RedisConnection).client;
     const key = tagsKey(this.keyPrefix);
+    const expiring = supportsTagFieldExpiry(this.connection as RedisConnection);
+    const sha = expiring ? UPDATE_EXPIRING_TAGS_SHA : UPDATE_TAGS_SHA;
+    const script = expiring ? UPDATE_EXPIRING_TAGS_SCRIPT : UPDATE_TAGS_SCRIPT;
     try {
-      await client.evalsha(UPDATE_TAGS_SHA, 1, key, ...args);
+      const result = await client.evalsha(sha, 1, key, ...args);
+      if (expiring && Number(result) < 0) disableTagFieldExpiry(this.connection as RedisConnection);
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("NOSCRIPT")) throw error;
-      await client.eval(UPDATE_TAGS_SCRIPT, 1, key, ...args);
+      const result = await client.eval(script, 1, key, ...args);
+      if (expiring && Number(result) < 0) disableTagFieldExpiry(this.connection as RedisConnection);
+    }
+  }
+
+  /** Background maintenance; exposed internally so Redis tests need no minute-long sleeps. */
+  maintain(): Promise<void> {
+    if (this.closed || this.state.owner !== this || !this.connection?.isReady()) {
+      return Promise.resolve();
+    }
+    if (this.maintaining) return this.maintaining;
+    this.maintaining = this.runMaintenance().finally(() => {
+      this.maintaining = undefined;
+    });
+    return this.maintaining;
+  }
+
+  private warnPrune(message: string): void {
+    const now = nowMs();
+    if (now - this.lastPruneWarning < this.warningIntervalMs) return;
+    this.lastPruneWarning = now;
+    writeLog(this.logger, "warn", `[RedisCache]: ${message}`);
+  }
+
+  private async runMaintenance(): Promise<void> {
+    const connection = this.connection as RedisConnection;
+    await probeTagFieldExpiry(connection);
+    if (this.closed || !connection.isReady()) return;
+    const cluster = "nodes" in connection.client && typeof connection.client.nodes === "function";
+    if (cluster || this.crossSlot) {
+      if (!supportsTagFieldExpiry(connection)) {
+        this.warnPrune(
+          "Tag pruning unavailable on Redis Cluster without hash-field TTLs; tag records will grow until a flush",
+        );
+      }
+      return;
+    }
+    try {
+      const result = (await connection.client.eval(
+        PRUNE_TAGS_SCRIPT,
+        2,
+        tagsKey(this.keyPrefix),
+        tagIndexKey(this.keyPrefix),
+        String(nowMs() - TAG_RETENTION_MS),
+        String(TAG_PRUNE_BATCH_SIZE),
+        String(this.pruneOffset),
+      )) as number[];
+      this.pruneOffset = result[1];
+      this.log?.("tag retention", {
+        pruned: result[0],
+        tagFields: result[2],
+        tagIndexMembers: result[3],
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("CROSSSLOT")) {
+        this.crossSlot = true;
+        this.warnPrune(
+          "Tag pruning unavailable after CROSSSLOT; tag records will grow until a flush",
+        );
+      } else {
+        this.reportError("pruneTags", error);
+      }
     }
   }
 

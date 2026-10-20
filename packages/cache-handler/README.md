@@ -153,11 +153,26 @@ Limits worth knowing:
   values are misses rather than possibly stale hits.
 - A process's first sync reads every tag in the index, 1,000 per round trip, paging by score so
   a tag revalidated mid-sync can never push another out of reach. After that it reads only what
-  changed. The index is never trimmed, so a sync never misses an update.
-- Tag records are never deleted, except by `flushCache({ scope: "all" })`: a deleted record would
-  read as never-invalidated and bring stale entries back. Only tags that were revalidated get a
-  record, about 230 B each, so the hash grows with the distinct tags ever revalidated (100,000
-  tags take about 23 MB). No entry is kept or served past 365 days.
+  changed. Background maintenance removes only records too old to affect a live entry.
+- **Tag retention:** no entry is kept or served past 365 days. A tag record is eligible for
+  removal 365 days plus 10 seconds after the later of its last update and its hard expiration
+  deadline. A custom delayed revalidation extends retention by its full duration; `"max"`
+  therefore needs about two years. Flush barriers are kept permanently.
+- **Redis 7.4+ and Valkey 9+** expire tag hash fields themselves. Support is probed once per
+  connection in the background, by command capability rather than server version. Subsequent
+  writes set the merged record's field deadline atomically in the existing write script.
+  Writes before that probe, and older records, are covered by the standalone fallback.
+- **Standalone Redis / Valkey** also checks up to 1,000 old index members once per minute,
+  atomically deleting eligible hash records and index members. It checks the record's deadline
+  too, so a concurrent revalidation is preserved. Maintenance adds no request-path command and
+  stops with `closeCache()`. With `CACHE_DEBUG=1`, its `tag retention` line reports `pruned`,
+  `tagFields` and `tagIndexMembers` without an extra command.
+- **Cluster limitation:** the existing hash and index may occupy different slots. Automatic
+  fallback pruning is skipped on Cluster or after `CROSSSLOT`. Without hash-field TTL support,
+  tag records grow until `flushCache({ scope: "all" })`, with a rate-limited warning. On a
+  supported Cluster the hash fields expire, but index members remain until a flush; syncing
+  an expired field returns no record, which is safe after its full retention window. Index
+  members and pre-probe fields can still grow with distinct revalidated tags on Cluster.
 - Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
   instances until the tag is invalidated again.
 - Times are wall time, read without touching `Date` inside a prerender. If another library has
@@ -467,7 +482,8 @@ The [deprecated exports](#deprecated) are still exported.
 is read from the build output that `next start` and a standalone `server.js` use, and it is
 `development` under `next dev`. Every entry key has a TTL. A remote entry is kept until its `expire`, or
 for `defaultTTL` (24 hours) when `expire` is infinite, at most 365 days; page entries as described under [Pages and route handlers](#pages-and-route-handlers). The two tag keys
-are shared by every build and have no TTL: they are kept until `flushCache({ scope: "all" })`.
+are shared by every build and have no key TTL. Individual fields and index members follow the
+tag retention rules above; flush barriers stay until a full flush.
 Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy (`volatile-lru`), never
 `allkeys-*`: an evicted tag hash brings every invalidated entry back.
 

@@ -24,6 +24,7 @@
  * with `ZADD GT` (Redis 6.2+, Valkey).
  */
 
+import { TAG_RETENTION_MS } from "./tag-retention.js";
 import type { TagRecord } from "./tag-store.js";
 
 /**
@@ -109,3 +110,30 @@ export function updateArgs(updates: Map<string, TagUpdate>): string[] {
   }
   return args;
 }
+
+/**
+ * Field expiry is part of the existing atomic write, after the monotonic merge. HSET clears
+ * field TTLs, so every write (including an older writer) reinstates the merged record's horizon.
+ * Reserved flush barriers never expire: unstamped prerendered output has no age bound.
+ * pcall keeps a failover to an older server safe: the background fallback still prunes it.
+ */
+export const UPDATE_EXPIRING_TAGS_SCRIPT = UPDATE_TAGS_SCRIPT.replace(
+  "local key = KEYS[1]",
+  "local key = KEYS[1]\nlocal ttlFailed = false",
+)
+  .replace(
+    "  redis.call('HSET', key, tag, ns .. ',' .. ne)",
+    `  redis.call('HSET', key, tag, ns .. ',' .. ne)
+  if tag ~= '__cch_flush__' and string.sub(tag, 1, 14) ~= '__cch_flush__:' then
+    local horizon = math.max(tonumber(ns) or 0, tonumber(ne) or 0)
+    local untilMs = horizon + ${TAG_RETENTION_MS}
+    if untilMs < math.huge then
+      local result = redis.pcall('HPEXPIREAT', key, string.format('%.0f', untilMs), 'FIELDS', 1, tag)
+      if result.err then ttlFailed = true end
+    end
+  end`,
+  )
+  .replace("return #ARGV / 3", "if ttlFailed then return -#ARGV / 3 end\nreturn #ARGV / 3");
+
+/** SHA1 of the field-expiring variant, checked by unit tests. */
+export const UPDATE_EXPIRING_TAGS_SHA = "b33a6b63cb1c7c5a9b509ba5adc19ed2c725f770";

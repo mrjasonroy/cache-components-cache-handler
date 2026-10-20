@@ -19,6 +19,7 @@ const handlers =
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   cacheComponents: true,
+  ...(process.env.E2E_STANDALONE === "1" ? { output: "standalone" } : {}),
 
   // Custom cacheLife profiles for testing
   cacheLife: {
