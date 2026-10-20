@@ -14,6 +14,24 @@
   settings. The registry key stays `<connection id>|<keyPrefix>`: the ids are global (DEC-5), and
   `closeCache` empties the registry, so a stale id is never reused. `RedisCacheHandler#close()`
   is deprecated and calls `closeCache()`.
+  **Pending invalidations survive a close** (Codex merge-gate M1). An invalidation or flush
+  barrier Redis refused (READONLY during a failover, an outage) lives only in its tag store's
+  local records and `unsent` queue, so dropping the store lost it: a handler reused after the
+  close served the invalidated entries again. Now `closeCache`, before awaiting anything, hands
+  each runtime's tag state (`TagStore.handOver`: the records map and the `unsent` queue, by
+  reference) to a process-wide slot on `globalThis` (DEC-5), keyed by the connection key (the
+  pool key for a connection of the package's own, the client's id for an application client)
+  plus the key prefix. It then waits for the batches in flight and, if Redis is ready, sends the
+  queue once more (`TagStore.drain`), and only then closes the connections. The next runtime of
+  the same key adopts the two maps on creation and sends the queue straight away, and again on
+  its syncs and reconnects, like any unsent update; until then its local records keep applying
+  the invalidation, with the times it was made, so this process never serves the entries again.
+  Handing over by reference, not a copy, is what keeps a batch that was in flight during the
+  close: when it fails afterwards it is queued in the same map the next store sends from. A
+  replayed update is stamped when it is sent, as every replay after an outage is (see
+  `TagStore.send`), so it can only invalidate more. `closeCache` never rejects for Redis: a test
+  or script can always close and exit, and what Redis did not take survives only for reuse in
+  the same process, as it would without the close.
   Not covered: the deprecated `createCacheHandler` captures its connection when it is created, so
   after `closeCache` it serves from its memory fallback until it is created again. Reworking the
   16.5 stack to re-resolve was judged not worth it for a deprecated API.
@@ -35,7 +53,7 @@ the `cacheHandlers` entries, an instrumentation file). The rule:
 - **On `globalThis`** (under a `Symbol.for("@mrjasonroy/cache-components-cache-handler/…")` key)
   when every graph must see the same object: the Redis connections and application-client
   connections (`shared/connection.ts`), the runtimes and the ids that key them
-  (`shared/runtime.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
+  (`shared/runtime.ts`), the tag state `closeCache` hands over (`shared/runtime.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
   (`shared/build-id.ts`) and the page-handler flag (`data-cache/isr-warning.ts`).
 - **In the module** when a copy per graph is harmless: the clock offset and its module storage
   lookup (`shared/clock.ts`; a second graph measures the same offset), the build info and build

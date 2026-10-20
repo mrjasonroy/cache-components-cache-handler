@@ -233,9 +233,10 @@ function loadIoredis(): typeof import("ioredis").default {
 
 /**
  * The registry key: which server, as whom, and with which client settings. Kept in memory only
- * and never logged, since it can hold a password.
+ * and never logged, since it can hold a password. Options that differ only in their error log
+ * interval share one connection.
  */
-function connectionKey(options: RedisConnectionOptions): string {
+export function connectionKey(options: RedisConnectionOptions): string {
   const { errorLogIntervalMs: _ignored, ...rest } = options;
   return stableStringify(rest);
 }

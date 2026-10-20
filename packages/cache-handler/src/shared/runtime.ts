@@ -12,6 +12,7 @@ import {
   type RedisConnection,
   type RedisConnectionOptions,
   closeAllRedisConnections,
+  connectionKey,
   findRedisConnection,
   getClientConnection,
   getRedisConnection,
@@ -25,7 +26,7 @@ import {
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
-import { TagStore } from "./tag-store.js";
+import { type TagHandover, TagStore } from "./tag-store.js";
 
 /**
  * Tag an entry with this (`cacheTag(MEMORY_ONLY_TAG)`, or in a page's tags) to keep it out of
@@ -154,12 +155,29 @@ export interface CacheRuntime {
 /** A runtime as this module holds it: it can be marked closed and let go of its listeners. */
 interface OwnedRuntime extends CacheRuntime {
   closed: boolean;
+  /**
+   * Where `closeCache` leaves this runtime's tag state for the next runtime of the same connection
+   * and key prefix; `undefined` without Redis, whose tag state is this process's only.
+   */
+  readonly handoverKey: string | undefined;
   /** Stop following the connection and leave the memory store registry. */
   dispose(): void;
 }
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/runtimes");
 const CONNECTION_IDS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connection-ids");
+/** Tag state of closed runtimes, kept for the next runtime of the same key (see `closeCache`). */
+const PENDING_TAGS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/pending-tags");
+
+function getPendingTags(): Map<string, TagHandover> {
+  const store = globalThis as unknown as Record<symbol, Map<string, TagHandover> | undefined>;
+  let pending = store[PENDING_TAGS_KEY];
+  if (!pending) {
+    pending = new Map();
+    store[PENDING_TAGS_KEY] = pending;
+  }
+  return pending;
+}
 
 function getRegistry(): Map<string, OwnedRuntime> {
   const store = globalThis as unknown as Record<symbol, Map<string, OwnedRuntime> | undefined>;
@@ -199,7 +217,13 @@ function connectionRequest(
  * `next build` or with `CACHE_REDIS=off`.
  */
 export function resolveConnection(options: RuntimeOptions = {}): RedisConnection | undefined {
-  const request = connectionRequest(options);
+  return connectionFor(connectionRequest(options), options);
+}
+
+function connectionFor(
+  request: ReturnType<typeof connectionRequest>,
+  options: RuntimeOptions,
+): RedisConnection | undefined {
   if (!request) return undefined;
   if ("client" in request) {
     const { commandTimeout, maxConsecutiveTimeouts } = options;
@@ -249,14 +273,21 @@ function connectionId(connection: RedisConnection | undefined): string {
  * The shared runtime for these options, created on first use.
  */
 export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
-  const connection = resolveConnection(options);
+  const request = connectionRequest(options);
+  const connection = connectionFor(request, options);
   const keyPrefix = options.keyPrefix ?? resolveKeyPrefix();
   const registry = getRegistry();
   const key = `${connectionId(connection)}|${keyPrefix}`;
   const existing = registry.get(key);
   if (existing) return existing;
 
-  const runtime = createRuntime(connection, keyPrefix);
+  // Unlike `key`, the same for the connection that replaces a closed one: an application client
+  // keeps its connection, and a connection of the package's own is pooled by its options.
+  const handoverKey =
+    request && connection
+      ? `${"client" in request ? `client:${connectionId(connection)}` : connectionKey(request.options)}|${keyPrefix}`
+      : undefined;
+  const runtime = createRuntime(connection, keyPrefix, handoverKey);
   registry.set(key, runtime);
   return runtime;
 }
@@ -304,7 +335,11 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   };
 }
 
-function createRuntime(connection: RedisConnection | undefined, keyPrefix: string): OwnedRuntime {
+function createRuntime(
+  connection: RedisConnection | undefined,
+  keyPrefix: string,
+  handoverKey?: string,
+): OwnedRuntime {
   const stores: RuntimeStores = {
     page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
     pageFallback: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
@@ -318,7 +353,10 @@ function createRuntime(connection: RedisConnection | undefined, keyPrefix: strin
     stores.pageFallback.clear();
     stores.dataFallback.clear();
   });
-  const tags = new TagStore(connection, keyPrefix);
+  const pending = getPendingTags();
+  const adopt = handoverKey === undefined ? undefined : pending.get(handoverKey);
+  if (handoverKey !== undefined) pending.delete(handoverKey);
+  const tags = new TagStore(connection, keyPrefix, { adopt });
 
   return {
     connection,
@@ -327,6 +365,7 @@ function createRuntime(connection: RedisConnection | undefined, keyPrefix: strin
     stores,
     reportError: createErrorReporter("[RedisCache]:"),
     closed: false,
+    handoverKey,
     dispose() {
       stopListening?.();
       tags.dispose();
@@ -358,11 +397,16 @@ export function closeCache(): Promise<void> {
     const registry = getRegistry();
     const runtimes = [...registry.values()];
     registry.clear();
-    clearAllMemoryStores();
+    // Before anything is awaited, so a runtime created meanwhile adopts the tag state too.
+    const pending = getPendingTags();
     for (const runtime of runtimes) {
       runtime.closed = true;
-      runtime.dispose();
+      const handover = runtime.tags.handOver();
+      if (runtime.handoverKey !== undefined) pending.set(runtime.handoverKey, handover);
     }
+    clearAllMemoryStores();
+    await Promise.allSettled(runtimes.map((runtime) => runtime.tags.drain()));
+    for (const runtime of runtimes) runtime.dispose();
     await closeAllRedisConnections();
   })().finally(() => {
     closing = undefined;
@@ -376,6 +420,7 @@ export function closeCache(): Promise<void> {
  */
 export function resetCacheRuntimesForTests(): void {
   getRegistry().clear();
+  getPendingTags().clear();
 }
 
 /**

@@ -279,8 +279,12 @@ afterAll(() => closeCache());
 ```
 
 `closeCache()` closes every Redis connection the package opened in this process (one per
-connection settings, shared by all handlers), empties its in-memory stores and drops its tag
-state. It is safe to call more than once, and concurrently. A `client` you passed in is never
+connection settings, shared by all handlers) and empties its in-memory stores. It first waits
+for revalidations in flight and sends any Redis has not acknowledged one last time. A
+revalidation Redis still refuses (it is down, or read-only during a failover) is not lost: this
+process keeps applying it, and the handlers send it once Redis takes writes again, if you use
+them after the close. `closeCache()` does not fail because Redis is down. It is safe to call more than once,
+and concurrently. A `client` you passed in is never
 closed; close it yourself. Handlers created before it keep working: on their next call they
 reconnect, all onto one new connection. The deprecated `createCacheHandler` is the exception: it
 keeps its closed connection and serves from memory, so create it again after `closeCache()`.

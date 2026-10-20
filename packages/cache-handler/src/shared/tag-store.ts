@@ -88,6 +88,16 @@ export type TagState = "fresh" | "stale" | "expired";
 type Durations = { expire?: number };
 
 /**
+ * A closed tag store's state, for the next store of the same connection and key prefix in this
+ * process (see {@link TagStore.handOver}): its local records, and the updates Redis has not
+ * acknowledged.
+ */
+export interface TagHandover {
+  readonly records: Map<string, TagRecord>;
+  readonly unsent: Map<string, Durations | null>;
+}
+
+/**
  * `"<stale>,<expired>"`, either part empty when unset.
  */
 export function encodeRecord(record: TagRecord): string {
@@ -134,10 +144,10 @@ function toUpdate(now: number, durations?: Durations): TagUpdate {
  * Process-local tag state, synced with Redis when a connection is given.
  */
 export class TagStore {
-  private readonly records = new Map<string, TagRecord>();
+  private readonly records: Map<string, TagRecord>;
   private readonly reportError: ErrorReporter;
   /** Updates Redis has not acknowledged, by tag: their durations, `null` for an immediate one. */
-  private readonly unsent = new Map<string, Durations | null>();
+  private readonly unsent: Map<string, Durations | null>;
   private syncedUpTo = 0;
   private lastSyncAt = 0;
   private synced = false;
@@ -152,15 +162,20 @@ export class TagStore {
   constructor(
     private readonly connection: RedisConnection | undefined,
     private readonly keyPrefix: string,
-    options: { errorLogIntervalMs?: number } = {},
+    options: { errorLogIntervalMs?: number; adopt?: TagHandover } = {},
   ) {
     this.reportError = createErrorReporter("[RedisCache]:", options.errorLogIntervalMs);
+    // Adopted by reference: a send of the closed store that fails after the hand-over still lands
+    // in this queue.
+    this.records = options.adopt?.records ?? new Map();
+    this.unsent = options.adopt?.unsent ?? new Map();
     this.stopListening = connection?.onReady(() => {
       this.connectedSince += 1;
       this.synced = false;
       this.lastSyncAt = 0;
       void this.send();
     });
+    if (this.unsent.size > 0) void this.send();
   }
 
   /**
@@ -246,6 +261,26 @@ export class TagStore {
   /** Stop following the connection's reconnects, for a store being dropped. */
   dispose(): void {
     this.stopListening?.();
+  }
+
+  /**
+   * For `closeCache`: stop following the connection, and give the local records and the queue of
+   * unacknowledged updates to whoever takes over (the next store of the same connection and key
+   * prefix). They are handed over by reference, so an update that fails later, in a send already
+   * started, is still queued for the next store.
+   */
+  handOver(): TagHandover {
+    this.dispose();
+    return { records: this.records, unsent: this.unsent };
+  }
+
+  /**
+   * For `closeCache`: wait for the batches in flight, then, if Redis is ready, send what is still
+   * queued one last time. Never throws; whatever Redis does not take stays queued.
+   */
+  async drain(): Promise<void> {
+    await this.inFlight();
+    if (this.unsent.size > 0 && this.connection?.isReady()) await this.send();
   }
 
   /** Whether some update has not reached Redis yet. */

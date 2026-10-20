@@ -171,8 +171,11 @@ function closeCache(): Promise<void>;
 ```
 
 For test runs, scripts and CLIs, so Node can exit; a Next server never needs it. Closes every
-Redis connection the package opened in this process, empties its memory stores and drops its tag
-state. Safe to call more than once, and concurrently. A `client` you passed in is never closed.
+Redis connection the package opened in this process and empties its memory stores. It first
+waits for tag writes in flight and sends any Redis has not acknowledged once more; one still
+refused is kept, applied by this process and sent by the handlers once Redis takes it, if they
+are used again. It never rejects because Redis is down. Safe to call more than once, and
+concurrently. A `client` you passed in is never closed.
 Handlers created before it reconnect on their next call, onto one new connection; the deprecated
 `createCacheHandler` does not, and serves from memory until it is created again.
 
