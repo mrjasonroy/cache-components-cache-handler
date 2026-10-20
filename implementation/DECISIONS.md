@@ -1,5 +1,27 @@
 # Decisions
 
+## DEC-5: State on `globalThis` or in the module (architecture review L5, M2)
+
+Next can load the package into more than one module graph in one process (the server bundle,
+the `cacheHandlers` entries, an instrumentation file). The rule:
+
+- **On `globalThis`** (under a `Symbol.for("@mrjasonroy/cache-components-cache-handler/…")` key)
+  when every graph must see the same object: the Redis connections and application-client
+  connections (`shared/connection.ts`), the runtimes and the ids that key them
+  (`shared/runtime.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
+  (`shared/build-id.ts`) and the page-handler flag (`data-cache/isr-warning.ts`).
+- **In the module** when a copy per graph is harmless: the clock offset and its module storage
+  lookup (`shared/clock.ts`; a second graph measures the same offset), the build info and build
+  output readers (`handlers/build-info.ts`, `handlers/build-output.ts`; re-reading a manifest is
+  cheap), `require` caches (`shared/node-require.ts`), and once-per-graph warnings (the ISR
+  warning's `warned`, the split-tuning warning in `connection.ts`), which may then print once per
+  graph.
+- **Anything that names, counts or keys global state is global too.** M2 broke this: the runtime
+  registry was global, but the ids in its keys came from a module-level counter and `WeakMap`. A
+  second graph numbered the shared connections from 1 again, so with two connections it could get
+  the runtime of the other connection, and its tag store, with nothing logged. The ids now live on
+  `globalThis` beside the registry (`shared/runtime-graphs.test.ts` loads `runtime.ts` twice).
+
 ## DEC-4: Compression: PM default, pending Jason; connection tuning on the 16.5 path
 
 **Status:** PM default, pending Jason · **Date:** 2026-10-19
@@ -108,7 +130,8 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
   5). Nothing is imported, so the edge-safe import graph is unchanged; on the edge runtime `Date`
   is never read. If neither finds it, `Date` counts as safe only while it is not extended (the
   native constructor, `Date.now` not Next's bound wrapper), so a lookup failure fails closed
-  (Codex review 5). The global symbols are scanned on every call (under a microsecond), not
+  (Codex review 5). Any other library that replaces `Date` (fake timers, APM agents) makes it fail
+  closed the same way: the process stays on the performance clock (ISSUE-4, README). The global symbols are scanned on every call (under a microsecond), not
   cached, so a Next version that registers later in the process is still consulted; and every
   storage found must be safe, since with several Next versions in one process any of them can be
   prerendering (Codex review 6). Only the module lookup's find is cached; a failed one is retried

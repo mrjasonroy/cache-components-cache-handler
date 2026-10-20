@@ -24,8 +24,9 @@ export interface WithCacheOptions {
   pages?: boolean;
 
   /**
-   * Your own handler files instead of the built-in ones. Relative paths resolve against
-   * `process.cwd()`.
+   * Your own handler files instead of the built-in ones. Relative paths resolve against the
+   * working directory (`process.cwd()`), not against `next.config`; pass an absolute path when
+   * the two can differ.
    */
   handlers?: { page?: string; default?: string; remote?: string };
 }

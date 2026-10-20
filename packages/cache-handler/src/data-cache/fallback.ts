@@ -18,7 +18,7 @@
 
 import { nowMs } from "../shared/clock.js";
 import type { RedisConnection } from "../shared/connection.js";
-import { createErrorReporter } from "./error-reporter.js";
+import { createErrorReporter } from "../shared/error-reporter.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
 import type { DataCacheHandler } from "./types.js";
 

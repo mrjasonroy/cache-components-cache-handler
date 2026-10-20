@@ -6,7 +6,6 @@
  */
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
-import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
 import { MAX_STORED_ENTRY_BYTES } from "./codec.js";
 import {
   type RedisClientLike,
@@ -23,6 +22,7 @@ import {
   resolveKeyPrefix,
   shouldUseRedis,
 } from "./env.js";
+import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { MemoryStore } from "./memory-store.js";
 import { TagStore } from "./tag-store.js";
 
@@ -132,8 +132,7 @@ export interface CacheRuntime {
 }
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/runtimes");
-const CONNECTION_IDS = new WeakMap<RedisConnection, number>();
-let nextConnectionId = 1;
+const CONNECTION_IDS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connection-ids");
 
 function getRegistry(): Map<string, CacheRuntime> {
   const store = globalThis as unknown as Record<symbol, Map<string, CacheRuntime> | undefined>;
@@ -195,12 +194,26 @@ function definedOnly<T extends object>(options: T): Partial<T> {
   ) as Partial<T>;
 }
 
+/**
+ * The connection's id in the runtime registry key. Kept on `globalThis` with the registry: the
+ * connections are shared by every module graph, so their ids must be too, or a second graph
+ * numbering them from 1 again would get another connection's runtime (see DEC-5).
+ */
 function connectionId(connection: RedisConnection | undefined): string {
   if (!connection) return "memory";
-  let id = CONNECTION_IDS.get(connection);
+  const store = globalThis as unknown as Record<
+    symbol,
+    { ids: WeakMap<RedisConnection, number>; next: number } | undefined
+  >;
+  let state = store[CONNECTION_IDS_KEY];
+  if (!state) {
+    state = { ids: new WeakMap(), next: 1 };
+    store[CONNECTION_IDS_KEY] = state;
+  }
+  let id = state.ids.get(connection);
   if (id === undefined) {
-    id = nextConnectionId++;
-    CONNECTION_IDS.set(connection, id);
+    id = state.next++;
+    state.ids.set(connection, id);
   }
   return String(id);
 }
@@ -224,9 +237,9 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
 /**
  * A runtime for one operation outside the handlers (`flushCache`). The shared runtime when its
  * connection is already open (a handler opened it) or is not the package's own (memory only, an
- * application client); otherwise a runtime on a connection of its own, which `release` closes, so
- * that a script that only flushes does not keep a client open, and its process alive, after.
- * `shared` says which.
+ * application client); otherwise a runtime on a connection of its own, which `release` closes and
+ * whose memory stores it unregisters, so that a script that only flushes keeps neither a client
+ * open (and its process alive) nor stores registered after. `shared` says which.
  */
 export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   runtime: CacheRuntime;
@@ -239,7 +252,14 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   }
   const connection = openRedisConnection(request.options);
   const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix());
-  return { runtime, shared: false, release: () => connection.close() };
+  return {
+    runtime,
+    shared: false,
+    async release() {
+      for (const store of Object.values(runtime.stores)) store.unregister();
+      await connection.close();
+    },
+  };
 }
 
 function createRuntime(connection: RedisConnection | undefined, keyPrefix: string): CacheRuntime {

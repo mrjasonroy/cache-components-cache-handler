@@ -42,9 +42,9 @@
  * `expired = now + expire` (served stale until then).
  */
 
-import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
 import { nowMs } from "./clock.js";
 import type { RedisConnection } from "./connection.js";
+import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
 import {
   type TagUpdate,
@@ -53,6 +53,12 @@ import {
   mergeUpdate,
   updateArgs,
 } from "./tag-update.js";
+
+/**
+ * How often a data handler's `refreshTags` may sync tags, at most, in ms. Concurrent requests
+ * share one sync.
+ */
+export const REFRESH_TAGS_INTERVAL_MS = 100;
 
 /**
  * Tags read per round trip by a sync.

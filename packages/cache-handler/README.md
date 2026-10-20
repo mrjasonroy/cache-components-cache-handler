@@ -74,7 +74,7 @@ at. Runtime settings come from the [environment](#environment-variables).
 |---|---|---|
 | `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
 | `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. `false` leaves `cacheHandler` and `cacheMaxMemorySize` as your config has them. |
-| `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](#custom-handlers). Relative paths resolve against `process.cwd()`. |
+| `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](#custom-handlers). Relative paths resolve against the working directory (`process.cwd()`, where `next` runs), not against `next.config`; when the two can differ, pass an absolute path (`fileURLToPath(new URL("./cache/page.mjs", import.meta.url))`). |
 
 `withCache` throws if the config already sets `cacheHandlers`, or `cacheHandler` unless
 `pages: false`, because two configs fighting over the cache is always a bug. Use `handlers`
@@ -104,7 +104,7 @@ from the environment, the same under `next start`, standalone and Docker.
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN` | port `6379` | Host form, used when no URL is set. TLS is on. |
 | `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
-| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch. |
+| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch for every backend: it turns off Valkey and ElastiCache too, whatever variable set the URL. |
 | `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
 | `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
 
@@ -160,6 +160,11 @@ Limits worth knowing:
   tags take about 23 MB). No entry is kept or served past 365 days.
 - Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
   instances until the tag is invalidated again.
+- Times are wall time, read without touching `Date` inside a prerender. If another library has
+  replaced `Date` (fake timers, `timekeeper`, some APM agents) and Next's prerender state cannot
+  be seen, the package does not read `Date` at all and keeps the process's performance clock, as
+  Next's own handlers do. That is safe, but that instance's times can drift from the others'
+  over a long uptime.
 
 ## Pages and route handlers
 

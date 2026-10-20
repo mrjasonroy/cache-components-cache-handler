@@ -21,8 +21,6 @@
  * - `resetRequestCache()`: called right after the per-request `IncrementalCache` is created.
  */
 
-import type { CacheHandlerOptions } from "../types.js";
-
 /**
  * An entry's lifetime, in seconds.
  */
@@ -46,7 +44,18 @@ export interface PageCacheValue {
 /**
  * What Next passes to the handler's constructor.
  */
-export interface PageCacheHandlerContext extends CacheHandlerOptions {
+export interface PageCacheHandlerContext {
+  /** The request's headers, which Next passes for `fetch` entries. */
+  _requestHeaders?: Record<string, string>;
+  flushToDisk?: boolean;
+  /** @deprecated Next 14 passed it; Next 16 does not, and it is ignored. */
+  _appDir?: string;
+  /** @deprecated Next 14 passed it; Next 16 does not, and it is ignored. */
+  _pagesDir?: string;
+  /** @deprecated Next 14 passed it; Next 16 does not, and it is ignored. */
+  experimental?: {
+    ppr?: boolean;
+  };
   /** `<distDir>/server`; its parent holds `BUILD_ID` and it holds the prerendered build output. */
   serverDistDir?: string;
   /** Next's file system wrapper, used to read the build output through its `FileSystemCache`. */

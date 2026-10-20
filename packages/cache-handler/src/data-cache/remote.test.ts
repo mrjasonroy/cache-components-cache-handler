@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { encodeEntry } from "../shared/codec.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
+import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
-import { REFRESH_TAGS_INTERVAL_MS, createRemoteCacheHandler } from "./remote.js";
+import { createRemoteCacheHandler } from "./remote.js";
 import { INFINITE_CACHE } from "./stored-entry.js";
 import type { DataCacheEntry } from "./types.js";
 

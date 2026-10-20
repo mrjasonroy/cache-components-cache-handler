@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
+import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import { createLocalCacheHandler } from "./local.js";
-import { REFRESH_TAGS_INTERVAL_MS } from "./remote.js";
 import type { DataCacheEntry } from "./types.js";
 
 function entry(text: string, overrides: Partial<DataCacheEntry> = {}): Promise<DataCacheEntry> {

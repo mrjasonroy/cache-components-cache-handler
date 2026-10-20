@@ -24,7 +24,7 @@
  */
 
 import { fromNextClock, nowMs, toNextClock } from "../shared/clock.js";
-import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
+import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "../shared/error-reporter.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
 /**

@@ -144,6 +144,13 @@ taken as a reference. With several Next versions in one process, every registere
 consulted on every call, including one registered after the first, and `Date` is read only when
 all of them are safe (`shared/clock-detection.test.ts`, Codex review 6).
 
+Known limit (architecture review L6): without Next's storage, `isDateNative()` also says no when
+any other library has replaced `Date` (`@sinonjs/fake-timers`, `timekeeper`, some APM agents). The
+clock then fails closed: it never measures the offset and stays on the performance clock, which is
+what Next's own handlers use. That is safe for prerenders, but that process's stored times can
+drift from other instances' over a long uptime, so "instances agree on time" stops holding for it.
+Documented in the README's tag coordination limits.
+
 ## ISSUE-5: `flushCache` kept a plain Node process alive
 
 **Status:** Fixed (16.6.0) · **Severity:** Medium · **Area:** `shared/flush.ts`, `shared/runtime.ts`

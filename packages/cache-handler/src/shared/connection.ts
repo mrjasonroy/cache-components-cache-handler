@@ -26,11 +26,8 @@
  */
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
-import {
-  DEFAULT_ERROR_LOG_INTERVAL_MS,
-  createErrorReporter,
-} from "../data-cache/error-reporter.js";
 import { nowMs } from "./clock.js";
+import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import { requireModule } from "./node-require.js";
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connections");
@@ -241,6 +238,42 @@ function loadIoredis(): typeof import("ioredis").default {
 function connectionKey(options: RedisConnectionOptions): string {
   const { errorLogIntervalMs: _ignored, ...rest } = options;
   return stableStringify(rest);
+}
+
+/** Options that tune a connection without changing which server it reaches, or as whom. */
+const TUNING_OPTIONS = [
+  "commandTimeout",
+  "connectTimeout",
+  "socketTimeout",
+  "keepAlive",
+  "initialConnectWaitMs",
+  "maxConsecutiveTimeouts",
+  "errorLogIntervalMs",
+] as const;
+
+/** A registry key without the tuning: two keys with the same server key reach the same server. */
+function serverKey(key: string): string {
+  const options = JSON.parse(key) as Record<string, unknown>;
+  for (const name of TUNING_OPTIONS) delete options[name];
+  return stableStringify(options);
+}
+
+/** Servers already warned about, by server key: one warning per server per module graph. */
+const warnedSplits = new Set<string>();
+
+/**
+ * Warn, once per server, when a connection opens to a server another connection already reaches
+ * with different tuning: the handlers then no longer share one client and one tag state (DEC-4).
+ * Never logs the options, which can hold a password.
+ */
+function warnOnSplit(registry: Registry, key: string): void {
+  const server = serverKey(key);
+  if (warnedSplits.has(server)) return;
+  if (![...registry.keys()].some((other) => other !== key && serverKey(other) === server)) return;
+  warnedSplits.add(server);
+  console.warn(
+    "[RedisCache]: a second connection to the same Redis server was opened with different connection settings (commandTimeout, connectTimeout, socketTimeout, maxConsecutiveTimeouts...), so these handlers do not share one client or one tag state. Give every handler the same settings.",
+  );
 }
 
 /**
@@ -583,6 +616,7 @@ export function getRedisConnection(options: RedisConnectionOptions = {}): RedisC
     },
   };
   registry.set(key, shared);
+  warnOnSplit(registry, key);
   return shared;
 }
 

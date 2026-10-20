@@ -308,6 +308,20 @@ describe("getRedisConnection", () => {
     expect(e).not.toBe(d);
   });
 
+  test("a second connection to one server with other tuning warns once, without the URL", () => {
+    const warn = vi.mocked(console.warn);
+    const a = getRedisConnection({ url: "redis://:secret@split:6379" });
+    getRedisConnection({ url: "redis://other-server:6379" });
+    expect(warn).not.toHaveBeenCalled();
+
+    const b = getRedisConnection({ url: "redis://:secret@split:6379", connectTimeout: 5000 });
+    getRedisConnection({ url: "redis://:secret@split:6379", commandTimeout: 250 });
+    expect(b).not.toBe(a);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toMatch(/different connection settings/);
+    expect(String(warn.mock.calls[0][0])).not.toMatch(/secret|split/);
+  });
+
   test("close removes the connection from the registry", async () => {
     const a = getRedisConnection({ url: "redis://a:6379" });
     await a.close();

@@ -62,6 +62,16 @@ describe("flushCache: the Redis client it uses", () => {
     expect(redis.created).toHaveLength(2);
   });
 
+  test("its own runtime leaves nothing registered: no memory store outlives the flush", async () => {
+    const stores = (globalThis as unknown as Record<symbol, Set<unknown>>)[
+      Symbol.for("@mrjasonroy/cache-components-cache-handler/memory-stores")
+    ];
+    const before = stores.size;
+    for (let i = 0; i < 10; i++) await flushCache({ url, keyPrefix: "app:" });
+    expect(redis.created).toHaveLength(10);
+    expect(stores.size).toBe(before);
+  });
+
   test("a handler opened the connection: it is reused and left open", async () => {
     getCacheRuntime({ url, keyPrefix: "app:" });
     expect(await flushCache({ url, keyPrefix: "app:" })).toEqual({ deleted: 0 });

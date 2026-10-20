@@ -31,6 +31,7 @@ import {
   getCacheRuntime,
   isRedisReady,
 } from "../shared/runtime.js";
+import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { missHandler } from "./fallback.js";
 import {
   type StoredDataEntry,
@@ -40,11 +41,6 @@ import {
   toDataCacheEntry,
 } from "./stored-entry.js";
 import type { DataCacheHandler } from "./types.js";
-
-/**
- * How often `refreshTags` may sync tags, at most, in ms. Concurrent requests share one sync.
- */
-export const REFRESH_TAGS_INTERVAL_MS = 100;
 
 /**
  * Options of {@link createRemoteCacheHandler}.

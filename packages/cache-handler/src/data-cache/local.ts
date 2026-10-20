@@ -24,8 +24,8 @@ import { nowMs, toNextClock } from "../shared/clock.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
+import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { missHandler } from "./fallback.js";
-import { REFRESH_TAGS_INTERVAL_MS } from "./remote.js";
 import {
   type StoredDataEntry,
   createPendingSets,

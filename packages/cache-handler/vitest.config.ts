@@ -5,6 +5,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./src/testing/clock-setup.ts"],
+    // Type tests (`*.test-d.ts`) run with every test run.
+    typecheck: { enabled: true, include: ["src/**/*.test-d.ts"] },
     coverage: {
       provider: "v8",
       reporter: ["text", "html", "json"],

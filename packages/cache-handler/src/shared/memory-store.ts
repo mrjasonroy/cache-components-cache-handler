@@ -46,6 +46,11 @@ export class MemoryStore<T> {
     getRegistry().add(this as MemoryStore<unknown>);
   }
 
+  /** Leave the registry, for a store dropped before the process ends. */
+  unregister(): void {
+    getRegistry().delete(this as MemoryStore<unknown>);
+  }
+
   /** Number of entries held. */
   get size(): number {
     return this.items.size;

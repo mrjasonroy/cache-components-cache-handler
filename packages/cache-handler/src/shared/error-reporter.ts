@@ -9,7 +9,7 @@
  * since the previous one.
  */
 
-import { nowMs } from "../shared/clock.js";
+import { nowMs } from "./clock.js";
 
 /**
  * Report an error for the named operation (e.g. "get", "set", "connection").
