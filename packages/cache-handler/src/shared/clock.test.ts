@@ -31,20 +31,22 @@ describe("clock", () => {
 
   test("tracks wall time in whole milliseconds, though the performance clock is 5 s off", () => {
     setClockForTests(undefined);
+    // Both clocks are held still, so nothing depends on how fast the runner is.
+    const wall = 1_800_000_000_000;
+    const origin = performance.timeOrigin;
+    vi.spyOn(Date, "now").mockImplementation(() => wall);
+    // Next's clock reads the wall time plus a fraction of a millisecond.
+    vi.spyOn(performance, "now").mockImplementation(() => wall - origin + 0.4);
     for (const skew of [5_000, -5_000]) {
       Object.defineProperty(performance, "timeOrigin", {
-        value: performance.timeOrigin + skew,
+        value: origin + skew,
         configurable: true,
       });
-      const before = Date.now();
       const now = nowMs();
-      expect(Number.isInteger(now)).toBe(true);
-      expect(now).toBeGreaterThanOrEqual(before - 1);
-      expect(now).toBeLessThanOrEqual(Date.now() + 1);
-      // Next's clock is the skewed one.
-      expect(
-        Math.abs(toNextClock(now) - (performance.timeOrigin + performance.now())),
-      ).toBeLessThan(2);
+      expect(now).toBe(wall);
+      // Next's clock is the skewed one: the conversion lands within its fraction of it.
+      const nextClock = performance.timeOrigin + performance.now();
+      expect(Math.abs(toNextClock(now) - nextClock)).toBeLessThan(1);
       expect(fromNextClock(toNextClock(now))).toBe(now);
       Reflect.deleteProperty(performance, "timeOrigin");
     }
@@ -79,14 +81,15 @@ describe("clock", () => {
     }));
     try {
       const fresh = await import("./clock.js");
+      const wall = 1_800_000_000_000;
+      const origin = performance.timeOrigin;
+      vi.spyOn(Date, "now").mockImplementation(() => wall);
+      vi.spyOn(performance, "now").mockImplementation(() => wall - origin + 0.4);
       Object.defineProperty(performance, "timeOrigin", {
-        value: performance.timeOrigin + 5_000,
+        value: origin + 5_000,
         configurable: true,
       });
-      const before = Date.now();
-      const now = fresh.nowMs();
-      expect(now).toBeGreaterThanOrEqual(before - 1);
-      expect(now).toBeLessThanOrEqual(Date.now() + 1);
+      expect(fresh.nowMs()).toBe(wall);
     } finally {
       vi.doUnmock("./node-require.js");
       vi.resetModules();

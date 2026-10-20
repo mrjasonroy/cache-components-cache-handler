@@ -62,6 +62,17 @@ async function abortsPrerender(fn: () => unknown): Promise<boolean> {
   return controller.signal.aborted;
 }
 
+/**
+ * Whether `nowMs()` reads the wall time plus `ahead` ms, to the millisecond: bracketed by `Date`
+ * reads before and after it, so however long the runner takes between them the check holds.
+ */
+function bracketedByWallTime(ahead: number): boolean {
+  const before = Date.now();
+  const now = nowMs();
+  const after = Date.now();
+  return now >= before + ahead - 1 && now <= after + ahead + 1;
+}
+
 describe("clock: Next's work unit storage cannot be required", () => {
   beforeAll(async () => {
     vi.resetModules();
@@ -115,11 +126,11 @@ describe("clock: Next's work unit storage cannot be required", () => {
     skewPerformanceClock(SKEW_MS);
     try {
       // Unknown, and Date extended: the offset is not measured (0: the skewed performance clock).
-      expect(Math.abs(nowMs() - Date.now() - SKEW_MS)).toBeLessThanOrEqual(2);
+      expect(bracketedByWallTime(SKEW_MS)).toBe(true);
     } finally {
       globals[storageKey as symbol] = storage;
     }
-    expect(Math.abs(nowMs() - Date.now())).toBeLessThanOrEqual(2);
+    expect(bracketedByWallTime(0)).toBe(true);
   });
 
   describe("several Next versions in one process", () => {
@@ -138,8 +149,15 @@ describe("clock: Next's work unit storage cannot be required", () => {
       skewPerformanceClock(SKEW_MS);
       return fn(() => {
         // Measured against the (skewed) performance clock: reading Date here would abort.
+        // nowMs() runs on the exact offset, `offset` is the whole-millisecond one kept within 1 ms
+        // of it (plus rounding: 2 ms at most); bracketed by performance-clock reads, so the time
+        // the runner takes between them does not count.
+        const first = performance.timeOrigin + performance.now();
+        const now = nowMs();
+        const last = performance.timeOrigin + performance.now();
         const kept =
-          Math.abs(nowMs() - (performance.timeOrigin + performance.now()) - offset) <= 2 &&
+          now - offset >= first - 2 &&
+          now - offset <= last + 2 &&
           Math.abs(clock.fromNextClock(0) - offset) <= 2 &&
           Math.abs(clock.toNextClock(0) + offset) <= 2;
         return !kept;

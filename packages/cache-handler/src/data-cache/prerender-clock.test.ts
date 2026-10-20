@@ -117,7 +117,11 @@ describe("handlers do not read the time through Date during a prerender", () => 
     setClockForTests(undefined);
     try {
       // Date is extended, so only a found storage lets the clock re-anchor here.
-      expect(Math.abs(nowMs() - Date.now())).toBeLessThanOrEqual(2);
+      // Bracketed by wall-time reads, so a slow runner cannot move time out from under it.
+      const before = Date.now();
+      const now = nowMs();
+      expect(now).toBeGreaterThanOrEqual(before - 1);
+      expect(now).toBeLessThanOrEqual(Date.now() + 1);
       expect(await abortsPrerender(async () => nowMs())).toBe(false);
     } finally {
       globals[key] = storage;
