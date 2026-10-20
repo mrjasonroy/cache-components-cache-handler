@@ -1,5 +1,38 @@
 # Decisions
 
+## DEC-7: A logger hook: `setCacheLogger` and a `logger` option (architecture review L4)
+
+Approved by Jason on 2026-10-20. His app logs through its own logger, and the package wrote 23
+lines straight to the console.
+
+- **Shape.** `CacheLogger { error; warn; info?; debug? }`, each `(message, meta?)`: pino, winston,
+  bunyan and `console` fit as they are. `message` is the line the console printed before; `meta`
+  holds the details (`error`, `operation`, a debug line's `args`). A logger without `info` or
+  `debug` drops those lines rather than sending them to the console.
+- **Two ways to set it, because `withCache` cannot carry one.** `withCache` points Next at handler
+  files by path, and the built-in files configure themselves from the environment, so a function
+  cannot reach them. `setCacheLogger(logger)` sets it for the process, on `globalThis` (DEC-5) so
+  every module graph sees it, from `instrumentation.ts` or a handler file. `logger` on
+  `CacheOptions` serves custom handler files, where options are passed in process
+  (`createRemoteCacheHandler`, `createLocalCacheHandler`, `RedisCacheHandler` /
+  `createRedisCacheHandler`; `flushCache` takes it too). Precedence: the option, then the process
+  logger, then the console, decided for each line, so a logger set after the handlers were
+  created still applies. The connection and tag state are shared by every handler of a
+  connection and key prefix (DEC-4); they log through the logger of the handler that opened them,
+  then the process logger. Keying them by logger as well would split the shared client, which is
+  what DEC-4 avoids.
+- **The default is unchanged.** Without a logger, every line reaches `console.<level>` with the
+  same arguments as before (`shared/logger.ts` `writeLog`'s `consoleArgs`). The three rate-limited
+  reporters (connection, runtime, tag store) and their `[RedisCache]:`-style prefixes are kept;
+  they only change where a line goes. The deprecated 16.5 stack has no `logger` option and uses
+  the process logger.
+- **A logger that throws never fails a cache call.** The line goes to the console, and the console
+  says once per process that the logger threw.
+- **No secrets.** Lines never carried the URL or the options (the split-connection warning names
+  neither); the logger gets the same lines and `meta` holds only errors, operations and debug
+  arguments (keys, tags, sizes). `src/shared/logger.test.ts` asserts that a URL password and a
+  `redisOptions.password` appear in no line or meta.
+
 ## DEC-6: Public API from the architecture review: `closeCache`, tuning on `CacheOptions`, the 16.5 data stack deprecated, remote `defaultTTL`
 
 **Status:** approved by Jason on 2026-10-20 (architecture review H1, M1, M3, M4).
@@ -82,7 +115,8 @@ the `cacheHandlers` entries, an instrumentation file). The rule:
   when every graph must see the same object: the Redis connections and application-client
   connections (`shared/connection.ts`), the runtimes and the ids that key them
   (`shared/runtime.ts`), the tag state of each connection and key prefix (`shared/tag-states.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
-  (`shared/build-id.ts`) and the page-handler flag (`data-cache/isr-warning.ts`).
+  (`shared/build-id.ts`), the page-handler flag (`data-cache/isr-warning.ts`) and the cache
+  logger (`shared/logger.ts`, DEC-7).
 - **In the module** when a copy per graph is harmless: the clock offset and its module storage
   lookup (`shared/clock.ts`; a second graph measures the same offset), the build info and build
   output readers (`handlers/build-info.ts`, `handlers/build-output.ts`; re-reading a manifest is

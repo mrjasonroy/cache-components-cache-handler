@@ -4,6 +4,7 @@
 
 import { getBuildId } from "./build-id.js";
 import { FLUSH_TAG, buildFlushTag } from "./keys.js";
+import { loggerSource, writeLog } from "./logger.js";
 import { clearAllMemoryStores } from "./memory-store.js";
 import {
   type CacheOptions,
@@ -118,8 +119,14 @@ async function flush(
     );
   }
   if (failed === 0) return { deleted };
-  console.warn(
+  writeLog(
+    loggerSource(options.logger),
+    "warn",
     `flushCache: partial flush, ${failed} key(s) matching ${pattern} could not be deleted during a Cluster slot migration; run it again`,
+    { deleted, failed },
+    [
+      `flushCache: partial flush, ${failed} key(s) matching ${pattern} could not be deleted during a Cluster slot migration; run it again`,
+    ],
   );
   return { deleted, partial: true, failed };
 }

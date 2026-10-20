@@ -25,6 +25,7 @@ import {
   shouldUseRedis,
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
+import { type CacheLogger, type LoggerSource, debugWriter, loggerSource } from "./logger.js";
 import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
 import {
   type TagStateKey,
@@ -108,6 +109,14 @@ export interface CacheOptions {
    * @default `CACHE_DEBUG` is `1` or `true`
    */
   debug?: boolean;
+
+  /**
+   * Where this handler's warnings, errors and debug lines go, instead of the logger set with
+   * `setCacheLogger` or the console. The connection and tag state that handlers share log through
+   * the logger of the handler that opened them, so give every handler the same one (or use
+   * `setCacheLogger`). Never given a Redis URL or the connection options.
+   */
+  logger?: CacheLogger;
 }
 
 /**
@@ -219,14 +228,15 @@ function connectionFor(
   options: RuntimeOptions,
 ): RedisConnection | undefined {
   if (!request) return undefined;
+  const logger = loggerSource(options.logger);
   if ("client" in request) {
     const { commandTimeout, maxConsecutiveTimeouts } = options;
-    return getClientConnection(
-      request.client,
-      definedOnly({ commandTimeout, maxConsecutiveTimeouts }),
-    );
+    return getClientConnection(request.client, {
+      ...definedOnly({ commandTimeout, maxConsecutiveTimeouts }),
+      logger,
+    });
   }
-  return getRedisConnection(request.options);
+  return getRedisConnection(request.options, logger);
 }
 
 /**
@@ -283,7 +293,7 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
         ? { client: request.client, keyPrefix }
         : { pooled: connectionKey(request.options), keyPrefix }
       : undefined;
-  const runtime = createRuntime(connection, keyPrefix, {
+  const runtime = createRuntime(connection, keyPrefix, loggerSource(options.logger), {
     stateKey,
     // Once closed, its tag store sends updates to the live runtime of the same options.
     liveStore: () => getCacheRuntime({ ...options, keyPrefix }).tags,
@@ -323,8 +333,9 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   if (!request || "client" in request || findRedisConnection(request.options)) {
     return { runtime: getCacheRuntime(options), shared: true, release: async () => {} };
   }
-  const connection = openRedisConnection(request.options);
-  const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix());
+  const logger = loggerSource(options.logger);
+  const connection = openRedisConnection(request.options, logger);
+  const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix(), logger);
   return {
     runtime,
     shared: false,
@@ -335,14 +346,21 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   };
 }
 
+/**
+ * Bytes of page entries kept in memory per store. The size of the largest stored entry today, but
+ * a memory budget, not the codec's inflation cap: the two may change apart.
+ */
+const PAGE_MEMORY_MAX_BYTES = MAX_STORED_ENTRY_BYTES;
+
 function createRuntime(
   connection: RedisConnection | undefined,
   keyPrefix: string,
+  logger: LoggerSource,
   shared?: { stateKey: TagStateKey | undefined; liveStore(): TagStore },
 ): OwnedRuntime {
   const stores: RuntimeStores = {
-    page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
-    pageFallback: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
+    page: new MemoryStore({ maxBytes: PAGE_MEMORY_MAX_BYTES }),
+    pageFallback: new MemoryStore({ maxBytes: PAGE_MEMORY_MAX_BYTES }),
     data: new MemoryStore(),
     dataFallback: new MemoryStore(),
     local: new MemoryStore({ maxEntries: 10_000 }),
@@ -355,6 +373,7 @@ function createRuntime(
   });
   const stateKey = shared?.stateKey;
   const tags = new TagStore(connection, keyPrefix, {
+    logger,
     state: stateKey && tagStateOf(stateKey),
     key: shared && {
       liveStore: shared.liveStore,
@@ -368,7 +387,7 @@ function createRuntime(
     keyPrefix,
     tags,
     stores,
-    reportError: createErrorReporter("[RedisCache]:"),
+    reportError: createErrorReporter("[RedisCache]:", undefined, logger),
     closed: false,
     stateKey,
     dispose() {
@@ -444,13 +463,15 @@ export function resetCacheRuntimesForTests(): void {
 }
 
 /**
- * `console.debug` under `prefix` when debug logging is on (`debug` or `CACHE_DEBUG=1`).
+ * Debug lines under `prefix` when debug logging is on (`debug` or `CACHE_DEBUG=1`): the logger's
+ * `debug`, or `console.debug`.
  */
 export function createDebugLog(
   prefix: string,
   debug: boolean | undefined,
+  logger?: CacheLogger,
 ): ((...args: unknown[]) => void) | undefined {
-  return (debug ?? isDebugEnabled()) ? console.debug.bind(console, prefix) : undefined;
+  return (debug ?? isDebugEnabled()) ? debugWriter(prefix, loggerSource(logger)) : undefined;
 }
 
 /**

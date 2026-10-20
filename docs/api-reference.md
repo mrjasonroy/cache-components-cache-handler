@@ -187,6 +187,27 @@ import { closeCache } from "@mrjasonroy/cache-components-cache-handler";
 afterAll(() => closeCache());
 ```
 
+## `setCacheLogger(logger)`
+
+```ts
+interface CacheLogger {
+  error(message: string, meta?: Record<string, unknown>): void;
+  warn(message: string, meta?: Record<string, unknown>): void;
+  info?(message: string, meta?: Record<string, unknown>): void;
+  debug?(message: string, meta?: Record<string, unknown>): void;
+}
+function setCacheLogger(logger: CacheLogger | undefined): void;
+```
+
+Sends the package's warnings, errors and `CACHE_DEBUG` lines to `logger` for the whole process
+(every module graph), or back to the console with `undefined`. Call it in `instrumentation.ts`'s
+`register()` or a custom handler file. The `logger` option of `createRemoteCacheHandler`,
+`createLocalCacheHandler` and `createRedisCacheHandler` wins over it for that handler; the shared
+connection and tag state use the logger of the handler that opened them. `message` is what the
+console would print; `meta` holds the details (`error`, `operation`). Without `info` or `debug`
+those lines are dropped. Errors stay rate-limited. No line carries a Redis URL or connection
+options. A logger that throws never fails a cache call: the line goes to the console.
+
 ## `MEMORY_ONLY_TAG`
 
 `"cache:memory-only"`. An entry tagged with it (`cacheTag(MEMORY_ONLY_TAG)`), and a page that

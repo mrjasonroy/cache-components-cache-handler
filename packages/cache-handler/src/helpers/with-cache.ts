@@ -2,6 +2,7 @@
  * `withCache(nextConfig, options)`: the one public way to configure the app's whole cache.
  */
 
+import { processLogger, writeLog } from "../shared/logger.js";
 import { nodeBuiltin } from "../shared/node-require.js";
 
 /**
@@ -126,7 +127,9 @@ function applyCache<T extends object>(
 
   const userMemorySize = config.cacheMaxMemorySize;
   if (pages && userMemorySize !== undefined && userMemorySize !== 0) {
-    console.warn(
+    writeLog(
+      processLogger,
+      "warn",
       `withCache: keeping cacheMaxMemorySize: ${userMemorySize}. Next's built-in page memory cache can serve pages that another instance has revalidated; withCache sets it to 0 unless you set it.`,
     );
   }

@@ -46,6 +46,7 @@ import { nowMs } from "./clock.js";
 import type { RedisConnection } from "./connection.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
+import type { LoggerSource } from "./logger.js";
 import {
   type TagUpdate,
   UPDATE_TAGS_SCRIPT,
@@ -178,9 +179,18 @@ export class TagStore {
   constructor(
     private readonly connection: RedisConnection | undefined,
     private readonly keyPrefix: string,
-    options: { errorLogIntervalMs?: number; state?: KeyTagState; key?: TagStoreKey } = {},
+    options: {
+      errorLogIntervalMs?: number;
+      state?: KeyTagState;
+      key?: TagStoreKey;
+      logger?: LoggerSource;
+    } = {},
   ) {
-    this.reportError = createErrorReporter("[RedisCache]:", options.errorLogIntervalMs);
+    this.reportError = createErrorReporter(
+      "[RedisCache]:",
+      options.errorLogIntervalMs,
+      options.logger,
+    );
     this.key = options.key;
     this.state = options.state ?? { records: new Map(), unsent: new Map() };
     this.state.owner = this;

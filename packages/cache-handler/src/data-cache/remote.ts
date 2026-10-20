@@ -102,7 +102,7 @@ export function createRemoteCacheHandler(
   // Read on every call: after `closeCache()` it is a new runtime, on a new connection.
   const currentRuntime = liveCacheRuntime(options);
   const memoryFallback = options.memoryFallback ?? true;
-  const log = createDebugLog("[RemoteCache]:", options.debug);
+  const log = createDebugLog("[RemoteCache]:", options.debug, options.logger);
   const pendingSets = createPendingSets();
   const keyOf = (cacheKey: string) =>
     dataKey(currentRuntime().keyPrefix, options.buildId ?? getBuildId(), cacheKey);

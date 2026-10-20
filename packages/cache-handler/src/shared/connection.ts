@@ -28,6 +28,7 @@
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { nowMs } from "./clock.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
+import { type LoggerSource, processLogger, writeLog } from "./logger.js";
 import { requireModule } from "./node-require.js";
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connections");
@@ -274,29 +275,41 @@ const warnedSplits = new Set<string>();
  * with different tuning: the handlers then no longer share one client and one tag state (DEC-4).
  * Never logs the options, which can hold a password.
  */
-function warnOnSplit(registry: Registry, key: string): void {
+function warnOnSplit(registry: Registry, key: string, logger: LoggerSource): void {
   const server = serverKey(key);
   // Only a warning: a key it cannot read is skipped, never a reason to fail the connection.
   if (server === undefined || warnedSplits.has(server)) return;
   if (![...registry.keys()].some((other) => other !== key && serverKey(other) === server)) return;
   warnedSplits.add(server);
-  console.warn(
+  writeLog(
+    logger,
+    "warn",
     "[RedisCache]: a second connection to the same Redis server was opened with different connection settings (commandTimeout, connectTimeout, socketTimeout, maxConsecutiveTimeouts...), so these handlers do not share one client or one tag state. Give every handler the same settings.",
+    undefined,
   );
 }
 
 /**
  * JSON with object keys sorted at every level, so nested options (`redisOptions`, `tls`) are part
  * of the key and their order does not matter. Functions (e.g. `retryStrategy`) count by source.
+ * Throws on an object that contains itself, which no key can describe; `path` names it.
  */
-function stableStringify(value: unknown): string {
+function stableStringify(value: unknown, path = "", ancestors: object[] = []): string {
   if (typeof value === "function") return JSON.stringify(`fn:${value.toString()}`);
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
+  if (ancestors.includes(value)) {
+    throw new Error(
+      `Redis connection options must be serializable: ${path} refers back to an enclosing object`,
+    );
+  }
+  const inner = [...ancestors, value];
+  if (Array.isArray(value)) {
+    return `[${value.map((item, i) => stableStringify(item, `${path}[${i}]`, inner)).join(",")}]`;
+  }
   const entries = Object.entries(value as Record<string, unknown>)
     .filter(([, item]) => item !== undefined)
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(",")}}`;
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item, path ? `${path}.${key}` : key, inner)}`).join(",")}}`;
 }
 
 /**
@@ -469,13 +482,17 @@ export function createRedisConnection(
   options: Pick<
     RedisConnectionOptions,
     "initialConnectWaitMs" | "maxConsecutiveTimeouts" | "errorLogIntervalMs" | "commandTimeout"
-  > & { owned?: boolean; unownedCooldownMs?: number } = {},
+  > & { owned?: boolean; unownedCooldownMs?: number; logger?: LoggerSource } = {},
 ): RedisConnection {
   const owned = options.owned ?? true;
+  const logger = options.logger ?? processLogger;
   const reportError = createErrorReporter(
     "[RedisCache]:",
     options.errorLogIntervalMs ?? DEFAULT_ERROR_LOG_INTERVAL_MS,
+    logger,
   );
+  const info = (message: string) => writeLog(logger, "info", message, undefined);
+  const warn = (message: string) => writeLog(logger, "warn", message, undefined);
   const initialConnectWaitMs = options.initialConnectWaitMs ?? DEFAULT_INITIAL_CONNECT_WAIT_MS;
   const maxTimeouts = options.maxConsecutiveTimeouts ?? DEFAULT_MAX_CONSECUTIVE_TIMEOUTS;
   const readyListeners = new Set<() => void>();
@@ -484,15 +501,13 @@ export function createRedisConnection(
   // Log each change of state once. Never the URL: it can carry credentials.
   let state: "connecting" | "up" | "down" = client.status === "ready" ? "up" : "connecting";
   client.on("ready", () => {
-    if (state === "down") console.info("[RedisCache]: Redis connected again");
+    if (state === "down") info("[RedisCache]: Redis connected again");
     state = "up";
   });
   client.on("error", (error: Error) => {
     if (state !== "down") {
-      console.warn(
-        "[RedisCache]: Redis unavailable, serving from memory until it reconnects:",
-        error.message,
-      );
+      const message = "[RedisCache]: Redis unavailable, serving from memory until it reconnects:";
+      writeLog(logger, "warn", `${message} ${error.message}`, { error }, [message, error.message]);
     }
     state = "down";
     reportError("connection", error);
@@ -502,7 +517,7 @@ export function createRedisConnection(
   let health: UnownedHealth = { healthy: () => true };
   if (owned) {
     dropConnectionOnTimeouts(client as Redis, maxTimeouts, stats, () => {
-      console.warn("[RedisCache]: Redis stopped answering, reconnecting and serving from memory");
+      warn("[RedisCache]: Redis stopped answering, reconnecting and serving from memory");
     });
   } else {
     const watched = watchUnownedClient(
@@ -514,10 +529,10 @@ export function createRedisConnection(
       },
       stats,
       () => {
-        console.warn("[RedisCache]: Redis stopped answering, serving from memory");
+        warn("[RedisCache]: Redis stopped answering, serving from memory");
       },
       () => {
-        console.info("[RedisCache]: Redis answering again");
+        info("[RedisCache]: Redis answering again");
         for (const listener of readyListeners) listener();
       },
     );
@@ -573,13 +588,14 @@ export function createRedisConnection(
  */
 export function getClientConnection(
   client: RedisClientLike,
-  options: { commandTimeout?: number; maxConsecutiveTimeouts?: number } = {},
+  options: { commandTimeout?: number; maxConsecutiveTimeouts?: number; logger?: LoggerSource } = {},
 ): RedisConnection {
   const connections = getClientConnections();
   const existing = connections.get(client);
   if (existing) return existing;
   const connection = createRedisConnection(client, {
     owned: false,
+    ...(options.logger ? { logger: options.logger } : {}),
     ...(options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout }),
     ...(options.maxConsecutiveTimeouts === undefined
       ? {}
@@ -601,21 +617,27 @@ export function findRedisConnection(
 /**
  * A new connection for these options, not shared: only the caller uses it, and closes it.
  */
-export function openRedisConnection(options: RedisConnectionOptions = {}): RedisConnection {
-  return createRedisConnection(buildClient(options), options);
+export function openRedisConnection(
+  options: RedisConnectionOptions = {},
+  logger: LoggerSource = processLogger,
+): RedisConnection {
+  return createRedisConnection(buildClient(options), { ...options, logger });
 }
 
 /**
  * Get the process-wide connection for these options, opening it on first use. Every handler
- * created with the same options shares it.
+ * created with the same options shares it, and the logger of the first.
  */
-export function getRedisConnection(options: RedisConnectionOptions = {}): RedisConnection {
+export function getRedisConnection(
+  options: RedisConnectionOptions = {},
+  logger: LoggerSource = processLogger,
+): RedisConnection {
   const registry = getRegistry();
   const key = connectionKey(options);
   const existing = registry.get(key);
   if (existing) return existing;
 
-  const connection = openRedisConnection(options);
+  const connection = openRedisConnection(options, logger);
   const close = connection.close;
   const shared: RedisConnection = {
     ...connection,
@@ -625,7 +647,7 @@ export function getRedisConnection(options: RedisConnectionOptions = {}): RedisC
     },
   };
   registry.set(key, shared);
-  warnOnSplit(registry, key);
+  warnOnSplit(registry, key, logger);
   return shared;
 }
 

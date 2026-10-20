@@ -12,6 +12,8 @@
  * of that request exists.
  */
 
+import { processLogger, writeLog } from "../shared/logger.js";
+
 const PAGE_HANDLER_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/page-handler");
 
 export const ISR_WARNING_MESSAGE =
@@ -60,7 +62,7 @@ export function warnMissingIsrHandlerOnce(options: IsrWarningOptions = {}): void
     return;
   }
   warned = true;
-  console.warn(ISR_WARNING_MESSAGE);
+  writeLog(processLogger, "warn", ISR_WARNING_MESSAGE, undefined);
 }
 
 /**

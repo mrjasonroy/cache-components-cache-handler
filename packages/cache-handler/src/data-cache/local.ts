@@ -61,7 +61,7 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
   if (isEdgeRuntime()) return missHandler;
   // Read on every call: after `closeCache()` it is a new runtime, on a new connection.
   const currentRuntime = liveCacheRuntime(options);
-  const log = createDebugLog("[LocalCache]:", options.debug);
+  const log = createDebugLog("[LocalCache]:", options.debug, options.logger);
   const pendingSets = createPendingSets();
 
   return {

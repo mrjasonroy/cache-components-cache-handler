@@ -41,6 +41,7 @@ export {
   type FlushCacheResult,
   flushCache,
 } from "./shared/flush.js";
+export { type CacheLogger, setCacheLogger } from "./shared/logger.js";
 export { type CacheOptions, closeCache, MEMORY_ONLY_TAG } from "./shared/runtime.js";
 
 // =============================================================================

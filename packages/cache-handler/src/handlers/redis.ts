@@ -258,7 +258,7 @@ export class RedisCacheHandler {
     this.options = options;
     this.currentRuntime = liveCacheRuntime(toRuntimeOptions(options));
     this.memoryFallback = options.memoryFallback ?? true;
-    this.log = createDebugLog("[PageCache]:", options.debug);
+    this.log = createDebugLog("[PageCache]:", options.debug, options.logger);
   }
 
   /** The shared runtime; a new one, on a new connection, after `closeCache()`. */

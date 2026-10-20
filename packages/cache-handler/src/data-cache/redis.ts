@@ -25,6 +25,7 @@
 
 import { fromNextClock, nowMs, toNextClock } from "../shared/clock.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "../shared/error-reporter.js";
+import { debugWriter, processLogger, writeLog } from "../shared/logger.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
 /**
@@ -215,7 +216,7 @@ export function createRedisDataCacheHandler(
     debug = false,
   } = options;
 
-  const log = debug ? console.debug.bind(console, "[RedisDataCache]:") : undefined;
+  const log = debug ? debugWriter("[RedisDataCache]:") : undefined;
   const reportError = createErrorReporter("[RedisDataCache]:", errorLogIntervalMs);
 
   /**
@@ -458,8 +459,11 @@ export function createRedisDataCacheHandler(
 
       if (!expire && !warnedMissingExpire) {
         warnedMissingExpire = true;
-        console.warn(
+        writeLog(
+          processLogger,
+          "warn",
           "[RedisDataCache]: the Redis client has no expire() method, so tag revalidation records will never expire.",
+          undefined,
         );
       }
 

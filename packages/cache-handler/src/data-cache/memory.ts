@@ -8,6 +8,7 @@
  */
 
 import { nextClockMs } from "../shared/clock.js";
+import { debugWriter } from "../shared/logger.js";
 import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
 
 export interface MemoryDataCacheHandlerOptions {
@@ -260,7 +261,7 @@ export function createMemoryDataCacheHandler(
   const memoryCache = new LRUCache<PrivateCacheEntry>(maxSize, (entry) => entry.size);
   const pendingSets = new Map<string, Promise<void>>();
 
-  const debug = options.debug ? console.debug.bind(console, "[MemoryDataCache]:") : undefined;
+  const debug = options.debug ? debugWriter("[MemoryDataCache]:") : undefined;
 
   return {
     async get(cacheKey, _softTags) {

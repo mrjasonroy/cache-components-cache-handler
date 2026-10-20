@@ -285,6 +285,23 @@ describe("getRedisConnection", () => {
     expect(ioredisMock).toHaveBeenCalledTimes(3);
   });
 
+  test("redisOptions that refer to themselves throw a clear error, not a stack overflow", () => {
+    const redisOptions: Record<string, unknown> = { host: "a", tls: { servername: "a" } };
+    (redisOptions.tls as Record<string, unknown>).parent = redisOptions;
+    expect(() => getRedisConnection({ redisOptions })).toThrow(
+      "Redis connection options must be serializable: redisOptions.tls.parent refers back to an enclosing object",
+    );
+    expect(ioredisMock).not.toHaveBeenCalled();
+  });
+
+  test("an object used twice in redisOptions, without a cycle, is fine", () => {
+    const tls = { servername: "a" };
+    const a = getRedisConnection({ redisOptions: { host: "a", tls, sentinelTLS: tls } });
+    expect(getRedisConnection({ redisOptions: { host: "a", tls, sentinelTLS: { ...tls } } })).toBe(
+      a,
+    );
+  });
+
   test("option order does not matter, and the log interval does not split the pool", () => {
     const a = getRedisConnection({ url: "redis://a:6379", commandTimeout: 250 });
     const b = getRedisConnection({ commandTimeout: 250, url: "redis://a:6379" });

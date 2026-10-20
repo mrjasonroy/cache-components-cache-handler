@@ -90,6 +90,9 @@ These are documented in the README; they are listed here so they are not redisco
   ages out (at most 60 s for outage memory; until `revalidate` for local `"use cache"` values).
 - **Clock skew over 5 s** between instances can delay an invalidation on other instances until
   the tag is updated again (`SYNC_SKEW_MS`).
+- **The local handler serves through an outage of its own instance.** Its values live in memory,
+  so an instance that cannot reach Redis keeps serving them, past the 60 s outage bound, until
+  `revalidate` or a tag invalidation it sees (Opus final review: accepted degraded mode).
 - **`flushCache` empties only the calling process's memory.** Other instances keep their local
   `"use cache"` values until `revalidate` or a tag invalidation. A cross-instance flush would need
   a broadcast (for example a reserved tag written on flush).
@@ -178,3 +181,44 @@ HTTP server keeps the process alive anyway, so it would change nothing there. A 
 handlers still holds their shared client, as any handler-owned connection does: it calls
 `closeCache()` at the end (added in 16.6 with Jason's approval, DEC-6), which closes it. Its exit is
 tested the same way, in the same child processes (`src/shared/flush-exit.test.ts`).
+
+## ISSUE-6: Review findings deferred or declined for 16.6.0
+
+**Status:** Open (deliberate) · **Severity:** Low · **Area:** several
+
+Each was raised in a review of PR #78 and left as it is on purpose. They are listed here so none
+is dropped silently.
+
+- **A revalidation with durations expires entries rendered after it** (Codex review 4, M2).
+  Declined: it is what Next's own `areTagsExpired` does; the package is stricter only for
+  immediate revalidations. Semantics in DEC-3.
+- **A rolling deploy from 16.5.x splits tag invalidation** (Opus final review, M1). No tag-key shim:
+  16.6 neither reads nor writes the 16.5 tag keys, so a revalidation on a 16.5 instance does not
+  reach 16.6 instances while both serve. The README and CHANGELOG give the deploy step instead
+  (recreate, or revalidate once from 16.6). A shim would keep the old key layout alive in 16.x.
+- **`createCacheHandler` does not reconnect after `closeCache()`** (DEC-6). Declined: making the
+  16.5 stack re-resolve its connection was not worth it for a deprecated API. Its deprecation note
+  says to create it again.
+- **The 16.5 data stack is deprecated, not removed or shimmed** (architecture review M3, phase 2).
+  Deferred to the Next 17 line (DEC-6): it keeps working through 16.x, and removing it, or
+  rebuilding `createCacheHandler` over `createRemoteCacheHandler`, is a breaking change.
+- **No `globalSlot()` helper for the global state** (architecture review L5). DEC-5 writes down the
+  rule, which was the finding's cost (M2 broke an unwritten rule). Folding the global slots into
+  one helper is a refactor with no change in behaviour, left for after the release.
+- **No `buildOutput: false` opt-out** (Opus review 3, #4). Build output's `lastModified` is the
+  build time from `cache-handler-build.json`, not the file mtime (DEC-3), which was the problem;
+  nobody has asked to turn build output off.
+- **A slow transfer of a 1 to 5 MB entry can count as a timeout** (Opus review 3, #6). Three in a
+  row drop the connection for the process. Documented (README, sizing: about 40 Mbit/s at the
+  default 1 s `commandTimeout`); compression makes such entries 5 to 15 times smaller (DEC-4).
+  No size-proportional timeout: it would let one slow server stall every cached call longer.
+- **A tag state Redis has not acknowledged stays in the process after `closeCache()`** (DEC-6).
+  Accepted: pending invalidations are never dropped to impose a limit. Bounded by distinct
+  option sets times key prefixes; an application client's goes with the client.
+- **The shared connection and tag state log through the first handler's `logger`** (DEC-7).
+  Accepted: keying them by logger would split the shared client (DEC-4). Use one logger, or
+  `setCacheLogger`.
+- **`RedisCacheHandlerOptions.redis` is not marked `@deprecated`** (architecture review L7). It
+  is public API, so it was left to Jason; it is documented as the 16.5 form.
+- **No `CACHE_DEBUG` line when the clock offset was never measured** (architecture review L6).
+  DEC-3, ISSUE-4 and the README describe the fail-closed case; the debug line is not added.

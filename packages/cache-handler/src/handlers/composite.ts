@@ -1,4 +1,5 @@
 import { nowMs } from "../shared/clock.js";
+import { processLogger, writeLog } from "../shared/logger.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -75,7 +76,7 @@ export class CompositeHandler implements CacheHandler {
         }
       } catch (error) {
         // Log error but continue to next handler
-        console.error(`Handler ${handler.name} failed:`, error);
+        writeLog(processLogger, "error", `Handler ${handler.name} failed:`, { error: error });
       }
     }
 
@@ -107,7 +108,9 @@ export class CompositeHandler implements CacheHandler {
       // Log failures but don't throw (fault tolerance)
       results.forEach((result, index) => {
         if (result.status === "rejected") {
-          console.error(`Handler ${this.handlers[index].name} set failed:`, result.reason);
+          writeLog(processLogger, "error", `Handler ${this.handlers[index].name} set failed:`, {
+            error: result.reason,
+          });
         }
       });
     }
@@ -122,7 +125,12 @@ export class CompositeHandler implements CacheHandler {
     // Log failures but don't throw
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Handler ${this.handlers[index].name} revalidateTag failed:`, result.reason);
+        writeLog(
+          processLogger,
+          "error",
+          `Handler ${this.handlers[index].name} revalidateTag failed:`,
+          { error: result.reason },
+        );
       }
     });
   }
@@ -138,7 +146,9 @@ export class CompositeHandler implements CacheHandler {
     // Log failures but don't throw
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Handler ${this.handlers[index].name} delete failed:`, result.reason);
+        writeLog(processLogger, "error", `Handler ${this.handlers[index].name} delete failed:`, {
+          error: result.reason,
+        });
       }
     });
   }

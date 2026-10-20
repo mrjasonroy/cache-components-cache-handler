@@ -290,6 +290,36 @@ closed; close it yourself. Handlers created before it keep working: on their nex
 reconnect, all onto one new connection. The deprecated `createCacheHandler` is the exception: it
 keeps its closed connection and serves from memory, so create it again after `closeCache()`.
 
+## Logging
+
+Warnings, errors and `CACHE_DEBUG` lines go to the console by default. To send them to your own
+logger (pino, winston, bunyan, or anything with `error` and `warn` methods), set it once per
+process in `instrumentation.ts`:
+
+```ts
+// instrumentation.ts
+import { setCacheLogger } from "@mrjasonroy/cache-components-cache-handler";
+import { logger } from "./lib/logger";
+
+export function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") setCacheLogger(logger);
+}
+```
+
+Each line is `logger.error(message, meta)`, `logger.warn(...)`, `logger.info?.(...)` or
+`logger.debug?.(...)`. `message` is the line the console would have printed, and `meta` carries
+its details (an `error`, the `operation`). A logger without `info` or `debug` drops those lines. Errors stay rate-limited, as on the console. Lines written before `register()`
+runs (a `withCache` warning while `next.config` loads) still go to the console.
+
+In a custom handler file, `createRemoteCacheHandler`, `createLocalCacheHandler` and
+`createRedisCacheHandler` also take `logger`, which wins over `setCacheLogger` for that handler.
+The Redis connection and tag state that handlers share log through the logger of the handler
+that opened them, so give every handler the same one, or use `setCacheLogger`.
+
+No line carries a Redis URL or the connection options, which can hold a password. A logger that
+throws never fails a cache call: the line goes to the console instead, with one note that the
+logger threw.
+
 ## Custom handlers
 
 Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster,
@@ -399,10 +429,11 @@ that long (default 24 hours, maximum 365 days; anything but a number greater tha
 | `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
 | `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](#flushing-the-cache). |
 | `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](#closing-the-cache). |
+| `setCacheLogger(logger)` | function | Sends the package's log lines to your logger. [Logging](#logging). |
 | `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
 | `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the 16.5 data handler factory ([legacy setup](#legacy-setup-deprecated)). |
 | `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the 16.5 building blocks behind `createCacheHandler`. |
-| `CacheOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
+| `CacheOptions`, `CacheLogger`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
 
 The [deprecated exports](#deprecated) are still exported.
 
