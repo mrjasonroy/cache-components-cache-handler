@@ -8,7 +8,7 @@
  * and bytes repeated within the entry are stored once: several references may point into the
  * same range.
  *
- * A reader accepts only this magic and version, so an entry in any other format (16.5's JSON,
+ * A reader accepts only this magic and version, so an entry in any other format (16.4.2's JSON,
  * a future version, a foreign value under the same key) reads as a miss, never as data.
  *
  * Format version 3 is a compressed v2 entry, written by {@link encodeStored} for entries of 16 KB

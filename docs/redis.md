@@ -150,7 +150,7 @@ Entries of 16 KB and more are written as version 3, unless compressing would not
 Entries over 64 MB are always written as version 2, and a version 3 entry stating a length over
 64 MB is a miss, so a corrupt entry cannot make a read inflate hundreds of megabytes.
 `CACHE_COMPRESSION=off` writes version 2 only. Readers read both versions whatever the setting,
-and an entry they cannot read (16.5's JSON, a future version or codec, a corrupt or truncated
+and an entry they cannot read (16.4.2's JSON, a future version or codec, a corrupt or truncated
 entry) is a miss.
 
 For sizing, count on page entries taking 5 to 15 times less memory and bandwidth than their
@@ -183,8 +183,8 @@ Old builds' entries are not deleted on deploy; they expire on their own. To clea
 Any service that speaks the Redis protocol over TCP works with a `rediss://` URL, including
 Upstash's Redis endpoint (not its REST API). Services that only offer an HTTP API do not.
 
-## The 16.5 data handler
+## The legacy data handler
 
 `createRedisDataCacheHandler` (the handler behind `createCacheHandler`) takes a node-redis-style
 client. Pass node-redis directly, or wrap ioredis with `createIoredisAdapter`. See the
-[API reference](./api-reference.md#165-data-cache-api).
+[API reference](./api-reference.md#legacy-data-cache-api).

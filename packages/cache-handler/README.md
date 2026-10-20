@@ -259,8 +259,8 @@ export async function POST(request: Request) {
 ```
 
 `scope: "all"` matches by prefix, so it also deletes keys written under the same prefix by
-`createCacheHandler` and by 16.5.x's `RedisCacheHandler`. With the default `nextjs:` prefix that
-means everything under it, 16.5's `nextjs:cache:*`, `nextjs:tags:*` and `nextjs:data-cache:*`
+`createCacheHandler` and by 16.4.2's `RedisCacheHandler`. With the default `nextjs:` prefix that
+means everything under it, 16.4.2's `nextjs:cache:*`, `nextjs:tags:*` and `nextjs:data-cache:*`
 included, and any other app's keys that share the `nextjs:` prefix. On a Cluster, a key caught
 in a slot migration is retried through the Cluster client; if any still fail, `flushCache` logs a
 warning and returns `{ deleted, partial: true, failed }` instead of throwing, so run it again.
@@ -441,15 +441,15 @@ that long (default 24 hours, maximum 365 days; anything but a number greater tha
 |---|---|---|
 | `withCache(nextConfig, options?)` | function | Configures the whole cache. [Configuration](#configuration). |
 | `createRedisCacheHandler(options?)` | function → class | The page handler with code-level options, for a custom `cacheHandler` file. |
-| `RedisCacheHandler` | class | The page handler. Same constructor as 16.5.x, so subclasses still work. |
+| `RedisCacheHandler` | class | The page handler. Same constructor as 16.4.2, so subclasses still work. |
 | `createRemoteCacheHandler(options?)` | function → `DataCacheHandler` | Redis data handler plus memory fallback, for `"use cache: remote"`. |
 | `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
 | `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](#flushing-the-cache). |
 | `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](#closing-the-cache). |
 | `setCacheLogger(logger)` | function | Sends the package's log lines to your logger. [Logging](#logging). |
 | `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
-| `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the 16.5 data handler factory ([legacy setup](#legacy-setup-deprecated)). |
-| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the 16.5 building blocks behind `createCacheHandler`. |
+| `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the original data handler factory ([legacy setup](#legacy-setup-deprecated)). |
+| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the original building blocks behind `createCacheHandler`. |
 | `CacheOptions`, `CacheLogger`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
 
 The [deprecated exports](#deprecated) are still exported.
@@ -471,7 +471,7 @@ are shared by every build and have no TTL: they are kept until `flushCache({ sco
 Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy (`volatile-lru`), never
 `allkeys-*`: an evicted tag hash brings every invalidated entry back.
 
-`createCacheHandler` keeps its 16.5 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
+`createCacheHandler` keeps its 16.4.2 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
 
 ### Sizing
 
@@ -501,20 +501,26 @@ Read replicas are the escape hatch if it ever does.
 
 ## Migrating
 
-### From 16.5.x (`createCacheConfig` and a handler file)
+### From 16.4.2 (handler files in `next.config`)
+
+16.5.0 and 16.5.1 were withdrawn; upgrade from 16.4.2 straight to this release.
 
 ```diff
-- import { createCacheConfig } from "@mrjasonroy/cache-components-cache-handler";
-- import { resolve } from "node:path";
-- const cacheConfig = createCacheConfig({
--   dataCacheHandlerPath: resolve(process.cwd(), "./data-cache-handler.mjs"),
-- });
-- export default { cacheComponents: true, ...cacheConfig };
+- export default {
+-   cacheComponents: true,
+-   cacheHandler: "./cache-handler.mjs", // if you used the package's page handler
+-   cacheHandlers: {
+-     default: "./data-cache-handler.mjs",
+-     remote: "./data-cache-handler.mjs",
+-   },
+-   cacheMaxMemorySize: 0,
+- };
 + import { withCache } from "@mrjasonroy/cache-components-cache-handler";
 + export default withCache({ cacheComponents: true });
 ```
 
-Then delete `data-cache-handler.mjs`. Two things change:
+The same goes for a config built with `createCacheConfig`. Then delete `data-cache-handler.mjs`
+(and `cache-handler.mjs`). Two things change:
 
 - `"use cache"` now goes to memory and `"use cache: remote"` to Redis. Pass `{ useCache: "redis" }`
   to keep both in Redis.
@@ -525,33 +531,35 @@ entries are scoped by build ID, so there is no data to migrate.
 
 #### Revalidations do not cross the upgrade
 
-16.5 records a revalidation in `nextjs:tags:<tag>`
-keys; 16.6 reads and writes only the `<prefix>tags` hash. While 16.5 and 16.6 instances serve side
-by side, a `revalidateTag` or `revalidatePath` handled by a 16.5 instance never reaches the 16.6
-instances, so a page they cached can stay stale until its tag is revalidated again or the entry
+16.4.2 records a revalidation in `nextjs:tags:<tag>`
+keys; 16.4.3 reads and writes only the `<prefix>tags` hash. While 16.4.2 and 16.4.3 instances serve
+side by side, a `revalidateTag` or `revalidatePath` handled by a 16.4.2 instance never reaches the
+16.4.3 instances, so a page they cached can stay stale until its tag is revalidated again or the entry
 expires (up to a year for `revalidate: false` or the `"max"` profile). The reverse holds too. For
 this one upgrade, either:
 
-- deploy with recreate rather than rolling, so no 16.5 instance serves alongside 16.6; or
-- once the last 16.5 instance is gone, revalidate once from a 16.6 instance:
+- deploy with recreate rather than rolling, so no 16.4.2 instance serves alongside 16.4.3; or
+- once the last 16.4.2 instance is gone, revalidate once from a 16.4.3 instance:
   `revalidatePath("/", "layout")`, or the tags that changed during the rollout. That goes through
   the shared tag store, so it reaches every instance, including each one's `"use cache"` memory.
   `flushCache()` is not a substitute: it empties only the calling process's memory.
 
-`createCacheHandler` keeps its 16.5 key layout, so its own revalidations are unaffected. Between
-16.6 builds, a revalidation reaches every instance, old build and new.
+`createCacheHandler` keeps its 16.4.2 key layout, so its own revalidations are unaffected. Between
+16.4.3 builds, a revalidation reaches every instance, old build and new.
 
 If you keep `createCacheHandler` for now, it keeps working. It now uses the shared connection and
-the memory fallback, and its `commandTimeout` default drops from 2000 to 1000 ms.
+the memory fallback, fails a command after `commandTimeout` (1000 ms; 16.4.2 had no timeout),
+reconnects after an outage instead of giving up, and serves an entry until its `expire` rather
+than dropping it at `revalidate`.
 
-### From a 16.5.1 `RedisCacheHandler` subclass
+### From a 16.4.2 `RedisCacheHandler` subclass
 
 Your code keeps working: the class name and constructor are the same, and the internals now
-implement the Next 16 contract. Revalidations made by 16.5 instances do not reach 16.6 ones during
+implement the Next 16 contract. Revalidations made by 16.4.2 instances do not reach 16.4.3 ones during
 the rollout ([above](#revalidations-do-not-cross-the-upgrade) has what to do). You can delete the subclass and use `withCache`. If you keep it:
 
 - With no `redis` option, the handler reads `REDIS_URL`. If that is unset it runs in memory; in
-  16.5 it connected to `localhost:6379`.
+  16.4.2 it connected to `localhost:6379`.
 - `tagPrefix` is ignored. Tag records live in the `<keyPrefix>tags` hash.
 - `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
 
@@ -576,7 +584,7 @@ on the Next 17 line they are removed or become a thin shim over the replacement.
 
 | Deprecated | Use instead | Why |
 |---|---|---|
-| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](#custom-handlers) | The 16.5 data stack: `"use cache"` only, its own key layout, and no page handler. It does not reconnect after `closeCache()`: create it again. |
+| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](#custom-handlers) | The original data stack: `"use cache"` only, its own key layout, and no page handler. It does not reconnect after `closeCache()`: create it again. |
 | `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
 | `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
 | `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
@@ -589,7 +597,7 @@ on the Next 17 line they are removed or become a thin shim over the replacement.
 
 ### Legacy setup (deprecated)
 
-The 16.5 wiring still works: a handler file that exports `createCacheHandler({ type })` (`type` is
+The 16.4.2 wiring still works: a handler file that exports `createCacheHandler({ type })` (`type` is
 `"memory"`, `"redis"`, `"valkey"` or `"elasticache"`), wired with `createCacheConfig` or by hand
 into `cacheHandlers`. It covers `"use cache"` only, not pages. In production it logs a one-time
 reminder to use `withCache`; pass `suppressIsrWarning: true` to silence it.

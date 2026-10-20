@@ -37,7 +37,7 @@
  * made since the last one. Writers' clocks may differ by up to {@link SYNC_SKEW_MS}; a larger
  * skew can delay an invalidation on other instances until the tag is updated again.
  *
- * Record semantics are 16.5.1's (see `../data-cache/redis.ts`): every update sets `stale = now`;
+ * Record semantics are `createCacheHandler`'s (see `../data-cache/redis.ts`): every update sets `stale = now`;
  * without durations it also sets `expired = now` (immediate), and with `durations.expire` it sets
  * `expired = now + expire` (served stale until then).
  */
@@ -254,7 +254,7 @@ export class TagStore {
   }
 
   /**
-   * The most recent invalidation time of these tags (16.5.1's `getExpiration`: the `stale` time),
+   * The most recent invalidation time of these tags (`createCacheHandler`'s `getExpiration`: the `stale` time),
    * or 0. Local state only.
    */
   getExpiration(tags: string[]): number {

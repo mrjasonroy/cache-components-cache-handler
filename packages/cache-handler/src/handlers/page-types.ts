@@ -76,7 +76,7 @@ export interface PageCacheGetContext {
   softTags?: string[];
   /** Tags of a `fetch` read. */
   tags?: string[];
-  /** 16.5 / Next 14 name for the implicit tags. */
+  /** 16.4.2 / Next 14 name for the implicit tags. */
   implicitTags?: string[];
   /** Revalidate period of a `fetch` read, in seconds. */
   revalidate?: number | false;
@@ -87,12 +87,12 @@ export interface PageCacheGetContext {
  * The context of `set`.
  */
 export interface PageCacheSetContext {
-  /** Tags of a `fetch` entry (and the 16.5 / Next 14 context). */
+  /** Tags of a `fetch` entry (and the 16.4.2 / Next 14 context). */
   tags?: string[];
   /** True for `fetch` and `unstable_cache` entries. */
   fetchCache?: boolean;
   cacheControl?: PageCacheControl;
-  /** 16.5 / Next 14 revalidate period. */
+  /** 16.4.2 / Next 14 revalidate period. */
   revalidate?: number | false;
   [key: string]: unknown;
 }

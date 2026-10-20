@@ -1,5 +1,5 @@
 /**
- * Every factory takes the connection tuning, not only the 16.5 `RedisCacheHandler`.
+ * Every factory takes the connection tuning, not only the 16.4.2 `RedisCacheHandler`.
  */
 
 import { describe, expectTypeOf, test } from "vitest";

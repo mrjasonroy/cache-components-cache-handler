@@ -114,7 +114,7 @@ describe("TagStore", () => {
   });
 
   test("tag keys never fall under the legacy `nextjs:tags:<tag>` namespace", () => {
-    // 16.5's RedisCacheHandler and createCacheHandler write `nextjs:tags:<tag>` (other types), so a
+    // 16.4.2's RedisCacheHandler and createCacheHandler write `nextjs:tags:<tag>` (other types), so a
     // tag named "index" must not land on the index sorted set.
     for (const key of [tagsKey("nextjs:"), tagIndexKey("nextjs:")]) {
       expect(key.startsWith("nextjs:tags:")).toBe(false);

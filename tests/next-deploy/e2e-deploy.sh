@@ -8,7 +8,7 @@
 # NEXT_DEPLOY_VARIANT=baseline    plain `next build` + one `next start`, nothing injected. One
 #                                 instance, because without a shared cache two instances would
 #                                 fail cache tests for reasons that have nothing to do with us.
-# NEXT_DEPLOY_VARIANT=pkg-16.5.1  the published 16.5.1 from npm, wired the 16.5.1 way.
+# NEXT_DEPLOY_VARIANT=pkg-16.4.2  the published 16.4.2 from npm, wired the 16.4.2 way.
 # NEXT_DEPLOY_VARIANT=branch      this branch's packed package, wired with withCache.
 # Both handler variants run NEXT_DEPLOY_INSTANCES (default 2) `next start` processes on one Redis
 # behind proxy.mjs. A fixture that keeps its own cacheHandler/cacheHandlers gets one instance:
@@ -29,7 +29,7 @@ SUITE="${NEXT_DEPLOY_CURRENT_SUITE:-unknown}"
 
 case "$VARIANT" in
   baseline) INSTANCES=1 ;;
-  pkg-16.5.1 | branch) INSTANCES="${NEXT_DEPLOY_INSTANCES:-2}" ;;
+  pkg-16.4.2 | branch) INSTANCES="${NEXT_DEPLOY_INSTANCES:-2}" ;;
   *)
     echo "[next-deploy] unknown NEXT_DEPLOY_VARIANT: $VARIANT" >&2
     exit 2
@@ -80,7 +80,7 @@ if [ "$VARIANT" != "baseline" ]; then
     node "$HERE/inject-handlers.mjs" "$APP_DIR" branch "$CACHE_HANDLER_TARBALL"
     export NEXT_DEPLOY_WITH_CACHE_OPTIONS="{\"useCache\":\"${NEXT_DEPLOY_USE_CACHE:-memory}\"}"
   else
-    node "$HERE/inject-handlers.mjs" "$APP_DIR" pkg-16.5.1
+    node "$HERE/inject-handlers.mjs" "$APP_DIR" pkg-16.4.2
   fi
   export REDIS_URL="$NEXT_DEPLOY_REDIS_URL"
   # One Redis serves every deployment in the job, possibly two at once (-c 2). A prefix per

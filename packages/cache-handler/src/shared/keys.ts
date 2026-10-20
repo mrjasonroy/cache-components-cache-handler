@@ -12,7 +12,7 @@
  * invalidate. Run Redis with `noeviction` or a `volatile-*` policy (entries have TTLs, tag keys do
  * not); under an `allkeys-*` policy an evicted tag hash brings every invalidated entry back.
  *
- * Nothing here starts with `<prefix>tags:`: 16.5's `RedisCacheHandler` and `createCacheHandler`
+ * Nothing here starts with `<prefix>tags:`: 16.4.2's `RedisCacheHandler` and `createCacheHandler`
  * write `nextjs:tags:<tag>` keys of other types, and a tag named `index` must not collide.
  *
  * Tag records sit above the build ID, so a `revalidateTag` during a rolling deploy reaches the

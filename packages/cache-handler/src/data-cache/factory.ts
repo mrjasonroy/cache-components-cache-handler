@@ -203,7 +203,7 @@ function warnOnFirstUse(handler: DataCacheHandler, options: IsrWarningOptions): 
  * });
  * ```
  *
- * @deprecated The 16.5 data cache stack. Use `withCache(nextConfig)`, or `createRemoteCacheHandler`
+ * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)`, or `createRemoteCacheHandler`
  *   / `createLocalCacheHandler` in a custom handler file, which take `url`, `client`, `keyPrefix`
  *   and the connection options.
  *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.

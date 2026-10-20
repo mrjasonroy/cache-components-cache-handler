@@ -77,7 +77,7 @@ describe("cache runtime", () => {
       expect.objectContaining({ connectTimeout: 1111, socketTimeout: 2222 }),
     );
 
-    // 16.5's `redis: RedisOptions` path.
+    // 16.4.2's `redis: RedisOptions` path.
     resolveConnection({ ...tuning, connectTimeout: 3333, redisOptions: { host: "cache" } });
     expect(ioredisMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ host: "cache", connectTimeout: 3333, socketTimeout: 2222 }),

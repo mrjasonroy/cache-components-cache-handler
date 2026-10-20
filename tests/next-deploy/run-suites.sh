@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs this shard's share of suites.txt through vercel/next.js's run-tests.js in deploy mode.
 #
-#   run-suites.sh <baseline|pkg-16.5.1|branch> <shard> <shards>
+#   run-suites.sh <baseline|pkg-16.4.2|branch> <shard> <shards>
 #
 # Needs NEXT_REPO_DIR (a built vercel/next.js checkout) and RESULTS_DIR. Optional: SUITE_FILTER
 # (extended regex over suites.txt lines), SUITE_TIMEOUT (seconds, default 2400), RETRIES
