@@ -1,7 +1,7 @@
 /**
  * Large entries (1 to 5 MB) through the page and remote handlers against a real Redis: byte-exact
- * round trips, GET/SET latency against the 1 s default `commandTimeout`, and a stalled Redis
- * during a big GET.
+ * round trips, GET/SET latency against the 1 s default `commandTimeout`, the compressed (v3) size
+ * of a 5 MB listing, and a stalled Redis during a big GET.
  *
  * Runs only when `CACHE_TEST_REDIS_URL` points at a disposable Redis running in the Docker
  * container named by `CACHE_TEST_REDIS_CONTAINER`; the stall test pauses and unpauses that
@@ -221,6 +221,31 @@ describe.runIf(enabled)("large values (real Redis)", () => {
     },
     30_000,
   );
+
+  test("remote handler: a 5 MB listing is stored Brotli-compressed (v3) and round-trips byte-exact", async () => {
+    setup();
+    const writer = instance(0);
+    const reader = instance(1);
+    const bytes = Buffer.from(listingHtml(5 * MB, "c"));
+
+    const [, setMs] = await timed(() => writer.remote.set("listing", streamEntry(bytes)));
+    const stored = await writer.connection()?.client.getBuffer(`${prefix}build-1:data:listing`);
+    const [found, getMs] = await timed(() => reader.remote.get("listing", []));
+    console.log(
+      `[large-values] remote 5 MB listing, compressed: stored ${stored?.byteLength} bytes, set ${setMs.toFixed(1)} ms, get ${getMs.toFixed(1)} ms`,
+    );
+
+    expect(stored?.subarray(0, 3).toString("latin1")).toBe("NCH");
+    expect(stored?.[3]).toBe(3);
+    // The uncompressed v2 length is in the preamble.
+    expect(stored?.readUInt32BE(5)).toBeGreaterThan(5 * MB);
+    expect(stored?.byteLength).toBeLessThan(MB / 2);
+    const got = await bytesOf(found);
+    expect(got?.byteLength).toBe(5 * MB);
+    expect(Buffer.compare(got as Buffer, bytes)).toBe(0);
+    expect(setMs).toBeLessThan(LATENCY_BOUND_MS);
+    expect(getMs).toBeLessThan(LATENCY_BOUND_MS);
+  }, 30_000);
 
   test("a run of 5 MB GETs never trips the timeout counter or drops the connection", async () => {
     setup();

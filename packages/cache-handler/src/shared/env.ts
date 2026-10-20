@@ -13,6 +13,7 @@
  * | `CACHE_KEY_PREFIX` | Prefix for every key. Default `nextjs:`. |
  * | `CACHE_REDIS=off` | Kill switch: memory everywhere, even with a URL set. |
  * | `CACHE_DEBUG=1` | Log hits, misses and state changes. Never the URL. |
+ * | `CACHE_COMPRESSION=off` | Store entries uncompressed (v2). Default: Brotli for entries of 16 KB and more. |
  *
  * During `next build` (`NEXT_PHASE=phase-production-build`, set by `next build` before it starts
  * the static-generation workers, next/dist/build/index.js) the handlers use memory and never
@@ -64,6 +65,14 @@ export function isDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
 }
 
 /**
+ * False when `CACHE_COMPRESSION=off` (also `0`, `false`, `no`): entries are stored uncompressed.
+ */
+export function isCompressionEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env.CACHE_COMPRESSION?.trim().toLowerCase();
+  return !(value === "off" || value === "0" || value === "false" || value === "no");
+}
+
+/**
  * `CACHE_KEY_PREFIX`, or `nextjs:`.
  */
 export function resolveKeyPrefix(env: NodeJS.ProcessEnv = process.env): string {
@@ -82,6 +91,9 @@ export interface ConnectionSettings {
   tls?: boolean;
   password?: string;
   commandTimeout?: number;
+  connectTimeout?: number;
+  socketTimeout?: number;
+  maxConsecutiveTimeouts?: number;
   initialConnectWaitMs?: number;
   errorLogIntervalMs?: number;
 }
@@ -105,7 +117,7 @@ function elasticacheOptions(
     host: endpoint,
     port,
     tls: settings.tls ?? env.ELASTICACHE_TLS !== "false",
-    connectTimeout: 10000,
+    connectTimeout: settings.connectTimeout ?? 10000,
     ...optional("password", password || undefined),
   };
 }
@@ -121,6 +133,9 @@ export function resolveConnectionOptions(
 ): RedisConnectionOptions {
   const common: RedisConnectionOptions = {
     ...optional("commandTimeout", settings.commandTimeout),
+    ...optional("connectTimeout", settings.connectTimeout),
+    ...optional("socketTimeout", settings.socketTimeout),
+    ...optional("maxConsecutiveTimeouts", settings.maxConsecutiveTimeouts),
     ...optional("initialConnectWaitMs", settings.initialConnectWaitMs),
     ...optional("errorLogIntervalMs", settings.errorLogIntervalMs),
   };

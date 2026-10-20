@@ -56,6 +56,44 @@ describe("createRemoteCacheHandler", () => {
     expect(result).toMatchObject({ tags: ["products"], stale: 30, expire: 300, revalidate: 60 });
   });
 
+  test("an entry of 16 KB or more is stored compressed (v3) and read back", async () => {
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    const text = Array.from({ length: 4000 }, (_, i) => `row ${i % 50} of the listing`).join("\n");
+    await handler.set("k", entry(text));
+
+    const stored = await fake.getBuffer(KEY);
+    expect(stored?.subarray(0, 3).toString("latin1")).toBe("NCH");
+    expect(stored?.[3]).toBe(3);
+    expect(stored?.length).toBeLessThan(text.length / 4);
+
+    const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const reader = createRemoteCacheHandler({
+      client: asClient(new FakeRedis(fake.items)),
+      buildId: "b1",
+      debug: true,
+    });
+    expect(await read(await reader.get("k", []))).toBe(text);
+    // CACHE_DEBUG shows the value's size and the compressed size in Redis.
+    expect(debug).toHaveBeenCalledWith("[RemoteCache]:", "get", "k", "hit", {
+      bytes: text.length,
+      encodedBytes: stored?.length,
+    });
+  });
+
+  test("CACHE_COMPRESSION=off stores v2, and a small entry is v2 either way", async () => {
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    await handler.set("small", entry("hello"));
+    expect((await fake.getBuffer("nextjs:b1:data:small"))?.[3]).toBe(2);
+
+    process.env.CACHE_COMPRESSION = "off";
+    const text = "x".repeat(64 * 1024);
+    await handler.set("k", entry(text));
+    expect((await fake.getBuffer(KEY))?.[3]).toBe(2);
+    expect(await read(await handler.get("k", []))).toBe(text);
+  });
+
   test("an infinite expire is kept 24 h; an expired entry is not stored", async () => {
     const fake = new FakeRedis();
     const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });

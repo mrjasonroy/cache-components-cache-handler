@@ -137,6 +137,27 @@ keys have none. Run Redis with `maxmemory-policy noeviction` or a `volatile-*` p
 (`volatile-lru`), never `allkeys-lru`: an evicted tag hash brings every invalidated entry back. Entries are binary and not human-readable.
 `CACHE_DEBUG=1` on the app logs what is read and written, with each value's size: `bytes` (the value; the encoded entry for pages) and, for `"use cache: remote"`, `encodedBytes` (as stored in Redis).
 
+### Entry format and compression
+
+An entry is `NCH`, a format version byte and the value. Version 2 is a JSON header plus the raw
+bytes of every Buffer in the value (no base64); bytes repeated within an entry, such as a page's
+`/_full` segment, are stored once. Version 3 is a version 2 entry compressed with Brotli
+(quality 4): `NCH` · `3` · a codec byte (`1` = Brotli; `2` is reserved for zstd) · the version 2
+length (uint32, big-endian) · the compressed bytes.
+
+Entries of 16 KB and more are written as version 3, unless compressing would not shrink them.
+`CACHE_COMPRESSION=off` writes version 2 only. Readers read both versions whatever the setting,
+and an entry they cannot read (16.5's JSON, a future version or codec, a corrupt or truncated
+entry) is a miss.
+
+For sizing, count on page entries taking 5 to 15 times less memory and bandwidth than their
+uncompressed size; text-like `"use cache: remote"` values shrink as much. Measured on generated
+listing pages: a ~200 KB page entry (140 KB as version 2) stores in about 14 KB, and a "5 MB"
+search page (16 MB of HTML and RSC) in about 1 MB, which also keeps it well inside the 1 s
+`commandTimeout` on a 100 Mbps link. Compression runs off the event loop and costs about 0.5 ms
+per 200 KB written and 0.1 ms read. Values that are already compressed (images, archives) stay
+version 2.
+
 ```bash
 redis-cli info memory
 redis-cli --scan --pattern 'nextjs:*:page:*' | wc -l   # page entries, every build

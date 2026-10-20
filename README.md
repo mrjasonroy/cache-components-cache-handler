@@ -101,6 +101,7 @@ from the environment, the same under `next start`, standalone and Docker.
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
+| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. |
 
 There are no tuning variables for timeouts or TTLs: the defaults above are the product. If you
 need different ones, write a [custom handler file](#custom-handlers).
@@ -480,6 +481,9 @@ or `CACHE_DEBUG`. Its options:
 | `client` | — | Your own ioredis `Redis` or `Cluster`; you own its lifecycle |
 | `keyPrefix` / `tagPrefix` | `"nextjs:data-cache:"` / `"nextjs:tags:"` | Key prefixes |
 | `commandTimeout` | `1000` (ms) | Per-command timeout |
+| `connectTimeout` | `2000` (ms; `10000` for elasticache) | Connect timeout |
+| `socketTimeout` | `2000` (ms) | Drop the connection when a pending command gets no reply for this long |
+| `maxConsecutiveTimeouts` | `3` | Timeouts in a row before the connection is dropped and redialled (with `client`: before it is marked not ready for 2 s) |
 | `memoryFallback` / `fallbackTTL` | `true` / `60` (s) | Serve from memory during an outage, each entry for at most `fallbackTTL` |
 | `defaultTTL` | `86400` (s) | TTL for entries without a finite `expire` |
 | `tagTTL` | `31622400` (s, 366 days) | TTL for tag records; entry TTLs are capped at it |

@@ -238,6 +238,32 @@ describe("createCacheHandler factory", () => {
     );
   });
 
+  test("passes connectTimeout and socketTimeout through to the client", () => {
+    createCacheHandler({ type: "redis", connectTimeout: 1234, socketTimeout: 2345 });
+    expect(redisConstructorMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ connectTimeout: 1234, socketTimeout: 2345 }),
+    );
+
+    createCacheHandler({ type: "elasticache", endpoint: "cache.local", connectTimeout: 4321 });
+    expect(redisConstructorMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ host: "cache.local", connectTimeout: 4321 }),
+    );
+  });
+
+  test("maxConsecutiveTimeouts: 1 drops the connection after one timeout", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    createCacheHandler({ type: "redis", maxConsecutiveTimeouts: 1 });
+    const client = redisConstructorMock.mock.results[0]?.value as FakeIoredis;
+
+    const timedOut = Promise.reject(new Error("Command timed out"));
+    timedOut.catch(() => {});
+    client.sendCommand({ promise: timedOut });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(client.disconnect).toHaveBeenCalledWith(true);
+  });
+
   // Without an "error" listener ioredis prints "Unhandled error event" on every
   // reconnect attempt; with one that swallows, a dead Redis is invisible.
   test("logs client connection errors, rate-limited", () => {

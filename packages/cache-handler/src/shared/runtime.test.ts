@@ -68,6 +68,22 @@ describe("cache runtime", () => {
     expect(runtime.stores.pageFallback.size + runtime.stores.dataFallback.size).toBe(0);
   });
 
+  test("connectTimeout, socketTimeout and maxConsecutiveTimeouts reach the connection", () => {
+    process.env.REDIS_URL = "redis://cache:6379";
+    const tuning = { connectTimeout: 1111, socketTimeout: 2222, maxConsecutiveTimeouts: 1 };
+    resolveConnection(tuning);
+    expect(ioredisMock).toHaveBeenLastCalledWith(
+      "redis://cache:6379",
+      expect.objectContaining({ connectTimeout: 1111, socketTimeout: 2222 }),
+    );
+
+    // 16.5's `redis: RedisOptions` path.
+    resolveConnection({ ...tuning, connectTimeout: 3333, redisOptions: { host: "cache" } });
+    expect(ioredisMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ host: "cache", connectTimeout: 3333, socketTimeout: 2222 }),
+    );
+  });
+
   test("stream helpers round-trip bytes", async () => {
     const bytes = Buffer.from([1, 2, 3]);
     expect([...(await streamToBuffer(bufferToStream(bytes)))]).toEqual([1, 2, 3]);

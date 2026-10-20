@@ -85,6 +85,12 @@ export interface CacheOptions {
 export interface RuntimeOptions extends CacheOptions {
   /** ioredis options object, from 16.5's `redis: RedisOptions`. */
   redisOptions?: RedisOptions;
+  /** Connect timeout in ms (16.5 handler options only). */
+  connectTimeout?: number;
+  /** Drop the connection when a pending command gets no reply for this many ms. */
+  socketTimeout?: number;
+  /** Drop the connection, or mark a passed client not ready, after this many timeouts in a row. */
+  maxConsecutiveTimeouts?: number;
 }
 
 /**
@@ -141,24 +147,39 @@ function getRegistry(): Map<string, CacheRuntime> {
  */
 export function resolveConnection(options: RuntimeOptions = {}): RedisConnection | undefined {
   if (!shouldUseRedis()) return undefined;
+  const { commandTimeout, connectTimeout, socketTimeout, maxConsecutiveTimeouts } = options;
   if (options.client) {
     return getClientConnection(
       options.client,
-      options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout },
+      definedOnly({ commandTimeout, maxConsecutiveTimeouts }),
     );
   }
 
-  const timeout =
-    options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout };
+  const tuning = definedOnly({
+    commandTimeout,
+    connectTimeout,
+    socketTimeout,
+    maxConsecutiveTimeouts,
+  });
   if (options.redisOptions && !options.url) {
     const connectionOptions: RedisConnectionOptions = {
-      ...timeout,
+      ...tuning,
       redisOptions: options.redisOptions,
     };
     return getRedisConnection(connectionOptions);
   }
-  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...timeout });
+  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...tuning });
   return connectionOptions ? getRedisConnection(connectionOptions) : undefined;
+}
+
+/**
+ * `options` without its undefined values, so they neither override a default nor split the
+ * connection pool.
+ */
+function definedOnly<T extends object>(options: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(options).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
 }
 
 function connectionId(connection: RedisConnection | undefined): string {

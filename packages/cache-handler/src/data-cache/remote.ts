@@ -2,8 +2,8 @@
  * `"use cache: remote"` handler: entries in Redis, shared by every instance, with the memory
  * fallback built in.
  *
- * - Entries live under `<prefix><buildId>:data:<key>` in the binary v2 format
- *   (`../shared/codec.ts`), with a TTL of `timestamp + expire` capped at the longest entry age
+ * - Entries live under `<prefix><buildId>:data:<key>` in the binary v2 format, Brotli-compressed
+ *   (v3) from 16 KB unless `CACHE_COMPRESSION=off` (`../shared/codec.ts`), with a TTL of `timestamp + expire` capped at the longest entry age
  *   (365 days), which reads enforce too. They are served until `expire`; past `revalidate` Next
  *   serves them and regenerates in the background.
  * - Tags go through the process's shared tag store (`../shared/tag-store.ts`). Like the page
@@ -18,7 +18,7 @@
  */
 
 import { getBuildId } from "../shared/build-id.js";
-import { decodeEntry, encodeEntry } from "../shared/codec.js";
+import { decodeStored, encodeEntry, encodeStored } from "../shared/codec.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { dataKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
@@ -57,8 +57,8 @@ export interface RemoteCacheHandlerOptions extends CacheOptions {
 }
 
 /**
- * Sizes for the debug log: the value's bytes, and the entry as stored in Redis. Only computed with
- * debug logging on (arguments of an optional call are not evaluated otherwise).
+ * Sizes for the debug log of an entry in memory: the value's bytes, and the entry's v2 encoding.
+ * Only computed with debug logging on (arguments of an optional call are not evaluated otherwise).
  */
 function sizes(stored: StoredDataEntry): { bytes: number; encodedBytes: number } {
   return { bytes: stored.value.byteLength, encodedBytes: encodeEntry(stored).byteLength };
@@ -120,8 +120,11 @@ export function createRemoteCacheHandler(
       // entry, so a failed or skipped `refreshTags` never serves an invalidated entry.
       try {
         const key = keyOf(cacheKey);
+        let encodedBytes = 0;
         const stored = await readWithTags(runtime, key, inMemory?.stored, softTags, async () => {
-          const found = decodeEntry<StoredDataEntry>(await connection.client.getBuffer(key));
+          const raw = await connection.client.getBuffer(key);
+          encodedBytes = raw?.byteLength ?? 0;
+          const found = await decodeStored<StoredDataEntry>(raw);
           return found && found.value instanceof Uint8Array ? found : undefined;
         });
         if (!stored) {
@@ -130,7 +133,10 @@ export function createRemoteCacheHandler(
         }
         const until = inMemory ? inMemory.until : stored.timestamp + stored.expire * 1000;
         const entry = toDataCacheEntry(stored, tags, until);
-        log?.("get", cacheKey, entry ? "hit" : "invalidated", sizes(stored));
+        log?.("get", cacheKey, entry ? "hit" : "invalidated", {
+          bytes: stored.value.byteLength,
+          encodedBytes: encodedBytes || encodeEntry(stored).byteLength,
+        });
         return entry;
       } catch (error) {
         runtime.reportError("get", error);
@@ -161,7 +167,7 @@ export function createRemoteCacheHandler(
         if (await isRedisReady(runtime)) {
           try {
             const key = keyOf(cacheKey);
-            const encoded = encodeEntry(stored);
+            const encoded = await encodeStored(stored);
             await connection.client.set(key, encoded, "EX", ttl);
             stores.entryTags.set(key, stored.tags, stored.tags.length, null);
             log?.("set", cacheKey, "redis", {

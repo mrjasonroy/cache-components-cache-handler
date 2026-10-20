@@ -84,10 +84,31 @@ export interface CacheHandlerOptions extends IsrWarningOptions {
   commandTimeout?: number;
 
   /**
+   * Connect timeout in ms for redis/valkey/elasticache.
+   * @default 2000 (10000 for elasticache)
+   */
+  connectTimeout?: number;
+
+  /**
+   * Drop the connection when a pending command gets no reply for this many ms
+   * (redis/valkey/elasticache).
+   * @default 2000
+   */
+  socketTimeout?: number;
+
+  /**
+   * Drop and rebuild the connection after this many command timeouts in a row; with a
+   * `client`, mark it not ready for 2 s instead (redis/valkey/elasticache).
+   * @default 3
+   */
+  maxConsecutiveTimeouts?: number;
+
+  /**
    * An ioredis `Redis` or `Cluster` to use instead of opening a connection
    * (redis/valkey/elasticache). You own its lifecycle and options; it is never closed,
    * disconnected or reconfigured. The handler's own commands on it are bounded by
-   * `commandTimeout`, and 3 timeouts in a row switch to the memory fallback for 2 s at a time.
+   * `commandTimeout`, and `maxConsecutiveTimeouts` timeouts in a row switch to the memory
+   * fallback for 2 s at a time.
    */
   client?: Redis | Cluster;
 
@@ -203,10 +224,14 @@ export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandl
         });
       }
       const connection = options.client
-        ? getClientConnection(
-            options.client,
-            options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout },
-          )
+        ? getClientConnection(options.client, {
+            ...(options.commandTimeout === undefined
+              ? {}
+              : { commandTimeout: options.commandTimeout }),
+            ...(options.maxConsecutiveTimeouts === undefined
+              ? {}
+              : { maxConsecutiveTimeouts: options.maxConsecutiveTimeouts }),
+          })
         : getRedisConnection(resolveConnectionOptions({ ...options, type }));
       const redis = createRedisDataCacheHandler({
         redis: createIoredisAdapter(connection.client),

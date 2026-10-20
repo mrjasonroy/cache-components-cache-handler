@@ -370,6 +370,31 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       );
     });
 
+    test("a page of 16 KB or more is stored compressed (v3) and read back by another instance", async () => {
+      const fake = new FakeRedis();
+      const html = "<p>large</p>".repeat(4_000);
+      await handlerFor(fake).set("/blog", page(html), pageCtx);
+
+      const raw = await fake.getBuffer(KEY);
+      expect(raw?.[3]).toBe(3);
+      expect(raw?.length).toBeLessThan(html.length);
+
+      await resetCacheState();
+      const result = await handlerFor(fake).get("/blog", { kind: "APP_PAGE", isFallback: false });
+      expect(result?.value.html).toBe(html);
+    });
+
+    test("with CACHE_COMPRESSION=off a large page is stored uncompressed (v2)", async () => {
+      process.env.CACHE_COMPRESSION = "off";
+      const fake = new FakeRedis();
+      const html = "<p>large</p>".repeat(4_000);
+      await handlerFor(fake).set("/blog", page(html), pageCtx);
+
+      expect((await fake.getBuffer(KEY))?.[3]).toBe(2);
+      const result = await handlerFor(fake).get("/blog", { kind: "APP_PAGE", isFallback: false });
+      expect(result?.value.html).toBe(html);
+    });
+
     test("an entry older than the longest entry age is never served", async () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       const fake = new FakeRedis();
@@ -557,6 +582,33 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       new RedisCacheHandler({ redis: { host: "legacy-host", port: 6390 } });
       expect(ioredisMock).toHaveBeenCalledWith(
         expect.objectContaining({ host: "legacy-host", port: 6390, enableOfflineQueue: false }),
+      );
+    });
+
+    test("connectTimeout and socketTimeout reach the ioredis client opened from a URL", () => {
+      ioredisMock.mockImplementation(() => new FakeRedis());
+      const Handler = createRedisCacheHandler({
+        url: "redis://timeouts:6379",
+        connectTimeout: 1234,
+        socketTimeout: 2345,
+      });
+      new Handler({});
+      expect(ioredisMock).toHaveBeenCalledWith(
+        "redis://timeouts:6379",
+        expect.objectContaining({ connectTimeout: 1234, socketTimeout: 2345 }),
+      );
+    });
+
+    test("connectTimeout and socketTimeout reach the ioredis client opened from options", () => {
+      ioredisMock.mockImplementation(() => new FakeRedis());
+      const Handler = createRedisCacheHandler({
+        redis: { host: "h" },
+        connectTimeout: 1234,
+        socketTimeout: 2345,
+      });
+      new Handler({});
+      expect(ioredisMock).toHaveBeenCalledWith(
+        expect.objectContaining({ host: "h", connectTimeout: 1234, socketTimeout: 2345 }),
       );
     });
 

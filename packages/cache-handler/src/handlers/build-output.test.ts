@@ -91,6 +91,19 @@ describe("page handler: prerendered build output", () => {
     expect(result?.lastModified).toBe(build.builtAt);
   });
 
+  test("a large build output is written through to Redis compressed (v3), and read back", async () => {
+    const html = `<html>${"<p>built</p>".repeat(4_000)}</html>`;
+    writeFileSync(join(build.serverDistDir, "app", "blog.html"), html);
+    const fake = new FakeRedis();
+    await handlerFor(fake).get(BLOG, appPageCtx);
+    const raw = await fake.getBuffer(BLOG_KEY);
+    expect(raw?.[3]).toBe(3);
+
+    rmSync(build.serverDistDir, { recursive: true, force: true });
+    await restart();
+    expect((await handlerFor(fake).get(BLOG, appPageCtx))?.value.html).toBe(html);
+  });
+
   test("the build output is written through to Redis, and the next read is a Redis hit", async () => {
     const fake = new FakeRedis();
     await handlerFor(fake).get(BLOG, appPageCtx);

@@ -530,7 +530,7 @@ export function createRedisConnection(
  */
 export function getClientConnection(
   client: RedisClientLike,
-  options: { commandTimeout?: number } = {},
+  options: { commandTimeout?: number; maxConsecutiveTimeouts?: number } = {},
 ): RedisConnection {
   const connections = getClientConnections();
   const existing = connections.get(client);
@@ -538,6 +538,9 @@ export function getClientConnection(
   const connection = createRedisConnection(client, {
     owned: false,
     ...(options.commandTimeout === undefined ? {} : { commandTimeout: options.commandTimeout }),
+    ...(options.maxConsecutiveTimeouts === undefined
+      ? {}
+      : { maxConsecutiveTimeouts: options.maxConsecutiveTimeouts }),
   });
   connections.set(client, connection);
   return connection;

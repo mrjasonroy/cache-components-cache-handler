@@ -75,6 +75,7 @@ see [Redis Cluster](./redis.md#redis-cluster).
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
+| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. |
 
 The full table is in the README under [Environment variables](../README.md#environment-variables).
 

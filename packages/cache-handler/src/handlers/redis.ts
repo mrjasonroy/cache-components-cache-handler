@@ -37,7 +37,7 @@
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
-import { decodeEntry, encodeEntry } from "../shared/codec.js";
+import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
 import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
 import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
@@ -98,6 +98,27 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
    * @default the app's BUILD_ID, read from `serverDistDir` or the environment on first use
    */
   buildId?: string;
+
+  /**
+   * Milliseconds to wait for the connection to open. 16.5 path; `withCache` reads only the
+   * environment.
+   * @default 2000
+   */
+  connectTimeout?: number;
+
+  /**
+   * Milliseconds a pending command may go without a reply before the connection is dropped.
+   * 16.5 path; `withCache` reads only the environment.
+   * @default 2000
+   */
+  socketTimeout?: number;
+
+  /**
+   * Consecutive command timeouts after which an owned connection is dropped and reopened. 16.5
+   * path; `withCache` reads only the environment.
+   * @default 3
+   */
+  maxConsecutiveTimeouts?: number;
 }
 
 interface StoredPageEntry {
@@ -139,6 +160,9 @@ function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
     keyPrefix: options.keyPrefix,
     memoryFallback: options.memoryFallback,
     commandTimeout: options.commandTimeout,
+    connectTimeout: options.connectTimeout,
+    socketTimeout: options.socketTimeout,
+    maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
     debug: options.debug,
   };
 }
@@ -334,7 +358,7 @@ export class RedisCacheHandler {
     if (!connection) return Promise.resolve(inMemory);
     const key = this.redisKey(cacheKey);
     return readWithTags(this.runtime, key, inMemory, requestTags, async () => {
-      const entry = decodeEntry<StoredPageEntry>(await connection.client.getBuffer(key));
+      const entry = await decodeStored<StoredPageEntry>(await connection.client.getBuffer(key));
       return entry?.value ? entry : undefined;
     });
   }
@@ -420,13 +444,14 @@ export class RedisCacheHandler {
     const { connection, stores } = this.runtime;
     const { entry, lifetime } = built;
     if (lifetime <= 0) return;
-    const encoded = encodeEntry(entry);
     if (!connection) {
-      stores.page.set(cacheKey, { entry }, encoded.byteLength, Date.now() + lifetime * 1000);
-      this.log?.("set", cacheKey, "build output, memory", { lifetime, bytes: encoded.byteLength });
+      const bytes = encodeEntry(entry).byteLength;
+      stores.page.set(cacheKey, { entry }, bytes, Date.now() + lifetime * 1000);
+      this.log?.("set", cacheKey, "build output, memory", { lifetime, bytes });
       return;
     }
     try {
+      const encoded = await encodeStored(entry);
       const key = this.redisKey(cacheKey);
       const written = await connection.client.set(key, encoded, "EX", lifetime, "NX");
       stores.entryTags.set(key, entry.tags, entry.tags.length, null);
@@ -434,7 +459,7 @@ export class RedisCacheHandler {
         "set",
         cacheKey,
         written ? "build output, redis" : "build output, already in redis",
-        { lifetime, bytes: encoded.byteLength },
+        { lifetime, ...storedSizes(encoded) },
       );
     } catch (error) {
       this.runtime.reportError("set", error);
@@ -500,11 +525,11 @@ export class RedisCacheHandler {
     let encoded: Buffer | undefined;
     if (await isRedisReady(this.runtime)) {
       try {
-        encoded = encodeEntry(entry);
+        encoded = await encodeStored(entry);
         const key = this.redisKey(cacheKey);
         await connection.client.set(key, encoded, "EX", lifetime);
         stores.entryTags.set(key, tags, tags.length, null);
-        this.log?.("set", cacheKey, "redis", { tags, lifetime, bytes: encoded.byteLength });
+        this.log?.("set", cacheKey, "redis", { tags, lifetime, ...storedSizes(encoded) });
         return;
       } catch (error) {
         this.runtime.reportError("set", error);
@@ -512,7 +537,7 @@ export class RedisCacheHandler {
     }
 
     if (!this.memoryFallback) return;
-    const size = (encoded ?? encodeEntry(entry)).byteLength;
+    const size = encoded ? storedSizes(encoded).bytes : encodeEntry(entry).byteLength;
     const until = entry.lastModified + Math.min(lifetime, FALLBACK_TTL_SECONDS) * 1000;
     stores.pageFallback.set(cacheKey, { entry }, size, until);
     this.log?.("set", cacheKey, "fallback memory", { bytes: size });

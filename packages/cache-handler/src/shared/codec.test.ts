@@ -1,5 +1,17 @@
+import { randomBytes } from "node:crypto";
+import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
-import { FORMAT_VERSION, decodeEntry, encodeEntry, encodeEntryString } from "./codec.js";
+import {
+  COMPRESSED_FORMAT_VERSION,
+  COMPRESSION_THRESHOLD_BYTES,
+  FORMAT_VERSION,
+  decodeEntry,
+  decodeStored,
+  encodeEntry,
+  encodeEntryString,
+  encodeStored,
+  storedSizes,
+} from "./codec.js";
 
 const PREAMBLE_LENGTH = 8;
 
@@ -249,4 +261,258 @@ describe("entry codec", () => {
       expect(deduped[3]).toBe(FORMAT_VERSION);
     });
   });
+
+  describe("compressed entries (format v3)", () => {
+    /** Text-like bytes that compress well, as page HTML and flight data do. */
+    function text(size: number, seed = 1): Buffer {
+      const words = ["valve", "sensor", "pressure", "stainless", "actuator", "flow", "meter"];
+      let out = "";
+      for (let i = 0; out.length < size; i++)
+        out += `${words[(i * 7 + seed) % words.length]}-${i % 97} `;
+      return Buffer.from(out.slice(0, size));
+    }
+
+    const on = {};
+    const off = { CACHE_COMPRESSION: "off" };
+    const COMPRESSED_PREAMBLE_LENGTH = 9;
+
+    test("above the threshold: stored as v3 brotli, decoded to the same value", async () => {
+      const value = { value: text(64 * 1024), tags: ["a"], html: "x".repeat(1000) };
+      const stored = await encodeStored(value, on);
+
+      expect(stored.subarray(0, 3).toString("latin1")).toBe("NCH");
+      expect(stored[3]).toBe(COMPRESSED_FORMAT_VERSION);
+      expect(stored[4]).toBe(1);
+      const v2 = encodeEntry(value);
+      expect(stored.readUInt32BE(5)).toBe(v2.length);
+      expect(brotliDecompressSync(stored.subarray(COMPRESSED_PREAMBLE_LENGTH))).toEqual(v2);
+      expect(stored.length).toBeLessThan(v2.length / 4);
+      expect(storedSizes(stored)).toEqual({ bytes: v2.length, encodedBytes: stored.length });
+
+      const decoded = await decodeStored<typeof value>(stored);
+      expect(Buffer.compare(decoded?.value ?? Buffer.alloc(0), value.value)).toBe(0);
+      expect(decoded?.tags).toEqual(["a"]);
+      expect(decoded?.html).toBe(value.html);
+    });
+
+    test("below the threshold: stored as plain v2", async () => {
+      const value = { value: text(COMPRESSION_THRESHOLD_BYTES - 200), tags: [] };
+      const stored = await encodeStored(value, on);
+
+      expect(stored).toEqual(encodeEntry(value));
+      expect(storedSizes(stored)).toEqual({ bytes: stored.length, encodedBytes: stored.length });
+      const decoded = await decodeStored<typeof value>(stored);
+      expect(Buffer.compare(decoded?.value ?? Buffer.alloc(0), value.value)).toBe(0);
+    });
+
+    test("the threshold is 16 KB of encoded v2 entry", async () => {
+      expect(COMPRESSION_THRESHOLD_BYTES).toBe(16 * 1024);
+      const at = { value: text(COMPRESSION_THRESHOLD_BYTES) };
+      expect((await encodeStored(at, on))[3]).toBe(COMPRESSED_FORMAT_VERSION);
+    });
+
+    test("bytes that do not compress are stored as v2", async () => {
+      const random = randomBytes(64 * 1024);
+      const stored = await encodeStored({ value: random }, on);
+      expect(stored[3]).toBe(FORMAT_VERSION);
+    });
+
+    test("CACHE_COMPRESSION=off (also 0, false) writes v2", async () => {
+      const value = { value: text(64 * 1024) };
+      for (const setting of ["off", "0", "false", "OFF"]) {
+        const stored = await encodeStored(value, { CACHE_COMPRESSION: setting });
+        expect(stored, setting).toEqual(encodeEntry(value));
+      }
+      // The reader still reads both.
+      expect(await decodeStored(await encodeStored(value, on))).toBeDefined();
+      expect(await decodeStored(await encodeStored(value, off))).toBeDefined();
+    });
+
+    test("v2 entries, binary or base64, still decode", async () => {
+      const value = { value: Buffer.from("plain v2"), tags: ["t"] };
+      for (const raw of [encodeEntry(value), encodeEntryString(value)]) {
+        const decoded = await decodeStored<typeof value>(raw);
+        expect(Buffer.from(decoded?.value ?? []).toString()).toBe("plain v2");
+      }
+      expect(await decodeStored(null)).toBeUndefined();
+      expect(await decodeStored(undefined)).toBeUndefined();
+      expect(await decodeStored("")).toBeUndefined();
+    });
+
+    test("a v3 entry handed back as base64 or latin1 text decodes", async () => {
+      const value = { value: text(64 * 1024) };
+      const stored = await encodeStored(value, on);
+      for (const raw of [stored.toString("base64"), stored.toString("latin1")]) {
+        const decoded = await decodeStored<typeof value>(raw);
+        expect(Buffer.compare(decoded?.value ?? Buffer.alloc(0), value.value)).toBe(0);
+      }
+    });
+
+    test("the synchronous v2 reader treats v3 as a miss", async () => {
+      expect(decodeEntry(await encodeStored({ value: text(64 * 1024) }, on))).toBeUndefined();
+    });
+
+    test("a corrupt, truncated or mislabelled v3 entry is a miss, never a throw", async () => {
+      const stored = await encodeStored({ value: text(64 * 1024) }, on);
+
+      const truncated = [
+        stored.subarray(0, stored.length - 10),
+        stored.subarray(0, COMPRESSED_PREAMBLE_LENGTH + 5),
+        stored.subarray(0, COMPRESSED_PREAMBLE_LENGTH),
+        stored.subarray(0, 6),
+      ];
+      for (const raw of truncated) await expect(decodeStored(raw)).resolves.toBeUndefined();
+
+      const flipped = Buffer.from(stored);
+      for (let i = COMPRESSED_PREAMBLE_LENGTH; i < flipped.length; i += 7) flipped[i] ^= 0xa5;
+      await expect(decodeStored(flipped)).resolves.toBeUndefined();
+
+      // The stored length is wrong, either way.
+      for (const delta of [-1, 1]) {
+        const wrongLength = Buffer.from(stored);
+        wrongLength.writeUInt32BE(stored.readUInt32BE(5) + delta, 5);
+        await expect(decodeStored(wrongLength)).resolves.toBeUndefined();
+      }
+
+      // A compressed payload that is not a v2 entry.
+      const notV2 = Buffer.from(stored.subarray(0, COMPRESSED_PREAMBLE_LENGTH));
+      const payload = brotliCompressSync(Buffer.from("not an entry at all"));
+      notV2.writeUInt32BE(19, 5);
+      await expect(decodeStored(Buffer.concat([notV2, payload]))).resolves.toBeUndefined();
+    });
+
+    test("an unknown codec byte is a miss", async () => {
+      const stored = await encodeStored({ value: text(64 * 1024) }, on);
+      for (const codec of [0, 2, 3, 255]) {
+        const other = Buffer.from(stored);
+        other[4] = codec;
+        await expect(decodeStored(other), String(codec)).resolves.toBeUndefined();
+      }
+    });
+
+    test("the /_full dedup survives compression", async () => {
+      const full = text(40_000, 3);
+      const rscData = Buffer.concat([Buffer.from([0x23]), full]);
+      const value = {
+        kind: "APP_PAGE",
+        html: "<html></html>",
+        rscData,
+        segmentData: new Map<string, Buffer>([["/_full", full]]),
+      };
+      const stored = await encodeStored(value, on);
+
+      expect(stored[3]).toBe(COMPRESSED_FORMAT_VERSION);
+      const inner = brotliDecompressSync(stored.subarray(COMPRESSED_PREAMBLE_LENGTH));
+      expect(inner).toEqual(encodeEntry(value));
+      // One copy of the flight data, not two.
+      expect(inner.length - PREAMBLE_LENGTH - headerLength(inner)).toBe(rscData.length);
+
+      const decoded = await decodeStored<typeof value>(stored);
+      expect(Buffer.compare(decoded?.rscData ?? Buffer.alloc(0), rscData)).toBe(0);
+      expect(Buffer.compare(decoded?.segmentData.get("/_full") ?? Buffer.alloc(0), full)).toBe(0);
+    });
+
+    test("a DS-shaped ~200 KB page entry is stored in a fraction of its size", async () => {
+      const value = dsPage();
+      const v2 = encodeEntry(value);
+      const stored = await encodeStored(value, on);
+
+      // ~190 KB of parts; /_full is stored once, so v2 is ~140 KB.
+      expect(v2.length).toBeGreaterThan(130 * 1024);
+      expect(v2.length).toBeLessThan(150 * 1024);
+      expect(stored[3]).toBe(COMPRESSED_FORMAT_VERSION);
+      // Brotli-4 takes it under 30 KB (the study: 14 KB on generated listings, ~half that ratio on
+      // real output).
+      expect(stored.length).toBeLessThan(30 * 1024);
+
+      const decoded = await decodeStored<ReturnType<typeof dsPage>>(stored);
+      expect(decoded?.html).toBe(value.html);
+      expect(decoded?.postponed).toBe(value.postponed);
+      expect(Buffer.compare(decoded?.rscData ?? Buffer.alloc(0), value.rscData)).toBe(0);
+      for (const [path, bytes] of value.segmentData) {
+        expect(Buffer.compare(decoded?.segmentData.get(path) ?? Buffer.alloc(0), bytes)).toBe(0);
+      }
+    });
+  });
 });
+
+/**
+ * An APP_PAGE value in the proportions of the DS site's entries (drafts/gn16-18-large-values.md):
+ * html ~20 KB, `rscData` ~50 KB (a `#` marker plus the flight data), ~108 KB of segments in 7,
+ * one of them `/_full`, and ~10 KB of `postponed`.
+ */
+function dsPage() {
+  let seed = 7;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const pick = <T>(list: T[]): T => list[Math.floor(rand() * list.length)] as T;
+  const hex = (n: number) =>
+    Array.from({ length: n }, () => Math.floor(rand() * 16).toString(16)).join("");
+  const adjectives = ["Industrial", "Compact", "High-Precision", "Stainless", "Sealed", "Rugged"];
+  const nouns = ["Pressure Transducer", "Ball Valve", "Linear Actuator", "Flow Meter", "Load Cell"];
+  const vendors = ["Acme Controls", "Bürkert", "Parker Hannifin", "Omega Engineering", "Festo"];
+  const specs = ["Max Pressure", "Operating Temp", "Accuracy", "Output", "Voltage", "IP Rating"];
+  const products = Array.from({ length: 450 }, (_, i) => {
+    const name = `${pick(adjectives)} ${pick(nouns)} ${Math.floor(rand() * 9000 + 1000)}`;
+    return {
+      id: `${hex(8)}-${i}`,
+      name,
+      vendor: pick(vendors),
+      img: `/_next/image?url=%2Fimages%2F${hex(16)}.jpg&w=256&q=75`,
+      price: (rand() * 4000 + 10).toFixed(2),
+      specs: Array.from({ length: 4 }, () => [pick(specs), (rand() * 500).toFixed(1)]),
+    };
+  });
+  const flightRow = (p: (typeof products)[number], key: string) =>
+    `["$","li","${key}${p.id}",{"children":[["$","a",null,{"href":"/product/${p.id}","children":[["$","$L1a",null,{"src":"${p.img}","alt":"${p.name}"}],["$","h3",null,{"children":"${p.name}"}]]}],["$","p",null,{"children":["by ","${p.vendor}"]}],["$","dl",null,{"children":[${p.specs.map(([a, b]) => `["$","dt",null,{"children":"${a}"}],["$","dd",null,{"children":"${b}"}]`).join(",")}]}],["$","span",null,{"children":"$$${p.price}"}]]}]`;
+  const rows = (key: string, bytes: number, from = 0) => {
+    const out: string[] = [];
+    let size = 0;
+    for (const p of products.slice(from)) {
+      if (size >= bytes) break;
+      const row = flightRow(p, key);
+      out.push(row);
+      size += row.length + 1;
+    }
+    return out.join(",");
+  };
+  const nav = (bytes: number, key: string) => {
+    const items: string[] = [];
+    for (let i = 0, size = 0; size < bytes; i++) {
+      const item = `["$","li","${key}${i}",{"children":["$","a",null,{"href":"/category/${i}","children":"${pick(adjectives)} ${pick(nouns)}s"}]}]`;
+      items.push(item);
+      size += item.length + 1;
+    }
+    return Buffer.from(`0:{"rsc":["$","nav",null,{"children":[${items.join(",")}]}]}\n`);
+  };
+  const KB = 1024;
+  const flight = Buffer.from(
+    `0:{"buildId":"${hex(20)}"}\n18:["$","ul",null,{"children":[${rows("r", 50 * KB)}]}]\n`,
+  );
+  const html = `<!DOCTYPE html><html><head><title>Parts</title></head><body><main><ul>${products
+    .slice(0, 60)
+    .map(
+      (p) =>
+        `<li><a href="/product/${p.id}"><img alt="${p.name}" src="${p.img}"/><h3>${p.name}</h3></a><p>by ${p.vendor}</p><span>$${p.price}</span></li>`,
+    )
+    .join("")}</ul></main></body></html>`.slice(0, 20 * KB);
+  return {
+    kind: "APP_PAGE",
+    html,
+    rscData: Buffer.concat([Buffer.from([0x23]), flight]),
+    headers: { "x-next-cache-tags": "_N_T_/layout,_N_T_/parts/layout,_N_T_/parts/[slug]/page" },
+    postponed: JSON.stringify({ type: 2, data: [1, hex(12)], resume: rows("q", 10 * KB, 100) }),
+    status: 200,
+    segmentData: new Map<string, Buffer>([
+      ["/_tree", nav(1 * KB, "t")],
+      ["/_full", flight],
+      ["/", nav(6 * KB, "n")],
+      ["/parts", nav(5 * KB, "c")],
+      ["/parts/[slug]", nav(4 * KB, "s")],
+      ["/parts/[slug]/__PAGE__", Buffer.from(`0:{"rsc":[${rows("p", 38 * KB)}]}\n`)],
+      ["/parts/[slug]/@related/__PAGE__", Buffer.from(`0:{"rsc":[${rows("x", 3 * KB, 200)}]}\n`)],
+    ]),
+  };
+}

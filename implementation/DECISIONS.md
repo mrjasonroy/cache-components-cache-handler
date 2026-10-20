@@ -1,5 +1,56 @@
 # Decisions
 
+## DEC-4: Compression: PM default, pending Jason; connection tuning on the 16.5 path
+
+**Status:** PM default, pending Jason · **Date:** 2026-10-19
+
+### Compression
+
+Entries of 16 KB and more (encoded v2 size) are stored Brotli-compressed, on by default.
+`CACHE_COMPRESSION=off` (also `0`, `false`, `no`) turns it off, resolved in `shared/env.ts` like
+`CACHE_DEBUG`. There is no `withCache` option and no new public API.
+
+- **Format v3 = a compressed v2 entry** (`shared/codec.ts`): `NCH` · version `3` · codec byte
+  (`1` = Brotli; `2` reserved for zstd) · the v2 length (uint32 BE) · the compressed v2 bytes. The
+  v2 layout, including the `/_full` dedup, is unchanged and compressed whole.
+- `encodeStored`/`decodeStored` are async and use zlib's async `brotliCompress`/`brotliDecompress`
+  (libuv threadpool), loaded through `process.getBuiltinModule`, so the handler entries stay
+  edge-safe. The synchronous `encodeEntry`/`decodeEntry` are unchanged; `decodeEntry` reads a v3
+  entry as a miss.
+- Decoding reads v2 and v3. A truncated or corrupt payload, an unknown codec byte, a length that
+  does not match the stated one (`maxOutputLength` caps the inflation), or a payload that is not a
+  v2 entry is a miss, never a throw.
+- An entry is written as v2 when compressing would not shrink it (already-compressed bytes).
+- 16.5 and earlier 16.6.0 readers see version 3 and miss; entries are build-scoped, so mixed
+  fleets rarely share keys.
+
+Numbers (drafts/gn16-18-large-values.md; generated listing pages, Node 26, Redis 7 in Docker):
+
+| Entry | v2 | Brotli-4 | Compress / decompress |
+|---|---|---|---|
+| DS-shaped APP_PAGE (~190 KB of parts) | 140 KB | 14 KB (study), 10.5 KB (unit test shape) | 0.37 / 0.10 ms |
+| "5 MB" search page (5 MB RSC, HTML ~2x) | 16 MB | 1.0 MB | ~28 / ~6 ms |
+| 5 MB remote listing (integration test) | 5.0 MB | 93 KB | set 15 ms, get 6 ms end to end |
+| 12 real e2e pages (13-25 KB) | | 5.9x smaller | |
+
+Brotli-4 was chosen over gzip (slower and larger), brotli-11 (10 s per 5 MB) and zstd (2x cheaper
+at the same ratio, but needs Node 22.15+ and is experimental there; the codec byte leaves room for
+it). On real output expect 5 to 12x. It is a memory and bandwidth decision at DS sizes, and removes
+the 1 s `commandTimeout` risk for multi-MB pages on slow links (16 MB takes ~1.6 s at 100 Mbps,
+1 MB ~100 ms).
+
+Wired into `"use cache: remote"` (`data-cache/remote.ts`) and the page handler
+(`handlers/redis.ts`). `CACHE_DEBUG` logs `bytes` and `encodedBytes` (the stored, compressed size).
+
+### Connection tuning (ISSUE-3)
+
+`connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts` are honoured on the 16.5 path
+only: `createCacheHandler` options, and `RedisCacheHandler` / `createRedisCacheHandler` options
+including the `redis: RedisOptions` form, through `RuntimeOptions` → `resolveConnection` →
+`shared/connection.ts`. With a `client`, only `maxConsecutiveTimeouts` applies (the client's own
+options are never changed). `withCache` stays environment-only: the options are not on
+`CacheOptions` and there is no environment variable for them.
+
 ## DEC-3: One cache through `withCache`; the Next 16 page handler; shared tag coordination
 
 **Status:** Accepted · **Date:** 2026-10-19
@@ -280,8 +331,8 @@ and for applications that turn resending back on through `redisOptions`. `connec
 
 That one connection is also why large values need bandwidth: at the 1000 ms default a 5 MB value
 needs about 40 Mbit/s, and the commands queued behind a slower transfer time out with it. On such
-links `commandTimeout` must be raised (documented next to the option). Keeping large values out
-of Redis, or compressing them, is pending Jason's call.
+links `commandTimeout` must be raised (documented next to the option). Compressing entries of
+16 KB and more (DEC-4) cuts the bytes on the wire by 6-13x on page entries.
 
 A tag write Redis refuses while the connection stays up (`OOM` under `noeviction`, `READONLY` or
 `LOADING` during a failover, one timeout) stays queued and is sent again by the next sync, at most

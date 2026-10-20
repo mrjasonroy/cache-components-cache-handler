@@ -438,6 +438,18 @@ describe("a client the application passes in", () => {
     expect(app.disconnect).not.toHaveBeenCalled();
   });
 
+  test("maxConsecutiveTimeouts: 1 marks it not ready after one timeout", async () => {
+    const app = new AppClient();
+    const connection = getClientConnection(app as unknown as Redis, {
+      commandTimeout: 10,
+      maxConsecutiveTimeouts: 1,
+    });
+    app.stalled = true;
+    await (connection.client as unknown as AppClient).get("k").catch(() => {});
+    expect(connection.isReady()).toBe(false);
+    expect(connection.stats()).toEqual({ timeouts: 1, drops: 1 });
+  });
+
   test("a reply that arrives after its timeout neither resets the count nor marks it recovered", async () => {
     vi.useFakeTimers();
     const app = new AppClient();

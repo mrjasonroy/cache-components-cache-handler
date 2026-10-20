@@ -12,12 +12,29 @@
  * a future version, a foreign value under the same key) reads as a miss, never as data.
  * Clients that can only send and receive strings store the same bytes base64-encoded
  * ({@link encodeEntryString}), which {@link decodeEntry} also reads.
+ *
+ * Format version 3 is a compressed v2 entry, written by {@link encodeStored} for entries of 16 KB
+ * and over: `NCH` · version 3 · codec (1 byte: 1 = Brotli; 2 is reserved for zstd) · the v2
+ * entry's length (uint32 BE) · the compressed v2 entry. {@link decodeStored} reads v2 and v3.
  */
+
+import { isCompressionEnabled } from "./env.js";
+import { nodeBuiltin } from "./node-require.js";
 
 // "NCH". A plain Uint8Array, so importing this module never touches `Buffer` (edge bundles).
 const MAGIC = Uint8Array.of(0x4e, 0x43, 0x48);
 export const FORMAT_VERSION = 2;
 const PREAMBLE_LENGTH = MAGIC.length + 1 + 4;
+
+/** Format version of a compressed entry. */
+export const COMPRESSED_FORMAT_VERSION = 3;
+/** Encoded v2 entries of this many bytes and more are compressed. */
+export const COMPRESSION_THRESHOLD_BYTES = 16 * 1024;
+const CODEC_BROTLI = 1;
+const BROTLI_QUALITY = 4;
+const COMPRESSED_PREAMBLE_LENGTH = MAGIC.length + 1 + 1 + 4;
+// Redis's largest string; a stored length above it is corrupt.
+const MAX_ENTRY_BYTES = 512 * 1024 * 1024;
 
 const BLOB_MARKER = "__nch_b";
 const MAP_MARKER = "__nch_m";
@@ -146,19 +163,26 @@ function hasPreamble(bytes: Buffer): boolean {
 }
 
 /**
+ * The entry's bytes, starting with the magic: `raw` itself, or decoded from the base64 a
+ * string-only client stores. `undefined` when neither starts with the magic.
+ */
+function entryBytes(raw: Buffer | string | null | undefined): Buffer | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const bytes = typeof raw === "string" ? Buffer.from(raw, "latin1") : raw;
+  if (hasPreamble(bytes)) return bytes;
+  // Written by a string-only client.
+  const decoded = Buffer.from(typeof raw === "string" ? raw : raw.toString("latin1"), "base64");
+  return hasPreamble(decoded) ? decoded : undefined;
+}
+
+/**
  * Decode an entry written by {@link encodeEntry} or {@link encodeEntryString}. Returns
  * `undefined` for anything else, including other format versions and corrupt entries. Buffers in the result are
  * views of `raw`, not copies.
  */
 export function decodeEntry<T = unknown>(raw: Buffer | string | null | undefined): T | undefined {
-  if (raw === null || raw === undefined) return undefined;
-
-  let bytes = typeof raw === "string" ? Buffer.from(raw, "latin1") : raw;
-  if (!hasPreamble(bytes)) {
-    // Written by a string-only client.
-    bytes = Buffer.from(typeof raw === "string" ? raw : raw.toString("latin1"), "base64");
-    if (!hasPreamble(bytes)) return undefined;
-  }
+  const bytes = entryBytes(raw);
+  if (!bytes) return undefined;
 
   if (bytes.readUInt8(MAGIC.length) !== FORMAT_VERSION) return undefined;
   const headerLength = bytes.readUInt32BE(MAGIC.length + 1);
@@ -190,4 +214,87 @@ function parseHeader<T>(header: string, bytes: Buffer, blobStart: number): T {
     }
     return value;
   }) as T;
+}
+
+type Zlib = typeof import("node:zlib");
+
+/**
+ * Encode `value` as it is stored in Redis: the {@link encodeEntry} v2 bytes, compressed with Brotli
+ * (quality 4, off the event loop) into a v3 entry when they are 16 KB or more. Stays v2 with
+ * `CACHE_COMPRESSION=off`, and when compressing would not make the entry smaller.
+ */
+export async function encodeStored(
+  value: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Buffer> {
+  const entry = encodeEntry(value);
+  if (entry.length < COMPRESSION_THRESHOLD_BYTES || !isCompressionEnabled(env)) return entry;
+
+  const zlib = nodeBuiltin<Zlib>("node:zlib");
+  const compressed = await new Promise<Buffer>((resolve, reject) => {
+    zlib.brotliCompress(
+      entry,
+      {
+        params: {
+          [zlib.constants.BROTLI_PARAM_QUALITY]: BROTLI_QUALITY,
+          [zlib.constants.BROTLI_PARAM_SIZE_HINT]: entry.length,
+        },
+      },
+      (error, result) => (error ? reject(error) : resolve(result)),
+    );
+  });
+  if (COMPRESSED_PREAMBLE_LENGTH + compressed.length >= entry.length) return entry;
+
+  const preamble = Buffer.alloc(COMPRESSED_PREAMBLE_LENGTH);
+  preamble.set(MAGIC, 0);
+  preamble.writeUInt8(COMPRESSED_FORMAT_VERSION, MAGIC.length);
+  preamble.writeUInt8(CODEC_BROTLI, MAGIC.length + 1);
+  preamble.writeUInt32BE(entry.length, MAGIC.length + 2);
+  return Buffer.concat([preamble, compressed]);
+}
+
+/**
+ * Decode an entry written by {@link encodeStored} (v3 or v2) or {@link encodeEntry}. Returns
+ * `undefined`, never throws, for anything else: another format, an unknown codec, or a corrupt,
+ * truncated or wrongly sized entry.
+ */
+export async function decodeStored<T = unknown>(
+  raw: Buffer | string | null | undefined,
+): Promise<T | undefined> {
+  const bytes = entryBytes(raw);
+  if (!bytes) return undefined;
+  if (bytes.readUInt8(MAGIC.length) !== COMPRESSED_FORMAT_VERSION) return decodeEntry<T>(bytes);
+
+  if (bytes.length <= COMPRESSED_PREAMBLE_LENGTH) return undefined;
+  if (bytes.readUInt8(MAGIC.length + 1) !== CODEC_BROTLI) return undefined;
+  const length = bytes.readUInt32BE(MAGIC.length + 2);
+  if (length < PREAMBLE_LENGTH || length > MAX_ENTRY_BYTES) return undefined;
+
+  const zlib = nodeBuiltin<Zlib>("node:zlib");
+  const entry = await new Promise<Buffer | undefined>((resolve) => {
+    // `maxOutputLength` stops a corrupt entry from inflating past its stated length.
+    zlib.brotliDecompress(
+      bytes.subarray(COMPRESSED_PREAMBLE_LENGTH),
+      { maxOutputLength: length },
+      (error, result) => resolve(error ? undefined : result),
+    );
+  });
+  if (!entry || entry.length !== length) return undefined;
+  // Only a v2 entry: a v3 entry inside a v3 entry is corrupt.
+  return decodeEntry<T>(entry);
+}
+
+/**
+ * Sizes for the debug log of a stored entry: `bytes`, its v2 encoding (uncompressed), and
+ * `encodedBytes`, what Redis holds.
+ */
+export function storedSizes(stored: Buffer): { bytes: number; encodedBytes: number } {
+  const compressed =
+    stored.length >= COMPRESSED_PREAMBLE_LENGTH &&
+    hasPreamble(stored) &&
+    stored[MAGIC.length] === COMPRESSED_FORMAT_VERSION;
+  return {
+    bytes: compressed ? stored.readUInt32BE(MAGIC.length + 2) : stored.length,
+    encodedBytes: stored.length,
+  };
 }
