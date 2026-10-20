@@ -57,8 +57,8 @@ const GLOBAL_STORAGE_PREFIX = "@next/work-unit-async-storage@";
 /** How long a failed lookup of the storage module is not retried, in ms. */
 const LOOKUP_RETRY_MS = 1_000;
 
-/** Next's work unit storages found so far; only a find is kept. */
-let workUnitStorages: WorkUnitStorage[] = [];
+/** The storage found through the loaded `.external` module (Next before 16.4), once found. */
+let moduleStorage: WorkUnitStorage | undefined;
 let lookupFailedAt: number | undefined;
 
 /** Wall time minus the performance clock, in ms, as last measured. */
@@ -81,18 +81,22 @@ function isStorage(value: unknown): value is WorkUnitStorage {
  * It is never loaded from here: before Next's server environment has put `AsyncLocalStorage` on
  * `globalThis` (a custom server calling `flushCache()` before `app.prepare()`), Next would create
  * the storage as a stand-in whose `run` throws, and keep it for the process; and a copy of `next`
- * other than the running one would hold a storage Next never uses. Looked up again until one is
- * found, so a call before Next has loaded decides nothing for good; the module lookup is retried
- * after {@link LOOKUP_RETRY_MS}.
+ * other than the running one would hold a storage Next never uses.
+ *
+ * The global symbols are scanned on every call (under a microsecond), so a Next version that
+ * registers later in the process (several Next servers in one process) is still consulted. The
+ * module lookup runs only while no storage is known, retried after {@link LOOKUP_RETRY_MS}, and
+ * its find is kept.
  */
 function findWorkUnitStorages(): WorkUnitStorage[] {
-  if (workUnitStorages.length > 0) return workUnitStorages;
   const globals = globalThis as unknown as Record<symbol, unknown>;
   const found = Object.getOwnPropertySymbols(globalThis)
     .filter((symbol) => symbol.description?.startsWith(GLOBAL_STORAGE_PREFIX))
     .map((symbol) => globals[symbol])
     .filter(isStorage);
-  if (found.length === 0) {
+  if (moduleStorage) {
+    if (!found.includes(moduleStorage)) found.push(moduleStorage);
+  } else if (found.length === 0) {
     const now = performanceClock();
     if (lookupFailedAt === undefined || now - lookupFailedAt >= LOOKUP_RETRY_MS) {
       try {
@@ -100,15 +104,18 @@ function findWorkUnitStorages(): WorkUnitStorage[] {
         const loaded = loadedModule<{ workUnitAsyncStorage?: unknown }>(
           "next/dist/server/app-render/work-unit-async-storage.external.js",
         );
-        if (isStorage(loaded?.workUnitAsyncStorage)) found.push(loaded.workUnitAsyncStorage);
-        else lookupFailedAt = now;
+        if (isStorage(loaded?.workUnitAsyncStorage)) {
+          moduleStorage = loaded.workUnitAsyncStorage;
+          found.push(moduleStorage);
+        } else {
+          lookupFailedAt = now;
+        }
       } catch {
         // `next` is not resolvable from this package.
         lookupFailedAt = now;
       }
     }
   }
-  workUnitStorages = found;
   return found;
 }
 
@@ -123,22 +130,27 @@ function isDateNative(): boolean {
   );
 }
 
+/** Whether Next's `io()` does nothing in this work unit. */
+function isSafeStore(store: WorkUnitStore): boolean {
+  if (store.type === "request") return !store.stagedRendering;
+  return store.type !== undefined && DATE_SAFE_WORK_UNITS.has(store.type);
+}
+
 /**
- * Whether reading `Date` now cannot abort a prerender: the current work unit is none, or one for
- * which Next's `io()` does nothing. Without Next's work unit storage, only if `Date` is not
- * extended. Never on the edge runtime (no `require`; the edge entries do not use the clock).
+ * Whether reading `Date` now cannot abort a prerender: in every Next work unit storage, the
+ * current work unit is none, or one for which Next's `io()` does nothing (with several Next
+ * versions in a process, any of them can be prerendering). Without Next's work unit storage,
+ * only if `Date` is not extended. Never on the edge runtime (no `require`; the edge entries do
+ * not use the clock).
  */
 export function isDateSafe(): boolean {
   if (isEdgeRuntime()) return false;
   const storages = findWorkUnitStorages();
   if (storages.length === 0) return isDateNative();
-  for (const storage of storages) {
+  return storages.every((storage) => {
     const store = storage.getStore();
-    if (store === undefined) continue;
-    if (store.type === "request") return !store.stagedRendering;
-    return store.type !== undefined && DATE_SAFE_WORK_UNITS.has(store.type);
-  }
-  return true;
+    return store === undefined || isSafeStore(store);
+  });
 }
 
 /**
@@ -196,7 +208,7 @@ export function setClockForTests(source: (() => number) | undefined): void {
   testClock = source;
   if (source === undefined) {
     offset = 0;
-    workUnitStorages = [];
+    moduleStorage = undefined;
     lookupFailedAt = undefined;
   }
 }

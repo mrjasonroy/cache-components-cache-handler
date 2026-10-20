@@ -108,8 +108,11 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
   5). Nothing is imported, so the edge-safe import graph is unchanged; on the edge runtime `Date`
   is never read. If neither finds it, `Date` counts as safe only while it is not extended (the
   native constructor, `Date.now` not Next's bound wrapper), so a lookup failure fails closed
-  (Codex review 5). Only a find is cached; a failed module lookup is retried after 1 s, so a
-  call before Next has loaded decides nothing for good. Design (b), re-anchoring, was chosen over (a), the performance clock only where a prerender can reach,
+  (Codex review 5). The global symbols are scanned on every call (under a microsecond), not
+  cached, so a Next version that registers later in the process is still consulted; and every
+  storage found must be safe, since with several Next versions in one process any of them can be
+  prerendering (Codex review 6). Only the module lookup's find is cached; a failed one is retried
+  after 1 s, so a call before Next has loaded decides nothing for good. Design (b), re-anchoring, was chosen over (a), the performance clock only where a prerender can reach,
   because every handler call can be reached from a prerender, so (a) would leave every stored
   time on the drifting clock. A pod that never gets a safe call keeps its last offset (0 before
   any: the performance clock, as before). Rounded to whole ms, stored in Redis as integers.

@@ -140,4 +140,6 @@ When Next's work unit storage cannot be found (`require` fails in a packaged dep
 read only if Next has not extended it (`shared/clock-detection.test.ts`), and the clock never
 loads Next's storage module itself, which before Next's environment would leave Next a storage
 whose `run` throws (`shared/clock-before-next.test.ts`). The static guard also catches `Date.now`
-taken as a reference.
+taken as a reference. With several Next versions in one process, every registered storage is
+consulted on every call, including one registered after the first, and `Date` is read only when
+all of them are safe (`shared/clock-detection.test.ts`, Codex review 6).

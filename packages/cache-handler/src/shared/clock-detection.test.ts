@@ -121,4 +121,70 @@ describe("clock: Next's work unit storage cannot be required", () => {
     }
     expect(Math.abs(nowMs() - Date.now())).toBeLessThanOrEqual(2);
   });
+
+  describe("several Next versions in one process", () => {
+    const later = Symbol.for("@next/work-unit-async-storage@99.0.0");
+    const laterStorage = new AsyncLocalStorage<{ type: string }>();
+    afterEach(() => {
+      Reflect.deleteProperty(globalThis, later);
+    });
+
+    /**
+     * Run `fn` with the performance clock 5 s ahead after anchoring once, and return whether
+     * `fn`'s clock reads re-anchored (read `Date`) or kept the offset measured before the skew.
+     */
+    function readsDate(fn: (check: () => boolean) => boolean): boolean {
+      const offset = clock.fromNextClock(0);
+      skewPerformanceClock(SKEW_MS);
+      return fn(() => {
+        // Measured against the (skewed) performance clock: reading Date here would abort.
+        const kept =
+          Math.abs(nowMs() - (performance.timeOrigin + performance.now()) - offset) <= 2 &&
+          Math.abs(clock.fromNextClock(0) - offset) <= 2 &&
+          Math.abs(clock.toNextClock(0) + offset) <= 2;
+        return !kept;
+      });
+    }
+
+    test("a version registered after the first lookup is still consulted", () => {
+      // The first lookup finds only the running version's storage.
+      expect(nowMs()).toBeGreaterThan(0);
+      globals[later] = laterStorage;
+
+      const read = readsDate((check) => laterStorage.run({ type: "prerender" }, check));
+      expect(read).toBe(false);
+    });
+
+    test("a safe store in one storage does not hide an unsafe one in another", async () => {
+      globals[later] = laterStorage;
+      // Measure the offset outside the prerender first.
+      expect(nowMs()).toBeGreaterThan(0);
+      let read: boolean | undefined;
+      const aborted = await abortsPrerender(() => {
+        read = readsDate((check) => laterStorage.run({ type: "cache" }, check));
+      });
+      expect(aborted).toBe(false);
+      expect(read).toBe(false);
+    });
+
+    test("an unsafe store in a later storage is not hidden by a safe one in the first", () => {
+      globals[later] = laterStorage;
+      const read = readsDate((check) =>
+        workUnitAsyncStorage.run({ type: "cache" } as never, () =>
+          laterStorage.run({ type: "prerender" }, check),
+        ),
+      );
+      expect(read).toBe(false);
+    });
+
+    test("safe stores in every storage: re-anchored", () => {
+      globals[later] = laterStorage;
+      const read = readsDate((check) =>
+        workUnitAsyncStorage.run({ type: "cache" } as never, () =>
+          laterStorage.run({ type: "cache" }, check),
+        ),
+      );
+      expect(read).toBe(true);
+    });
+  });
 });
