@@ -358,13 +358,22 @@ export class RedisCacheHandler {
     const { serverDistDir } = this.options;
     if (!serverDistDir) return undefined;
     const periods = readRoutePeriods(serverDistDir, cacheKey);
-    if (!periods) return undefined;
+    if (!periods) {
+      this.log?.("get", cacheKey, "no build output (route not in the prerender manifest)");
+      return undefined;
+    }
     const buildTime = readBuildTime(serverDistDir);
     let until: number | undefined;
     if (periods.revalidate !== false) {
-      if (buildTime === undefined) return undefined;
+      if (buildTime === undefined) {
+        this.log?.("get", cacheKey, "no build output (time-based route, no build stamp)");
+        return undefined;
+      }
       until = buildTime + lifetimeOf(periods.revalidate, periods.expire, 0) * 1000;
-      if (Date.now() >= until) return undefined;
+      if (Date.now() >= until) {
+        this.log?.("get", cacheKey, "no build output (past its window)", { buildTime, until });
+        return undefined;
+      }
     }
 
     const found = await readBuildOutput(this.options, cacheKey, ctx, (error) =>

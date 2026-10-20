@@ -14,7 +14,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RedisCacheHandler } from "../handlers/redis.js";
 import { pageKey, tagIndexKey, tagsKey } from "../shared/keys.js";
 import {
+  BLOG,
   type BuildOutput,
+  SITEMAP,
   appPageCtx,
   appRouteCtx,
   writeBuildOutput,
@@ -61,23 +63,23 @@ describe.runIf(Boolean(url))("page handler build output (real Redis)", () => {
 
   test("the build output is written through, and a later process reads it from Redis", async () => {
     const first = await startProcess();
-    expect((await first.get("/blog", appPageCtx))?.value.html).toBe("<html>built blog</html>");
-    expect(await clients[0].exists(pageKey(prefix, "development", "/blog"))).toBe(1);
+    expect((await first.get(BLOG, appPageCtx))?.value.html).toBe("<html>built blog</html>");
+    expect(await clients[0].exists(pageKey(prefix, "development", BLOG))).toBe(1);
 
     rmSync(build.serverDistDir, { recursive: true, force: true });
     const second = await startProcess();
-    const result = await second.get("/blog", appPageCtx);
+    const result = await second.get(BLOG, appPageCtx);
     expect(result?.value.html).toBe("<html>built blog</html>");
     expect(result?.lastModified).toBe(build.builtAt);
   });
 
   test("a tag revalidated after a read is never served from the build output after a restart", async () => {
     const first = await startProcess();
-    expect(await first.get("/blog", appPageCtx)).not.toBeNull();
+    expect(await first.get(BLOG, appPageCtx)).not.toBeNull();
     await first.revalidateTag("products");
 
     const second = await startProcess();
-    expect(await second.get("/blog", appPageCtx)).toBeNull();
+    expect(await second.get(BLOG, appPageCtx)).toBeNull();
     expect(await clients[0].hget(tagsKey(prefix), "products")).toMatch(/^\d+,\d+$/);
   });
 
@@ -87,7 +89,7 @@ describe.runIf(Boolean(url))("page handler build output (real Redis)", () => {
     expect(await clients[0].zscore(tagIndexKey(prefix), "_N_T_/sitemap.xml")).not.toBeNull();
 
     const second = await startProcess();
-    expect(await second.get("/sitemap.xml", appRouteCtx)).toBeNull();
-    expect(await clients[0].exists(pageKey(prefix, "development", "/sitemap.xml"))).toBe(0);
+    expect(await second.get(SITEMAP, appRouteCtx)).toBeNull();
+    expect(await clients[0].exists(pageKey(prefix, "development", SITEMAP))).toBe(0);
   });
 });

@@ -48,6 +48,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "next": "16.4.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },

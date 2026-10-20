@@ -5,8 +5,12 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { flushCache } from "../shared/flush.js";
 import { pageKey } from "../shared/keys.js";
 import {
+  ABOUT,
+  BLOG,
   type BuildOutput,
   type BuildOutputOptions,
+  OTHER,
+  SITEMAP,
   appPageCtx,
   appRouteCtx,
   pagesCtx,
@@ -17,7 +21,7 @@ import { FakeRedis } from "../testing/fake-redis.js";
 import { BUILD_STAMP_FILE } from "./build-info.js";
 import { RedisCacheHandler } from "./redis.js";
 
-const BLOG_KEY = pageKey("nextjs:", "development", "/blog");
+const BLOG_KEY = pageKey("nextjs:", "development", BLOG);
 
 let build: BuildOutput;
 
@@ -57,7 +61,7 @@ describe("page handler: prerendered build output", () => {
   });
 
   test("a prerendered page missing from Redis is served from the build output, at build time", async () => {
-    const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+    const result = await handlerFor(new FakeRedis()).get(BLOG, appPageCtx);
 
     expect(result?.value.kind).toBe("APP_PAGE");
     expect(result?.value.html).toBe("<html>built blog</html>");
@@ -68,8 +72,19 @@ describe("page handler: prerendered build output", () => {
     expect(result?.lastModified).toBe(build.builtAt);
   });
 
+  test("with scoped artifacts (next build with an adapterPath) every kind is served from the build output", async () => {
+    rebuild({ scoped: true });
+    const handler = handlerFor(new FakeRedis());
+
+    expect((await handler.get(BLOG, appPageCtx))?.value.html).toBe("<html>built blog</html>");
+    expect(String((await handler.get(SITEMAP, appRouteCtx))?.value.body)).toBe(
+      "<urlset>built</urlset>",
+    );
+    expect((await handler.get(ABOUT, pagesCtx))?.value.html).toBe("<html>built about</html>");
+  });
+
   test("a prerendered route handler (sitemap) is served from the build output", async () => {
-    const result = await handlerFor(new FakeRedis()).get("/sitemap.xml", appRouteCtx);
+    const result = await handlerFor(new FakeRedis()).get(SITEMAP, appRouteCtx);
 
     expect(result?.value.kind).toBe("APP_ROUTE");
     expect(String(result?.value.body)).toBe("<urlset>built</urlset>");
@@ -78,13 +93,13 @@ describe("page handler: prerendered build output", () => {
 
   test("the build output is written through to Redis, and the next read is a Redis hit", async () => {
     const fake = new FakeRedis();
-    await handlerFor(fake).get("/blog", appPageCtx);
+    await handlerFor(fake).get(BLOG, appPageCtx);
     expect(await fake.getBuffer(BLOG_KEY)).not.toBeNull();
 
     // The files are gone and the process restarted: only Redis can serve it now.
     rmSync(build.serverDistDir, { recursive: true, force: true });
     await restart();
-    const result = await handlerFor(fake).get("/blog", appPageCtx);
+    const result = await handlerFor(fake).get(BLOG, appPageCtx);
     expect(result?.value.html).toBe("<html>built blog</html>");
     expect(result?.lastModified).toBe(build.builtAt);
   });
@@ -93,7 +108,7 @@ describe("page handler: prerendered build output", () => {
     const fake = new FakeRedis();
     const handler = handlerFor(fake);
     await handler.set(
-      "/blog",
+      BLOG,
       {
         kind: "APP_PAGE",
         html: "<html>rendered</html>",
@@ -105,57 +120,57 @@ describe("page handler: prerendered build output", () => {
     );
     const written = await fake.getBuffer(BLOG_KEY);
 
-    expect((await handler.get("/blog", appPageCtx))?.value.html).toBe("<html>rendered</html>");
+    expect((await handler.get(BLOG, appPageCtx))?.value.html).toBe("<html>rendered</html>");
     expect(await fake.getBuffer(BLOG_KEY)).toEqual(written);
   });
 
   test("a tag revalidated since the build beats the build output", async () => {
     const handler = handlerFor(new FakeRedis());
     await handler.revalidateTag("products");
-    expect(await handler.get("/blog", appPageCtx)).toBeNull();
+    expect(await handler.get(BLOG, appPageCtx)).toBeNull();
   });
 
   test("a build-output entry is never served over a newer revalidated tag, across a restart", async () => {
     const fake = new FakeRedis();
-    expect(await handlerFor(fake).get("/blog", appPageCtx)).not.toBeNull();
+    expect(await handlerFor(fake).get(BLOG, appPageCtx)).not.toBeNull();
     await handlerFor(fake).revalidateTag("products");
 
     await restart();
-    expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+    expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
   });
 
   test("a path revalidated since the build beats the build output, across a restart, before any Redis entry exists", async () => {
     const fake = new FakeRedis();
     // revalidatePath("/sitemap.xml") revalidates its implicit tag.
     await handlerFor(fake).revalidateTag("_N_T_/sitemap.xml");
-    expect(await fake.getBuffer(pageKey("nextjs:", "development", "/sitemap.xml"))).toBeNull();
+    expect(await fake.getBuffer(pageKey("nextjs:", "development", SITEMAP))).toBeNull();
 
     await restart();
-    expect(await handlerFor(fake).get("/sitemap.xml", appRouteCtx)).toBeNull();
+    expect(await handlerFor(fake).get(SITEMAP, appRouteCtx)).toBeNull();
     // Rejected build output is not written to Redis either.
-    expect(await fake.getBuffer(pageKey("nextjs:", "development", "/sitemap.xml"))).toBeNull();
+    expect(await fake.getBuffer(pageKey("nextjs:", "development", SITEMAP))).toBeNull();
   });
 
   test("while Redis is down the build output is not served: its tags cannot be checked", async () => {
     const fake = new FakeRedis();
     const handler = handlerFor(fake);
     fake.goDown();
-    expect(await handler.get("/blog", appPageCtx)).toBeNull();
+    expect(await handler.get(BLOG, appPageCtx)).toBeNull();
   });
 
   test("without Redis the build output is served from memory, and a revalidation beats it", async () => {
     const handler = handlerFor();
-    expect((await handler.get("/blog", appPageCtx))?.value.html).toBe("<html>built blog</html>");
+    expect((await handler.get(BLOG, appPageCtx))?.value.html).toBe("<html>built blog</html>");
 
     rmSync(build.serverDistDir, { recursive: true, force: true });
-    expect((await handler.get("/blog", appPageCtx))?.value.html).toBe("<html>built blog</html>");
+    expect((await handler.get(BLOG, appPageCtx))?.value.html).toBe("<html>built blog</html>");
 
     await handler.revalidateTag("products");
-    expect(await handler.get("/blog", appPageCtx)).toBeNull();
+    expect(await handler.get(BLOG, appPageCtx)).toBeNull();
   });
 
   test("a prerendered Pages Router page is served from the build output", async () => {
-    const result = await handlerFor(new FakeRedis()).get("/about", pagesCtx);
+    const result = await handlerFor(new FakeRedis()).get(ABOUT, pagesCtx);
 
     expect(result?.value.kind).toBe("PAGES");
     expect(result?.value.html).toBe("<html>built about</html>");
@@ -164,8 +179,8 @@ describe("page handler: prerendered build output", () => {
   });
 
   test("a Pages Router page's header tags are checked, across a restart, before any Redis entry exists", async () => {
-    // next@16.4.2 writes no `.meta` for PAGES and its reader returns no headers, but the value
-    // type carries them and Next's own reader checks them: give the read value tag headers.
+    // next@16.4.2 writes no headers in a PAGES `.meta`, but the value type carries them and
+    // Next's own reader checks them: give the read value tag headers.
     const { default: FileSystemCache } = createRequire(import.meta.url)(
       "next/dist/server/lib/incremental-cache/file-system-cache.js",
     ) as { default: { prototype: { get: (...args: unknown[]) => Promise<unknown> } } };
@@ -183,25 +198,25 @@ describe("page handler: prerendered build output", () => {
     await handlerFor(fake).revalidateTag("products");
 
     await restart();
-    expect(await handlerFor(fake).get("/about", pagesCtx)).toBeNull();
-    expect(await fake.getBuffer(pageKey("nextjs:", "development", "/about"))).toBeNull();
+    expect(await handlerFor(fake).get(ABOUT, pagesCtx)).toBeNull();
+    expect(await fake.getBuffer(pageKey("nextjs:", "development", ABOUT))).toBeNull();
   });
 
   test("routes that were not prerendered, and FETCH entries, are misses", async () => {
     const handler = handlerFor(new FakeRedis());
-    expect(await handler.get("/other", appPageCtx)).toBeNull();
-    expect(await handler.get("/blog", { kind: "FETCH", tags: [] })).toBeNull();
+    expect(await handler.get(OTHER, appPageCtx)).toBeNull();
+    expect(await handler.get(BLOG, { kind: "FETCH", tags: [] })).toBeNull();
   });
 
   test("without fs and serverDistDir from Next there is no build output", async () => {
     const handler = new RedisCacheHandler({ client: asClient(new FakeRedis()) });
-    expect(await handler.get("/blog", appPageCtx)).toBeNull();
+    expect(await handler.get(BLOG, appPageCtx)).toBeNull();
   });
 
   describe("the build time is the handler's build stamp, never the files' mtime", () => {
     test("files whose mtime is 1970 (reproducible builds) are served, at the stamp's time", async () => {
       rebuild({ mtimeMs: 0 });
-      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      const result = await handlerFor(new FakeRedis()).get(BLOG, appPageCtx);
       expect(result?.value.html).toBe("<html>built blog</html>");
       expect(result?.lastModified).toBe(build.builtAt);
     });
@@ -217,13 +232,13 @@ describe("page handler: prerendered build output", () => {
       for (const file of files) utimesSync(file, new Date(), new Date());
 
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("without a stamp, a page with no tag record ever written is served, as of the read", async () => {
       rebuild({ stamp: false, mtimeMs: 0 });
       const before = Date.now();
-      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      const result = await handlerFor(new FakeRedis()).get(BLOG, appPageCtx);
       expect(result?.value.html).toBe("<html>built blog</html>");
       expect(result?.lastModified).toBeGreaterThanOrEqual(before);
     });
@@ -238,13 +253,13 @@ describe("page handler: prerendered build output", () => {
       vi.useRealTimers();
 
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
       expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
     });
 
     test("without a stamp, a time-based page is a miss: its window cannot be placed", async () => {
       rebuild({ stamp: false, routes: { "/blog": { revalidate: 3600 } } });
-      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(new FakeRedis()).get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("a stamp naming another build counts as missing", async () => {
@@ -253,7 +268,7 @@ describe("page handler: prerendered build output", () => {
         join(build.serverDistDir, BUILD_STAMP_FILE),
         JSON.stringify({ buildTime: build.builtAt, buildId: "another-build" }),
       );
-      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(new FakeRedis()).get(BLOG, appPageCtx)).toBeNull();
     });
   });
 
@@ -261,7 +276,7 @@ describe("page handler: prerendered build output", () => {
     test("inside the window it is served and written to Redis for what is left of it", async () => {
       rebuild({ routes: { "/blog": { revalidate: 60 } }, ageMs: 30_000 });
       const fake = new FakeRedis();
-      expect((await handlerFor(fake).get("/blog", appPageCtx))?.value.html).toBe(
+      expect((await handlerFor(fake).get(BLOG, appPageCtx))?.value.html).toBe(
         "<html>built blog</html>",
       );
       // 90 s from the build, 30 s of it gone.
@@ -272,23 +287,23 @@ describe("page handler: prerendered build output", () => {
     test("past the window, once its Redis key has expired, the build-time copy is not served again", async () => {
       rebuild({ routes: { "/blog": { revalidate: 60 } }, ageMs: 30 * DAY_MS });
       const fake = new FakeRedis();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
       expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
     });
 
     test("expire caps the window", async () => {
       rebuild({ routes: { "/blog": { revalidate: 60, expire: 70 } }, ageMs: 80_000 });
-      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(new FakeRedis()).get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("a route the prerender manifest does not list is a miss", async () => {
       rmSync(join(build.serverDistDir, "..", "prerender-manifest.json"));
-      expect(await handlerFor(new FakeRedis()).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(new FakeRedis()).get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("a route with revalidate: false keeps its build output however old the build", async () => {
       rebuild({ ageMs: 200 * DAY_MS });
-      const result = await handlerFor(new FakeRedis()).get("/blog", appPageCtx);
+      const result = await handlerFor(new FakeRedis()).get(BLOG, appPageCtx);
       expect(result?.lastModified).toBe(build.builtAt);
     });
   });
@@ -300,8 +315,8 @@ describe("page handler: prerendered build output", () => {
       await flushCache({ client: asClient(fake), scope: "all" });
 
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
-      expect(await handlerFor(fake).get("/sitemap.xml", appRouteCtx)).toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get(SITEMAP, appRouteCtx)).toBeNull();
       expect(await fake.getBuffer(BLOG_KEY)).toBeNull();
     });
 
@@ -309,20 +324,20 @@ describe("page handler: prerendered build output", () => {
       const fake = new FakeRedis();
       await flushCache({ client: asClient(fake), buildId: "another-build" });
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).not.toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).not.toBeNull();
 
       await flushCache({ client: asClient(fake) });
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("an instance that was already running sees the barrier on its next read", async () => {
       const fake = new FakeRedis();
       const running = handlerFor(fake);
-      expect(await running.get("/blog", appPageCtx)).not.toBeNull();
+      expect(await running.get(BLOG, appPageCtx)).not.toBeNull();
       // Another instance flushes.
       await flushCache({ client: asClient(new FakeRedis(fake.items)), scope: "all" });
-      expect(await running.get("/blog", appPageCtx)).toBeNull();
+      expect(await running.get(BLOG, appPageCtx)).toBeNull();
     });
 
     test("a build made after the flush is served", async () => {
@@ -331,14 +346,14 @@ describe("page handler: prerendered build output", () => {
       rebuild({ ageMs: -1000 });
 
       await restart();
-      expect(await handlerFor(fake).get("/blog", appPageCtx)).not.toBeNull();
+      expect(await handlerFor(fake).get(BLOG, appPageCtx)).not.toBeNull();
     });
 
     test("without Redis, a flush keeps the build output from being read back from disk", async () => {
       const handler = handlerFor();
-      expect(await handler.get("/blog", appPageCtx)).not.toBeNull();
+      expect(await handler.get(BLOG, appPageCtx)).not.toBeNull();
       await flushCache();
-      expect(await handler.get("/blog", appPageCtx)).toBeNull();
+      expect(await handler.get(BLOG, appPageCtx)).toBeNull();
     });
   });
 });

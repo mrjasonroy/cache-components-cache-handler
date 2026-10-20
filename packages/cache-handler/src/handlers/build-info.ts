@@ -35,6 +35,8 @@ export const BUILD_STAMP_FILE = "cache-handler-build.json";
 
 const PRERENDER_MANIFEST_FILE = "prerender-manifest.json";
 
+const ROUTE_CACHE_PREFIX = "/route-cache/";
+
 interface BuildStamp {
   buildTime: number;
   buildId: string;
@@ -147,9 +149,28 @@ export function readBuildTime(serverDistDir: string): number | undefined {
 }
 
 /**
- * Next's route for a cache key (`/index` → `/`; next/dist/server/lib/to-route.js).
+ * The pathname of a response cache key. Next 16.4 keys responses by route,
+ * `/route-cache/<kind>/<sha256 of the source route>/$<page path>`, where the page path is the
+ * pathname with `/` as `/index` and a leading `/index` doubled (next/dist/server/lib/
+ * route-cache-key.js, shared/lib/page-path/normalize-page-path.js). Earlier keys are the
+ * pathname itself.
+ */
+function toPathname(cacheKey: string): string {
+  if (!cacheKey.startsWith(ROUTE_CACHE_PREFIX)) return cacheKey;
+  const marker = cacheKey.indexOf("/$/");
+  if (marker === -1) return cacheKey;
+  const page = cacheKey.slice(marker + 2);
+  if (page === "/index") return "/";
+  return page.startsWith("/index/") ? page.slice("/index".length) : page;
+}
+
+/**
+ * The prerender manifest's route for a cache key (`/index` → `/`; next/dist/server/lib/
+ * to-route.js).
  */
 function toRoute(cacheKey: string): string {
+  const pathname = toPathname(cacheKey);
+  if (pathname !== cacheKey) return pathname.replace(/\/$/, "") || "/";
   return cacheKey.replace(/(?:\/index)?\/?$/, "") || "/";
 }
 

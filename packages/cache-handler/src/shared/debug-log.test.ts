@@ -5,7 +5,7 @@ import { createLocalCacheHandler } from "../data-cache/local.js";
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import type { DataCacheEntry } from "../data-cache/types.js";
 import { RedisCacheHandler } from "../handlers/redis.js";
-import { appPageCtx, writeBuildOutput } from "../testing/build-output.js";
+import { BLOG, OTHER, appPageCtx, writeBuildOutput } from "../testing/build-output.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 
@@ -74,7 +74,7 @@ describe("CACHE_DEBUG logs each value's size", () => {
         serverDistDir: build.serverDistDir,
         debug: true,
       });
-      await handler.get("/blog", appPageCtx);
+      await handler.get(BLOG, appPageCtx);
 
       const sizes = loggedSizes(debug);
       expect(sizes).toEqual([
@@ -83,6 +83,23 @@ describe("CACHE_DEBUG logs each value's size", () => {
       ]);
       expect(sizes[1].bytes).toBe(sizes[0].bytes);
     }
+    rmSync(dirname(build.serverDistDir), { recursive: true, force: true });
+  });
+
+  test("page handler: why a route is not served from its build output", async () => {
+    const build = writeBuildOutput({ stamp: false, routes: { "/blog": { revalidate: 60 } } });
+    const handler = new RedisCacheHandler({
+      client: asClient(new FakeRedis()),
+      fs: build.fs,
+      serverDistDir: build.serverDistDir,
+      debug: true,
+    });
+    await handler.get(BLOG, appPageCtx);
+    await handler.get(OTHER, appPageCtx);
+
+    const reasons = debug.mock.calls.map((call) => call.slice(1, 4).join(" "));
+    expect(reasons).toContain(`get ${BLOG} no build output (time-based route, no build stamp)`);
+    expect(reasons).toContain(`get ${OTHER} no build output (route not in the prerender manifest)`);
     rmSync(dirname(build.serverDistDir), { recursive: true, force: true });
   });
 

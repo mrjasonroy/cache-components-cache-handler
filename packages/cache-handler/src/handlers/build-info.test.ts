@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -127,5 +128,39 @@ describe("build stamp", () => {
     expect(readRoutePeriods(serverDistDir, "/index")).toEqual({ revalidate: 60, expire: 300 });
     expect(readRoutePeriods(serverDistDir, "/static")).toEqual({ revalidate: false });
     expect(readRoutePeriods(serverDistDir, "/other")).toBeUndefined();
+  });
+
+  test("readRoutePeriods: Next 16.4's route cache keys map to the manifest's routes", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    const key = (sourceRoute: string, pathname: string) =>
+      getRouteCacheKey(pathname, { kind: "APP_PAGE", sourceRoute });
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {
+          "/": { initialRevalidateSeconds: 60 },
+          "/index": { initialRevalidateSeconds: 120 },
+          "/index/nested": { initialRevalidateSeconds: 180 },
+          "/routes/io-cached": { initialRevalidateSeconds: false },
+          "/blog/a": { initialRevalidateSeconds: 240 },
+        },
+      }),
+    );
+    expect(readRoutePeriods(serverDistDir, key("/page", "/"))).toEqual({ revalidate: 60 });
+    expect(readRoutePeriods(serverDistDir, key("/index/page", "/index"))).toEqual({
+      revalidate: 120,
+    });
+    expect(readRoutePeriods(serverDistDir, key("/index/nested/page", "/index/nested"))).toEqual({
+      revalidate: 180,
+    });
+    expect(
+      readRoutePeriods(serverDistDir, key("/routes/io-cached/route", "/routes/io-cached")),
+    ).toEqual({ revalidate: false });
+    expect(readRoutePeriods(serverDistDir, key("/blog/[slug]/page", "/blog/a"))).toEqual({
+      revalidate: 240,
+    });
+    expect(readRoutePeriods(serverDistDir, key("/blog/[slug]/page", "/blog/b"))).toBeUndefined();
   });
 });
