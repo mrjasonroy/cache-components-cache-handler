@@ -523,7 +523,7 @@ on the Next 17 line they are removed or become a thin shim over the replacement.
 
 | Deprecated | Use instead | Why |
 |---|---|---|
-| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](#custom-handlers) | The 16.5 data stack: `"use cache"` only, its own key layout, and no page handler. |
+| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](#custom-handlers) | The 16.5 data stack: `"use cache"` only, its own key layout, and no page handler. It does not reconnect after `closeCache()`: create it again. |
 | `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
 | `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
 | `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
