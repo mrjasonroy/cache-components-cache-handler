@@ -35,6 +35,19 @@
   `TagStore.send`), so it can only invalidate more. `closeCache` never rejects for Redis: a test
   or script can always close and exit, and what Redis did not take survives only for reuse in
   the same process, as it would without the close.
+  **Retention of the hand-over** (Codex merge-gate M2, `shared/tag-handover.ts`). Publishing every
+  runtime's whole records map and never removing it kept the tag history of every retired key
+  prefix and replaced application client for the life of the process. An entry now lives only
+  while it may hold work: adopting it removes it; once `closeCache`'s drain settles it removes an
+  entry nobody adopted that has nothing unsent, and only if the slot still holds that very object,
+  so a newer close's state is never removed. A runtime that adopted mid-close owns the maps, and
+  the slot keeps nothing. A closed store whose update is queued after that removal (a handler
+  call that resolved the runtime before the close) publishes it again unless it was adopted. What
+  remains holds invalidations Redis has not taken: for a connection of the package's own it is
+  keyed by pool key and prefix, so bounded by distinct option sets times prefixes, and the same
+  options reconnect to it; for an application client it is keyed by the client object in a
+  `WeakMap`, so it goes when the application drops the client. Pending invalidations are never
+  dropped to impose a limit.
   Not covered: the deprecated `createCacheHandler` captures its connection when it is created, so
   after `closeCache` it serves from its memory fallback until it is created again. Reworking the
   16.5 stack to re-resolve was judged not worth it for a deprecated API.
@@ -56,7 +69,7 @@ the `cacheHandlers` entries, an instrumentation file). The rule:
 - **On `globalThis`** (under a `Symbol.for("@mrjasonroy/cache-components-cache-handler/…")` key)
   when every graph must see the same object: the Redis connections and application-client
   connections (`shared/connection.ts`), the runtimes and the ids that key them
-  (`shared/runtime.ts`), the tag state `closeCache` hands over (`shared/runtime.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
+  (`shared/runtime.ts`), the tag state `closeCache` hands over (`shared/tag-handover.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
   (`shared/build-id.ts`) and the page-handler flag (`data-cache/isr-warning.ts`).
 - **In the module** when a copy per graph is harmless: the clock offset and its module storage
   lookup (`shared/clock.ts`; a second graph measures the same offset), the build info and build

@@ -26,6 +26,14 @@ import {
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
+import {
+  type HandoverKey,
+  clearHandoversForTests,
+  publishHandover,
+  releaseHandover,
+  republishHandover,
+  takeHandover,
+} from "./tag-handover.js";
 import { type TagHandover, TagStore } from "./tag-store.js";
 
 /**
@@ -159,25 +167,13 @@ interface OwnedRuntime extends CacheRuntime {
    * Where `closeCache` leaves this runtime's tag state for the next runtime of the same connection
    * and key prefix; `undefined` without Redis, whose tag state is this process's only.
    */
-  readonly handoverKey: string | undefined;
+  readonly handoverKey: HandoverKey | undefined;
   /** Stop following the connection and leave the memory store registry. */
   dispose(): void;
 }
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/runtimes");
 const CONNECTION_IDS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connection-ids");
-/** Tag state of closed runtimes, kept for the next runtime of the same key (see `closeCache`). */
-const PENDING_TAGS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/pending-tags");
-
-function getPendingTags(): Map<string, TagHandover> {
-  const store = globalThis as unknown as Record<symbol, Map<string, TagHandover> | undefined>;
-  let pending = store[PENDING_TAGS_KEY];
-  if (!pending) {
-    pending = new Map();
-    store[PENDING_TAGS_KEY] = pending;
-  }
-  return pending;
-}
 
 function getRegistry(): Map<string, OwnedRuntime> {
   const store = globalThis as unknown as Record<symbol, Map<string, OwnedRuntime> | undefined>;
@@ -283,9 +279,11 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
 
   // Unlike `key`, the same for the connection that replaces a closed one: an application client
   // keeps its connection, and a connection of the package's own is pooled by its options.
-  const handoverKey =
+  const handoverKey: HandoverKey | undefined =
     request && connection
-      ? `${"client" in request ? `client:${connectionId(connection)}` : connectionKey(request.options)}|${keyPrefix}`
+      ? "client" in request
+        ? { client: request.client, keyPrefix }
+        : { pooled: connectionKey(request.options), keyPrefix }
       : undefined;
   const runtime = createRuntime(connection, keyPrefix, handoverKey);
   registry.set(key, runtime);
@@ -338,7 +336,7 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
 function createRuntime(
   connection: RedisConnection | undefined,
   keyPrefix: string,
-  handoverKey?: string,
+  handoverKey?: HandoverKey,
 ): OwnedRuntime {
   const stores: RuntimeStores = {
     page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
@@ -353,9 +351,7 @@ function createRuntime(
     stores.pageFallback.clear();
     stores.dataFallback.clear();
   });
-  const pending = getPendingTags();
-  const adopt = handoverKey === undefined ? undefined : pending.get(handoverKey);
-  if (handoverKey !== undefined) pending.delete(handoverKey);
+  const adopt = handoverKey === undefined ? undefined : takeHandover(handoverKey);
   const tags = new TagStore(connection, keyPrefix, { adopt });
 
   return {
@@ -413,14 +409,20 @@ async function closeOnce(): Promise<void> {
   const runtimes = [...registry.values()];
   registry.clear();
   const connections = detachAllRedisConnections();
-  const pending = getPendingTags();
-  for (const runtime of runtimes) {
+  const handovers = runtimes.map((runtime) => {
     runtime.closed = true;
-    const handover = runtime.tags.handOver();
-    if (runtime.handoverKey !== undefined) pending.set(runtime.handoverKey, handover);
-  }
+    const key = runtime.handoverKey;
+    if (key === undefined) return undefined;
+    // A send of this store that fails after the release below leaves its state again.
+    const handover: TagHandover = runtime.tags.handOver(() => republishHandover(key, handover));
+    publishHandover(key, handover);
+    return { key, handover };
+  });
   clearAllMemoryStores();
   await Promise.allSettled(runtimes.map((runtime) => runtime.tags.drain()));
+  // Kept only while it holds work: an adopted one belongs to its new runtime, and one with
+  // nothing unsent has nothing to hand over.
+  for (const entry of handovers) if (entry) releaseHandover(entry.key, entry.handover);
   for (const runtime of runtimes) runtime.dispose();
   await Promise.all(connections.map((connection) => connection.close()));
 }
@@ -431,7 +433,7 @@ async function closeOnce(): Promise<void> {
  */
 export function resetCacheRuntimesForTests(): void {
   getRegistry().clear();
-  getPendingTags().clear();
+  clearHandoversForTests();
 }
 
 /**

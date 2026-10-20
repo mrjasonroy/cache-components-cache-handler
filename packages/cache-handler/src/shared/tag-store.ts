@@ -95,6 +95,8 @@ type Durations = { expire?: number };
 export interface TagHandover {
   readonly records: Map<string, TagRecord>;
   readonly unsent: Map<string, Durations | null>;
+  /** Set once a new store has taken it over. */
+  adopted?: boolean;
 }
 
 /**
@@ -158,6 +160,8 @@ export class TagStore {
   private readonly sending = new Set<Promise<void>>();
   private lastUpdate: { key: string; done: Promise<void> } | undefined;
   private readonly stopListening: (() => void) | undefined;
+  /** Set by {@link handOver}: called when an update is queued after the hand-over. */
+  private onRequeue: (() => void) | undefined;
 
   constructor(
     private readonly connection: RedisConnection | undefined,
@@ -269,8 +273,9 @@ export class TagStore {
    * prefix). They are handed over by reference, so an update that fails later, in a send already
    * started, is still queued for the next store.
    */
-  handOver(): TagHandover {
+  handOver(onRequeue?: () => void): TagHandover {
     this.dispose();
+    this.onRequeue = onRequeue;
     return { records: this.records, unsent: this.unsent };
   }
 
@@ -294,6 +299,7 @@ export class TagStore {
   private queue(tag: string, durations: Durations | null): void {
     const queued = this.unsent.get(tag);
     this.unsent.set(tag, queued === null ? null : durations);
+    this.onRequeue?.();
   }
 
   /**
@@ -361,6 +367,7 @@ export class TagStore {
         if (!this.unsent.has(tag)) this.unsent.set(tag, durations);
         else if (durations === null) this.unsent.set(tag, null);
       }
+      this.onRequeue?.();
       this.reportError("updateTags", error);
     }
   }

@@ -72,6 +72,19 @@ function redisRecord(tag: string): string | undefined {
   return (redis.items.get("app:tags")?.value as Map<string, string> | undefined)?.get(tag);
 }
 
+/**
+ * The hand-over slot: pooled connections by string key, application clients by the client
+ * object (a `WeakMap`, so a dropped client takes its hand-over with it).
+ */
+function slot(): { pooled: Map<string, unknown>; clients: WeakMap<object, Map<string, unknown>> } {
+  const value = (globalThis as unknown as Record<symbol, unknown>)[
+    Symbol.for("@mrjasonroy/cache-components-cache-handler/pending-tags")
+  ];
+  // Before the split, the slot was one string-keyed Map holding both.
+  if (value instanceof Map) return { pooled: value, clients: new WeakMap() };
+  return value as ReturnType<typeof slot>;
+}
+
 /** A sync of the current runtime, and the resend it starts. */
 async function syncNow(): Promise<void> {
   await getCacheRuntime(options).tags.sync();
@@ -187,5 +200,64 @@ describe("closeCache with invalidations Redis has not taken", () => {
     expect(
       (client.items.get("app:tags")?.value as Map<string, string>).get("products"),
     ).toBeDefined();
+  });
+
+  test("closing 100 prefixes after acknowledged updates leaves nothing in the slot", async () => {
+    for (let i = 0; i < 100; i++) {
+      await getCacheRuntime({ url, keyPrefix: `tenant${i}:` }).tags.update(["products"]);
+    }
+    await closeCache();
+    expect(slot().pooled.size).toBe(0);
+  });
+
+  test("a runtime that adopts mid-close owns the state; the slot keeps nothing", async () => {
+    await getCacheRuntime(options).tags.update(["products"]);
+    const closing = closeCache();
+    const adopter = getCacheRuntime(options);
+    await closing;
+    expect(slot().pooled.size).toBe(0);
+
+    expect(adopter.tags.get("products")).toBeDefined();
+    await adopter.tags.update(["orders"]);
+    expect(adopter.tags.hasUnsent()).toBe(false);
+    expect(redisRecord("orders")).toBeDefined();
+  });
+
+  test("a refused update keeps exactly its entry until it is adopted and replayed", async () => {
+    await getCacheRuntime({ url, keyPrefix: "other:" }).tags.update(["products"]);
+    redis.readonly = true;
+    await getCacheRuntime(options).tags.update(["products"]);
+    await closeCache();
+    expect(slot().pooled.size).toBe(1);
+
+    redis.readonly = false;
+    await syncNow();
+    expect(slot().pooled.size).toBe(0);
+    expect(redisRecord("products")).toBeDefined();
+  });
+
+  test("a replaced application client's hand-over is held by the client, not the global map", async () => {
+    const client = new FakeRedis();
+    vi.spyOn(client, "evalsha").mockRejectedValue(new Error("READONLY"));
+    await getCacheRuntime({ client: asClient(client), keyPrefix: "app:" }).tags.update([
+      "products",
+    ]);
+    await closeCache();
+
+    expect(slot().pooled.size).toBe(0);
+    expect(slot().clients.get(client)?.size).toBe(1);
+  });
+
+  test("an update queued on a closed runtime after its release is left in the slot again", async () => {
+    const old = getCacheRuntime(options);
+    await old.tags.update(["products"]);
+    await closeCache();
+    expect(slot().pooled.size).toBe(0);
+
+    // A handler call that resolved the runtime before the close, and revalidates after it.
+    await old.tags.update(["late"]);
+    expect(slot().pooled.size).toBe(1);
+    expect(getCacheRuntime(options).tags.get("late")).toBeDefined();
+    expect(slot().pooled.size).toBe(0);
   });
 });
