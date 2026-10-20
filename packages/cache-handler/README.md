@@ -7,7 +7,7 @@ One Redis-backed cache for a Next.js 16+ app: pages, route handlers, `"use cache
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Next.js 16+](https://img.shields.io/badge/Next.js-16%2B-black)](https://nextjs.org/)
 [![CI](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/ci.yml/badge.svg)](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/ci.yml)
-[![Next.js deploy tests](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml/badge.svg)](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml)
+[![Next.js deploy tests](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml/badge.svg?event=pull_request)](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml)
 
 ## Quick start
 
@@ -95,13 +95,15 @@ harness Next.js provides for deployment adapters. Each suite runs twice: once ag
 `next start`, and once with this package, two instances behind a round-robin proxy, sharing one
 Redis. CI fails if a suite (or a test) that passes on `next start` does not pass with the package.
 
-At Next 16.4.2 that is **0 regressions** across 28 suites
+At Next 16.4.2 that is **0 regressions**: every suite and test that passes on `next start` also
+passes with the package, out of 28 suites run
 ([results](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/tests/next-deploy/results/baseline-v16.4.2.md)). The limits:
 
 - `test/e2e/app-dir/app-static` fails with any custom cache handler, because of a Next bug
   (Turbopack's edge `cacheHandlers` registration, vercel/next.js#100046, fixed in
   `16.5.0-canary.10`). It is listed as a known failure.
-- Some suites, such as `use-cache` and `ppr-full`, run no tests in deploy mode.
+- 10 suites, such as `use-cache` and `ppr-full`, run no tests in deploy mode, so they are not
+  covered here.
 
 The package's own tests add an e2e matrix on production builds (memory, Redis, Valkey and
 ElastiCache with TLS and auth), including two instances sharing Redis and Redis stopped mid-run,
