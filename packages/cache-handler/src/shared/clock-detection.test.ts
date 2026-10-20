@@ -8,19 +8,24 @@
 // globalThis, then the Date extension.
 import "next/dist/server/node-environment-baseline.js";
 import "next/dist/server/node-environment-extensions/date.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createDynamicTrackingState } from "next/dist/server/app-render/dynamic-rendering.js";
 import { workAsyncStorage } from "next/dist/server/app-render/work-async-storage.external.js";
 import { workUnitAsyncStorage } from "next/dist/server/app-render/work-unit-async-storage.external.js";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 
-vi.mock("./node-require.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./node-require.js")>()),
-  requireModule: () => {
+vi.mock("./node-require.js", async (importOriginal) => {
+  const unresolvable = () => {
     throw new Error(
       "Cannot find module 'next/dist/server/app-render/work-unit-async-storage.external.js'",
     );
-  },
-}));
+  };
+  return {
+    ...(await importOriginal<typeof import("./node-require.js")>()),
+    requireModule: unresolvable,
+    loadedModule: unresolvable,
+  };
+});
 
 const SKEW_MS = 5_000;
 
@@ -91,6 +96,16 @@ describe("clock: Next's work unit storage cannot be required", () => {
       expect(await abortsPrerender(() => nowMs())).toBe(false);
     } finally {
       globals[storageKey as symbol] = storage;
+    }
+  });
+
+  test("another Next version's storage beside the running one's: the running one decides", async () => {
+    const other = Symbol.for("@next/work-unit-async-storage@0.0.0");
+    globals[other] = new AsyncLocalStorage();
+    try {
+      expect(await abortsPrerender(() => nowMs())).toBe(false);
+    } finally {
+      Reflect.deleteProperty(globalThis, other);
     }
   });
 

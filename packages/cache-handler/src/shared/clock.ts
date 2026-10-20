@@ -30,7 +30,7 @@
  */
 
 import { isEdgeRuntime } from "./env.js";
-import { requireModule } from "./node-require.js";
+import { loadedModule } from "./node-require.js";
 
 interface WorkUnitStore {
   type?: string;
@@ -54,12 +54,12 @@ const DATE_SAFE_WORK_UNITS = new Set([
 /** The key prefix Next registers its work unit storage under on `globalThis` (16.4+). */
 const GLOBAL_STORAGE_PREFIX = "@next/work-unit-async-storage@";
 
-/** How long a failed `require` of the storage is not retried, in ms. */
-const REQUIRE_RETRY_MS = 1_000;
+/** How long a failed lookup of the storage module is not retried, in ms. */
+const LOOKUP_RETRY_MS = 1_000;
 
 /** Next's work unit storages found so far; only a find is kept. */
 let workUnitStorages: WorkUnitStorage[] = [];
-let requireFailedAt: number | undefined;
+let lookupFailedAt: number | undefined;
 
 /** Wall time minus the performance clock, in ms, as last measured. */
 let offset = 0;
@@ -77,9 +77,13 @@ function isStorage(value: unknown): value is WorkUnitStorage {
 /**
  * Next's work unit storages: the ones it registers on `globalThis` (next@16.4.2
  * `getOrCreateGlobalAsyncLocalStorage`, keyed by Next's version), or else the `.external` module
- * `require`d from this package (Next before 16.4). Looked up again until one is found, so a call
- * before Next has loaded does not decide for good; a failed `require` is retried after
- * {@link REQUIRE_RETRY_MS}.
+ * as resolved from this package (Next before 16.4), only if the process has already loaded it.
+ * It is never loaded from here: before Next's server environment has put `AsyncLocalStorage` on
+ * `globalThis` (a custom server calling `flushCache()` before `app.prepare()`), Next would create
+ * the storage as a stand-in whose `run` throws, and keep it for the process; and a copy of `next`
+ * other than the running one would hold a storage Next never uses. Looked up again until one is
+ * found, so a call before Next has loaded decides nothing for good; the module lookup is retried
+ * after {@link LOOKUP_RETRY_MS}.
  */
 function findWorkUnitStorages(): WorkUnitStorage[] {
   if (workUnitStorages.length > 0) return workUnitStorages;
@@ -90,18 +94,17 @@ function findWorkUnitStorages(): WorkUnitStorage[] {
     .filter(isStorage);
   if (found.length === 0) {
     const now = performanceClock();
-    if (requireFailedAt === undefined || now - requireFailedAt >= REQUIRE_RETRY_MS) {
+    if (lookupFailedAt === undefined || now - lookupFailedAt >= LOOKUP_RETRY_MS) {
       try {
         // The `.external` module is the instance Next's server shares across its bundles.
-        const loaded = requireModule<{ workUnitAsyncStorage?: unknown }>(
+        const loaded = loadedModule<{ workUnitAsyncStorage?: unknown }>(
           "next/dist/server/app-render/work-unit-async-storage.external.js",
         );
-        if (isStorage(loaded.workUnitAsyncStorage)) found.push(loaded.workUnitAsyncStorage);
-        else requireFailedAt = now;
+        if (isStorage(loaded?.workUnitAsyncStorage)) found.push(loaded.workUnitAsyncStorage);
+        else lookupFailedAt = now;
       } catch {
-        // Not resolvable from this package, or Next's server environment (AsyncLocalStorage on
-        // globalThis) is not set up yet.
-        requireFailedAt = now;
+        // `next` is not resolvable from this package.
+        lookupFailedAt = now;
       }
     }
   }
@@ -194,6 +197,6 @@ export function setClockForTests(source: (() => number) | undefined): void {
   if (source === undefined) {
     offset = 0;
     workUnitStorages = [];
-    requireFailedAt = undefined;
+    lookupFailedAt = undefined;
   }
 }

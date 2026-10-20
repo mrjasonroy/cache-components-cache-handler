@@ -15,6 +15,13 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
+/**
+ * A read of the time through `Date`: `Date.now` called or taken as a reference, `new Date` with or
+ * without parentheses, `Date()`, or `now` destructured from `Date`.
+ */
+const DATE_READ =
+  /(?<![\w.])Date\.now\b|\bnew\s+Date\b|(?<![\w.])Date\s*\(|\{[^}]*\bnow\b[^}]*\}\s*=\s*Date\b/;
+
 describe("clock", () => {
   afterEach(() => {
     Reflect.deleteProperty(performance, "timeOrigin");
@@ -47,7 +54,7 @@ describe("clock", () => {
     vi.resetModules();
     vi.doMock("./node-require.js", async (importOriginal) => ({
       ...(await importOriginal<typeof import("./node-require.js")>()),
-      requireModule: () => {
+      loadedModule: () => {
         throw new Error("Cannot find module 'next'");
       },
     }));
@@ -67,9 +74,27 @@ describe("clock", () => {
     }
   });
 
+  test("the Date guard catches a read taken as a reference, not only a call", () => {
+    for (const read of [
+      "const now = Date.now;",
+      "setInterval(Date.now, 1000);",
+      "times.map(Date.now)",
+      "const { now } = Date;",
+      "const stamp = new Date;",
+      "Date.now()",
+      "new Date()",
+      "String(Date())",
+    ]) {
+      expect(DATE_READ.test(read), read).toBe(true);
+    }
+    for (const fine of ["isDate(value)", "entry.Date.now", "toDate(1)", "const date = 1;"]) {
+      expect(DATE_READ.test(fine), fine).toBe(false);
+    }
+  });
+
   // Next aborts a prerender that reads the time through `Date` (see clock.ts).
   test("no source file reads the time through Date: they use nowMs()", () => {
-    const reads = /\bDate\.now\s*\(|\bnew\s+Date\s*\(|(?<![\w.])Date\s*\(/;
+    const reads = DATE_READ;
     const hits = sourceFiles(SRC)
       .filter((file) => !file.endsWith(join("shared", "clock.ts")))
       .flatMap((file) =>

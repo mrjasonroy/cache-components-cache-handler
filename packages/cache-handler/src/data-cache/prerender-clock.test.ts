@@ -103,6 +103,29 @@ describe("handlers do not read the time through Date during a prerender", () => 
     expect(await abortsPrerender(async () => Date.now())).toBe(true);
   });
 
+  test("Next before 16.4 (no storage on globalThis): the storage module Next loaded is used", async () => {
+    const globals = globalThis as unknown as Record<symbol, unknown>;
+    const key = Object.getOwnPropertySymbols(globalThis).find((symbol) =>
+      symbol.description?.startsWith("@next/work-unit-async-storage@"),
+    ) as symbol;
+    const storage = globals[key];
+    Reflect.deleteProperty(globalThis, key);
+    Object.defineProperty(performance, "timeOrigin", {
+      value: performance.timeOrigin + 5_000,
+      configurable: true,
+    });
+    setClockForTests(undefined);
+    try {
+      // Date is extended, so only a found storage lets the clock re-anchor here.
+      expect(Math.abs(nowMs() - Date.now())).toBeLessThanOrEqual(2);
+      expect(await abortsPrerender(async () => nowMs())).toBe(false);
+    } finally {
+      globals[key] = storage;
+      Reflect.deleteProperty(performance, "timeOrigin");
+      setClockForTests(undefined);
+    }
+  });
+
   test("the clock stays on wall time inside a prerender, though the performance clock is 5 s off", async () => {
     Object.defineProperty(performance, "timeOrigin", {
       value: performance.timeOrigin + 5_000,

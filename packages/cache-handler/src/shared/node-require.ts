@@ -29,8 +29,21 @@ export function nodeBuiltin<T>(id: string): T {
  * `require(id)` relative to this package.
  */
 export function requireModule<T>(id: string): T {
+  return packageRequire()(id) as T;
+}
+
+/**
+ * The exports of `id`, resolved relative to this package, if this process has already loaded it
+ * through `require`; never loads it. Throws if `id` cannot be resolved.
+ */
+export function loadedModule<T>(id: string): T | undefined {
+  const require = packageRequire();
+  return require.cache[require.resolve(id)]?.exports as T | undefined;
+}
+
+function packageRequire(): NodeJS.Require {
   nodeRequire ??= nodeBuiltin<typeof import("node:module")>("node:module").createRequire(
     import.meta.url,
   );
-  return nodeRequire(id) as T;
+  return nodeRequire;
 }
