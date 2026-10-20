@@ -7,6 +7,67 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-8: Bound tag retention; use server field expiry and a standalone fallback (16.4.3-rc.1)
+
+**Entry lifetime.** The page, remote and local handlers share `MAX_ENTRY_AGE_SECONDS` = 365
+days. Page `lifetimeOf` caps `1.5 × revalidate`, `expire`, and the default (including
+`revalidate: false`). Page reads also reject `lastModified` older than that bound. The remote
+handler caps finite `cacheLife.expire`, substitutes its bounded `defaultTTL` for infinite
+expire, caps Redis EX on write, and checks age on read. Memory-only remote entries and the
+local handler's `timestamp + revalidate` are capped too. Outage memory lasts at most 60 seconds.
+Thus stale-while-revalidate never extends a stored value beyond 365 days. Legacy
+`createCacheHandler` uses separate per-tag keys with its own `tagTTL`; it does not read this hash.
+
+**Record horizon.** An immediate invalidation matters until `stale + 365 days`. A delayed
+invalidation can expire an entry created *after* the update but before its future `expired`
+deadline (Next's semantics, DEC-3). Its horizon is therefore `max(stale, expired) + 365 days`,
+not just its index score plus the entry age. Add 10 seconds, two instances' 5-second clock-skew
+windows. Custom revalidation durations are preserved, including durations longer than a year;
+no new public duration cap is needed. A `"max"` revalidation retains its record about two years.
+
+**Native field expiry.** Background maintenance probes `COMMAND INFO HPEXPIREAT` once per
+connection, promptly on startup/ready and shared on `globalThis` across handler module graphs.
+It does not parse server versions: Redis 7.4+ and Valkey 9+ support it. A failed probe selects the fallback. While support is
+unknown, the guarded one-key monotonic writer already merges the record and attempts `HPEXPIREAT` in
+that same script. An older writer cannot shorten the merged horizon. Every HSET clears a field
+TTL, so even a losing older update reinstates it. A server or ACL change that rejects expiry
+leaves the merged record intact and disables native expiry; standalone maintenance still
+covers it. A transient probe failure can be retried once on the next connection-ready event. Records written by an older package need the fallback or a subsequent
+write to gain a field TTL. No request issues an extra command.
+
+**Fallback.** Once per minute an unreferenced timer examines at most 1,000 old index members.
+One atomic two-key Lua script selects by score, checks the actual hash record's horizon, and
+HDELs and ZREMs eligible records. It retains malformed records conservatively and removes
+orphan index members whose fields expired. An offset walks past permanent barriers and long
+future deadlines; deletions by another process may postpone a candidate until the next pass,
+which affects cleanup speed only. A tag updated before the script is protected by either its
+new index score or its new hash timestamps (the writer sends those commands separately).
+An update after the script recreates its record and index. There is no stale read followed by
+an unconditional deletion outside the script. Many instances may safely run it concurrently.
+`closeCache` clears the timers. Scripts use EVALSHA, falling back to EVAL on NOSCRIPT. Debug
+logging reports removed records and both structure sizes from the script's existing return value, with no extra command.
+
+**Cluster limitation.** Existing hash and index names need not share a slot. No key migration
+or split-script deletion is introduced. Known Clusters skip fallback pruning; CROSSSLOT also
+disables it. Without native field TTLs, records grow until a full flush and a warning is
+rate-limited (hourly by default). With native TTLs, expired fields leave harmless index members: their HMGET is
+empty only after every entry they could invalidate has aged out. The index and any fields
+written by older packages remain until a full flush or a later update. This trades
+bounded hash fields for retaining the existing Cluster layout and correctness.
+
+**Build output and barriers.** Global and build-scoped flush barriers stay permanently: live
+processes and disk output may depend on them. The build stamp is one file for the entire build,
+written before static generation, so routes need not individually visit the handler to be
+stamped. Existing missing-stamp behavior stays: an unstamped non-time-based page may use the
+read time, since its actual age cannot be known. Build output with no surviving stamp can come
+back after its tag record is pruned. This only happens to a deployment serving the same build
+for over 365 days after the tag's last invalidation. Mitigation: redeploy or flush within a year.
+The normal 365-day bound therefore applies to stored values and stamped disk output, with this
+explicit exception for unstamped disk output. Standalone packaging may omit the root stamp;
+we do not patch Next's trace manifests or write into its app directory to preserve it.
+
+The previous DEC-3 no-pruning choice below is superseded by this retention policy.
+
 ## DEC-7: A logger hook: `setCacheLogger` and a `logger` option (architecture review L4)
 
 Approved by Jason on 2026-10-20. His app logs through its own logger, and the package wrote 23
@@ -352,7 +413,7 @@ tag on every read forever after, to cover a window of minutes that happens once.
 - The sync point is the reader's own start time, never the highest score read: a writer whose
   clock runs ahead would otherwise move it past a lagging writer's updates.
 
-**No pruning: tag records live until a flush.** A record matters while an entry created before
+**Previous no-pruning policy (superseded by DEC-8).** A record matters while an entry created before
 its `stale` or `expired` time can still be stored: `check` expires an entry created before
 `expired`, including one cached after the revalidation (the semantics `createCacheHandler` has had since the withdrawn 16.5.1, and Next's own). With
 `revalidateTag(tag, "max")` (`expire` = 365 days) a record is still needed 365 days after the

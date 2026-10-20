@@ -75,10 +75,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ["redis:7-alpine", "valkey/valkey:8-alpine"]
+        include:
+          - image: redis:7.4-alpine
+            field-ttls: "1"
+          - image: valkey/valkey:8-alpine
+            field-ttls: "0"
+          - image: valkey/valkey:9-alpine
+            field-ttls: "1"
     env:
       CACHE_TEST_REDIS_URL: redis://localhost:6379
       CACHE_TEST_REDIS_CONTAINER: cache-test-redis
+      CACHE_TEST_FIELD_TTLS: ${{ matrix.field-ttls }}
 
     steps:
       - uses: actions/checkout@v4

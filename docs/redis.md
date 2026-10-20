@@ -138,8 +138,9 @@ is read from the build output that `next start` and a standalone `server.js` use
 `development` under `next dev`. Every entry key has a TTL. A remote entry is kept until its
 `expire`, or for `defaultTTL` (24 hours) when `expire` is infinite, at most 365 days; page entries
 as described under [Pages and route handlers](./how-it-works.md#pages-and-route-handlers). The two
-tag keys are shared by every build and have no TTL: they are kept until
-`flushCache({ scope: "all" })`. Run Redis with `maxmemory-policy noeviction` or a `volatile-*`
+tag keys are shared by every build and have no key TTL. Individual fields and index members follow
+the [tag retention rules](./how-it-works.md#distributed-tag-coordination-for-use-cache); flush
+barriers stay until a full flush. Run Redis with `maxmemory-policy noeviction` or a `volatile-*`
 policy (`volatile-lru`), never `allkeys-*` (such as `allkeys-lru`): an evicted tag hash brings
 every invalidated entry back. Entries are binary and not human-readable.
 
