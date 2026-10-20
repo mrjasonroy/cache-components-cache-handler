@@ -15,6 +15,7 @@ import {
 } from "../shared/keys.js";
 import {
   PRUNE_TAGS_SCRIPT,
+  PRUNE_TAGS_SHA,
   TAG_PRUNE_BATCH_SIZE,
   TAG_RETENTION_MS,
   probeTagFieldExpiry,
@@ -103,8 +104,21 @@ describe.runIf(Boolean(url))("tag retention (real Redis)", () => {
       );
       await raw.zadd(tagIndexKey(prefix), old, "expired-field");
       expect(await raw.hget(tagsKey(prefix), "expired-field")).toBeNull();
+      const oldDeadline = now - TAG_RETENTION_MS - 1000;
+      const delayedStale = oldDeadline - MAX_ENTRY_AGE_SECONDS * 1000;
+      await raw.eval(
+        UPDATE_EXPIRING_TAGS_SCRIPT,
+        1,
+        tagsKey(prefix),
+        ...updateArgs(
+          new Map([["expired-delayed", { stale: delayedStale, expired: oldDeadline }]]),
+        ),
+      );
+      await raw.zadd(tagIndexKey(prefix), delayedStale, "expired-delayed");
+      expect(await raw.hget(tagsKey(prefix), "expired-delayed")).toBeNull();
       await tags.maintain();
       expect(await raw.zscore(tagIndexKey(prefix), "expired-field")).toBeNull();
+      expect(await raw.zscore(tagIndexKey(prefix), "expired-delayed")).toBeNull();
     } else {
       expect(await raw.hget(tagsKey(prefix), "delayed")).toBe(
         `${now},${now + MAX_ENTRY_AGE_SECONDS * 2000}`,
@@ -113,6 +127,35 @@ describe.runIf(Boolean(url))("tag retention (real Redis)", () => {
       await seed({ old: `${old},${old}` }, old);
       await tags.maintain();
       expect(await raw.hget(tagsKey(prefix), "old")).toBeNull();
+    }
+  });
+
+  test("a fresh process writes a native TTL before its background probe, and HSET reinstates it", async () => {
+    const client = new Redis(url as string);
+    try {
+      const tags = store(client);
+      await tags.update(["startup"]);
+      if (process.env.CACHE_TEST_FIELD_TTLS === "1") {
+        const expiry = (await raw.call(
+          "HPEXPIRETIME",
+          tagsKey(prefix),
+          "FIELDS",
+          1,
+          "startup",
+        )) as number[];
+        expect(expiry[0]).toBeGreaterThan(Date.now());
+        await tags.update(["startup"]);
+        const rewritten = (await raw.call(
+          "HPEXPIRETIME",
+          tagsKey(prefix),
+          "FIELDS",
+          1,
+          "startup",
+        )) as number[];
+        expect(rewritten[0]).toBeGreaterThanOrEqual(expiry[0]);
+      }
+    } finally {
+      client.disconnect();
     }
   });
 
@@ -171,6 +214,7 @@ describe.runIf(Boolean(url))("tag retention (real Redis)", () => {
     const writer = new Redis(url as string);
     const pruner = new Redis(url as string);
     try {
+      await Promise.all([writer.ping(), pruner.ping()]);
       await seed({ racing: `${old},${old}` }, old);
       let release = () => {};
       let held = () => {};
@@ -180,14 +224,16 @@ describe.runIf(Boolean(url))("tag retention (real Redis)", () => {
       const started = new Promise<void>((resolve) => {
         held = resolve;
       });
-      const evaluate = pruner.eval.bind(pruner);
-      vi.spyOn(pruner, "eval").mockImplementation((async (...args: Parameters<Redis["eval"]>) => {
-        if (args[0] === PRUNE_TAGS_SCRIPT) {
-          held();
-          await gate;
-        }
-        return evaluate(...args);
-      }) as Redis["eval"]);
+      for (const name of ["eval", "evalsha"] as const) {
+        const original = pruner[name].bind(pruner) as (...args: unknown[]) => Promise<unknown>;
+        vi.spyOn(pruner, name).mockImplementation((async (...args: unknown[]) => {
+          if (args[0] === PRUNE_TAGS_SCRIPT || args[0] === PRUNE_TAGS_SHA) {
+            held();
+            await gate;
+          }
+          return original(...args);
+        }) as never);
+      }
       const maintenance = store(pruner).maintain();
       await started;
       await store(writer).update(["racing"]);

@@ -161,7 +161,9 @@ Limits worth knowing:
 - **Redis 7.4+ and Valkey 9+** expire tag hash fields themselves. Support is probed once per
   connection in the background, by command capability rather than server version. Subsequent
   writes set the merged record's field deadline atomically in the existing write script.
-  Writes before that probe, and older records, are covered by the standalone fallback.
+  Startup writes use the same guarded script before the prompt background probe completes, so
+  they cannot strip a supported server's field TTL. A failed probe selects the fallback; a
+  transient failure is retried once on the next connection-ready event.
 - **Standalone Redis / Valkey** also checks up to 1,000 old index members once per minute,
   atomically deleting eligible hash records and index members. It checks the record's deadline
   too, so a concurrent revalidation is preserved. Maintenance adds no request-path command and
@@ -169,10 +171,15 @@ Limits worth knowing:
   `tagFields` and `tagIndexMembers` without an extra command.
 - **Cluster limitation:** the existing hash and index may occupy different slots. Automatic
   fallback pruning is skipped on Cluster or after `CROSSSLOT`. Without hash-field TTL support,
-  tag records grow until `flushCache({ scope: "all" })`, with a rate-limited warning. On a
-  supported Cluster the hash fields expire, but index members remain until a flush; syncing
-  an expired field returns no record, which is safe after its full retention window. Index
-  members and pre-probe fields can still grow with distinct revalidated tags on Cluster.
+  tag records grow until `flushCache({ scope: "all" })`, with a warning at most hourly by
+  default. On a supported Cluster the hash fields expire, but index members remain until a flush; syncing
+  an expired field returns no record, which is safe after its full retention window. `tag-index`
+  grows by one small member per distinct revalidated tag until a flush. Standalone gets the
+  full prune; existing fields written by an older package gain a TTL only on a later update.
+- **Unstamped build output:** build output with no surviving stamp can come back after its
+  tag record is pruned. This only happens to a deployment serving the same build for over
+  365 days after the tag's last invalidation. Redeploy or flush within a year. Missing-stamp
+  behavior is unchanged; Next's standalone packaging may omit the stamp.
 - Instances' clocks may differ by up to 5 s. A larger skew can delay an invalidation on other
   instances until the tag is invalidated again.
 - Times are wall time, read without touching `Date` inside a prerender. If another library has

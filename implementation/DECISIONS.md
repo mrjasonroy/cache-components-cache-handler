@@ -26,14 +26,14 @@ windows. Custom revalidation durations are preserved, including durations longer
 no new public duration cap is needed. A `"max"` revalidation retains its record about two years.
 
 **Native field expiry.** Background maintenance probes `COMMAND INFO HPEXPIREAT` once per
-connection, shared on `globalThis` across handler module graphs. It does not parse server
-versions: Redis 7.4+ and Valkey 9+ support it. A failed probe selects the fallback. Once support
-is known, the existing one-key monotonic writer merges the record and sets `HPEXPIREAT` in
+connection, promptly on startup/ready and shared on `globalThis` across handler module graphs.
+It does not parse server versions: Redis 7.4+ and Valkey 9+ support it. A failed probe selects the fallback. While support is
+unknown, the guarded one-key monotonic writer already merges the record and attempts `HPEXPIREAT` in
 that same script. An older writer cannot shorten the merged horizon. Every HSET clears a field
 TTL, so even a losing older update reinstates it. A server or ACL change that rejects expiry
 leaves the merged record intact and disables native expiry; standalone maintenance still
-covers it. Records written before detection, or by an older package, need the fallback or a
-subsequent write to gain a field TTL. No request issues an extra command.
+covers it. A transient probe failure can be retried once on the next connection-ready event. Records written by an older package need the fallback or a subsequent
+write to gain a field TTL. No request issues an extra command.
 
 **Fallback.** Once per minute an unreferenced timer examines at most 1,000 old index members.
 One atomic two-key Lua script selects by score, checks the actual hash record's horizon, and
@@ -44,24 +44,27 @@ which affects cleanup speed only. A tag updated before the script is protected b
 new index score or its new hash timestamps (the writer sends those commands separately).
 An update after the script recreates its record and index. There is no stale read followed by
 an unconditional deletion outside the script. Many instances may safely run it concurrently.
-`closeCache` clears the timer. Debug logging reports removed records and both structure sizes
-from the script's existing return value, with no extra command.
+`closeCache` clears the timers. Scripts use EVALSHA, falling back to EVAL on NOSCRIPT. Debug
+logging reports removed records and both structure sizes from the script's existing return value, with no extra command.
 
 **Cluster limitation.** Existing hash and index names need not share a slot. No key migration
 or split-script deletion is introduced. Known Clusters skip fallback pruning; CROSSSLOT also
 disables it. Without native field TTLs, records grow until a full flush and a warning is
-rate-limited. With native TTLs, expired fields leave harmless index members: their HMGET is
+rate-limited (hourly by default). With native TTLs, expired fields leave harmless index members: their HMGET is
 empty only after every entry they could invalidate has aged out. The index and any fields
-written before capability detection remain until a full flush or a later update. This trades
+written by older packages remain until a full flush or a later update. This trades
 bounded hash fields for retaining the existing Cluster layout and correctness.
 
 **Build output and barriers.** Global and build-scoped flush barriers stay permanently: live
 processes and disk output may depend on them. The build stamp is one file for the entire build,
 written before static generation, so routes need not individually visit the handler to be
-stamped. `withCache` adds it to `outputFileTracingIncludes`, merging the user's entries and
-honoring `distDir`. CI builds a standalone app and verifies the packaged stamp's BUILD_ID.
-Missing-stamp behavior remains unchanged until that CI proof passes; an unstamped non-time-based
-page has unknown age and must be handled before treating the entry bound as universal.
+stamped. Existing missing-stamp behavior stays: an unstamped non-time-based page may use the
+read time, since its actual age cannot be known. Build output with no surviving stamp can come
+back after its tag record is pruned. This only happens to a deployment serving the same build
+for over 365 days after the tag's last invalidation. Mitigation: redeploy or flush within a year.
+The normal 365-day bound therefore applies to stored values and stamped disk output, with this
+explicit exception for unstamped disk output. Standalone packaging may omit the root stamp;
+we do not patch Next's trace manifests or write into its app directory to preserve it.
 
 The previous DEC-3 no-pruning choice below is superseded by this retention policy.
 

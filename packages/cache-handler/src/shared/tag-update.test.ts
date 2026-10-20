@@ -20,6 +20,12 @@ describe("UPDATE_TAGS_SCRIPT", () => {
     );
   });
 
+  test("the expiring variant keeps its TTL command and failure guard", () => {
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("redis.pcall('HPEXPIREAT'");
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("if result.err then ttlFailed = true end");
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("if ttlFailed then return -#ARGV / 3 end");
+  });
+
   test("arguments are tag, stale, expired, with an empty expired to keep the stored one", () => {
     const updates = new Map([
       ["a", { stale: 1, expired: 2 }],

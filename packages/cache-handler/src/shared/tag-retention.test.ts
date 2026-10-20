@@ -1,13 +1,18 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { asClient } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import { getClientConnection } from "./connection.js";
 import {
+  PRUNE_TAGS_SCRIPT,
+  PRUNE_TAGS_SHA,
   TAG_MAINTENANCE_INTERVAL_MS,
   probeTagFieldExpiry,
+  retryTagFieldProbeOnReady,
   supportsTagFieldExpiry,
 } from "./tag-retention.js";
 import { TagStore } from "./tag-store.js";
+import { UPDATE_EXPIRING_TAGS_SHA } from "./tag-update.js";
 
 describe("tag field expiry capability", () => {
   test.each([
@@ -45,6 +50,22 @@ describe("tag field expiry capability", () => {
     }
   });
 
+  test("only a connection-ready event permits a bounded retry after a transient probe failure", async () => {
+    const call = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Command timed out"))
+      .mockResolvedValue([["hpexpireat"]]);
+    const connection = getClientConnection(asClient(Object.assign(new FakeRedis(), { call })));
+    await probeTagFieldExpiry(connection);
+    await probeTagFieldExpiry(connection);
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(supportsTagFieldExpiry(connection)).toBe(false);
+    retryTagFieldProbeOnReady(connection);
+    await probeTagFieldExpiry(connection);
+    expect(call).toHaveBeenCalledTimes(2);
+    expect(supportsTagFieldExpiry(connection)).toBe(true);
+  });
+
   test("an ACL error or unknown command chooses fallback without throwing", async () => {
     const call = vi.fn().mockRejectedValue(new Error("unknown command"));
     const connection = getClientConnection(asClient(Object.assign(new FakeRedis(), { call })));
@@ -54,6 +75,10 @@ describe("tag field expiry capability", () => {
 });
 
 describe("background maintenance", () => {
+  test("maintenance script SHA1 matches", () => {
+    expect(createHash("sha1").update(PRUNE_TAGS_SCRIPT).digest("hex")).toBe(PRUNE_TAGS_SHA);
+  });
+
   test("Cluster without field TTLs skips pruning and rate limits its warning", async () => {
     const client = Object.assign(new FakeRedis(), {
       nodes: () => [],
@@ -91,6 +116,24 @@ describe("background maintenance", () => {
       expect(tags.get("still-works")).toBeDefined();
     } finally {
       tags.dispose();
+    }
+  });
+
+  test("startup writes use guarded expiry and the prompt probe runs without waiting a minute", async () => {
+    vi.useFakeTimers();
+    const call = vi.fn().mockResolvedValue([["hpexpireat"]]);
+    const client = Object.assign(new FakeRedis(), { call });
+    const evaluate = vi.spyOn(client, "evalsha");
+    const tags = new TagStore(getClientConnection(asClient(client)), "startup:");
+    try {
+      await tags.update(["before-probe"]);
+      expect(evaluate.mock.calls[0][0]).toBe(UPDATE_EXPIRING_TAGS_SHA);
+      expect(call).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(call).toHaveBeenCalledTimes(1);
+    } finally {
+      tags.dispose();
+      vi.useRealTimers();
     }
   });
 

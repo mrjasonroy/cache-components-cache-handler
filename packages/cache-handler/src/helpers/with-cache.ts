@@ -39,7 +39,6 @@ export interface WithCacheConfig {
   cacheHandler?: string;
   cacheHandlers: { default: string; remote: string };
   cacheMaxMemorySize?: number;
-  outputFileTracingIncludes?: Record<string, string[]>;
 }
 
 /**
@@ -110,7 +109,7 @@ function applyCache<T extends object>(
   nextConfig: T,
   options: WithCacheOptions,
 ): T & WithCacheConfig {
-  const config = nextConfig as T & Partial<WithCacheConfig> & { distDir?: string };
+  const config = nextConfig as T & Partial<WithCacheConfig>;
   const { useCache = "memory", pages = true, handlers = {} } = options;
   // With `pages: false` the page handler is the user's own business, so their cacheHandler stays.
   if ((pages && config.cacheHandler !== undefined) || config.cacheHandlers !== undefined) {
@@ -141,15 +140,6 @@ function applyCache<T extends object>(
       ? {
           cacheHandler: handlers.page ? resolvePath(handlers.page) : entryPath("page"),
           cacheMaxMemorySize: userMemorySize ?? 0,
-          outputFileTracingIncludes: {
-            ...config.outputFileTracingIncludes,
-            "/*": [
-              ...new Set([
-                ...(config.outputFileTracingIncludes?.["/*"] ?? []),
-                `${config.distDir ?? ".next"}/server/cache-handler-build.json`,
-              ]),
-            ],
-          },
         }
       : {}),
     cacheHandlers: { default: defaultHandler, remote },

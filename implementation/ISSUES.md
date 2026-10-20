@@ -262,3 +262,15 @@ is dropped silently.
   Before, `[-1, 1]` decoded into a byte of the header. Only an array under `__nch_b` / `__nch_m` is
   a marker, as the encoder writes it: an ordinary object with that key and any other value (a
   header named `__nch_b`) is plain JSON and round-trips (final gate 2, L2).
+
+## ISSUE-8: A crash between a tag hash write and a failed index write can leave an orphan field
+
+**Status:** Open (accepted limitation) · **Severity:** Low · **Area:** `shared/tag-store.ts`
+
+The hash update and `ZADD GT` run as separate single-key commands for Cluster compatibility.
+If HSET succeeds, ZADD fails, and the process dies before replaying its queued invalidation,
+the hash may contain a field absent from the index. On Redis 7.4+ and Valkey 9+ its field TTL
+still bounds retention. The standalone fallback walks the index, so on older servers that
+orphan field stays until a full flush or a later revalidation. Reproduce by rejecting ZADD
+after an acknowledged hash write, then terminating the writer before its next sync/reconnect.
+An extra hash scan could recover these fields, but is not part of this release's bounded prune.

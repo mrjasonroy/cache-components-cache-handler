@@ -11,6 +11,9 @@ export const TAG_PRUNE_BATCH_SIZE = 1_000;
 
 interface Capability {
   supported: boolean;
+  attempt: boolean;
+  scriptRejected: boolean;
+  retryOnReady: boolean;
   probing?: Promise<void>;
 }
 const CAPABILITIES_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/tag-capabilities");
@@ -24,7 +27,7 @@ function capability(connection: RedisConnection): Capability {
   }
   let result = capabilities.get(connection);
   if (!result) {
-    result = { supported: false };
+    result = { supported: false, attempt: true, scriptRejected: false, retryOnReady: false };
     capabilities.set(connection, result);
   }
   return result;
@@ -42,9 +45,15 @@ export async function probeTagFieldExpiry(connection: RedisConnection): Promise<
     state.probing = (async () => {
       try {
         const reply = await connection.client.call("COMMAND", "INFO", "HPEXPIREAT");
-        state.supported = Array.isArray(reply) && Array.isArray(reply[0]);
-      } catch {
+        state.supported = !state.scriptRejected && Array.isArray(reply) && Array.isArray(reply[0]);
+      } catch (error) {
         state.supported = false;
+        state.retryOnReady =
+          error instanceof Error &&
+          error.name !== "ReplyError" &&
+          !/unknown command|NOPERM/i.test(error.message);
+      } finally {
+        state.attempt = state.supported;
       }
     })();
   }
@@ -105,5 +114,25 @@ return {removed, nextOffset, redis.call('HLEN', KEYS[1]), redis.call('ZCARD', KE
 
 /** A script may discover an ACL restriction or a failover to an older server after the probe. */
 export function disableTagFieldExpiry(connection: RedisConnection): void {
-  capability(connection).supported = false;
+  const state = capability(connection);
+  state.supported = false;
+  state.attempt = false;
+  state.scriptRejected = true;
 }
+
+/** Unknown support uses the guarded write script so startup HSETs cannot clear native TTLs. */
+export function shouldExpireTagFields(connection: RedisConnection): boolean {
+  return capability(connection).attempt;
+}
+
+/** Retry a transient probe failure once on the next ready event, never on every request/tick. */
+export function retryTagFieldProbeOnReady(connection: RedisConnection): void {
+  const state = capability(connection);
+  if (state.retryOnReady && !state.scriptRejected) {
+    state.probing = undefined;
+    state.retryOnReady = false;
+  }
+}
+
+/** SHA1 of the standalone maintenance script, verified in unit tests. */
+export const PRUNE_TAGS_SHA = "ea6498fcdcf2a8bc621ae85b511de7c4735735d3";
