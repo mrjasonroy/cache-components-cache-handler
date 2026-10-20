@@ -30,6 +30,7 @@ import {
   DEFAULT_ERROR_LOG_INTERVAL_MS,
   createErrorReporter,
 } from "../data-cache/error-reporter.js";
+import { nowMs } from "./clock.js";
 import { requireModule } from "./node-require.js";
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connections");
@@ -366,7 +367,7 @@ function watchUnownedClient(
     // One more timeout after the cooldown marks it again at once.
     timeouts = options.max - 1;
     stats.drops += 1;
-    unhealthyUntil = Date.now() + options.cooldownMs;
+    unhealthyUntil = nowMs() + options.cooldownMs;
     if (!marked) onUnhealthy();
     marked = true;
   };
@@ -410,7 +411,7 @@ function watchUnownedClient(
     },
   });
 
-  return { proxy, health: { healthy: () => Date.now() >= unhealthyUntil } };
+  return { proxy, health: { healthy: () => nowMs() >= unhealthyUntil } };
 }
 
 /**

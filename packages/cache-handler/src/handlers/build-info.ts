@@ -31,8 +31,8 @@
  */
 
 import { getBuildId } from "../shared/build-id.js";
-import { nodeBuiltin } from "../shared/node-require.js";
 import { nowMs } from "../shared/clock.js";
+import { nodeBuiltin } from "../shared/node-require.js";
 
 /**
  * The stamp's file name, in `serverDistDir`.

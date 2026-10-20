@@ -43,6 +43,7 @@
  */
 
 import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
+import { nowMs } from "./clock.js";
 import type { RedisConnection } from "./connection.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
 import {
@@ -175,7 +176,7 @@ export class TagStore {
    * Whether an entry created at `timestamp` with these tags is fresh, stale or expired. Local
    * state only.
    */
-  check(tags: Iterable<string>, timestamp: number, now: number = Date.now()): TagState {
+  check(tags: Iterable<string>, timestamp: number, now: number = nowMs()): TagState {
     let stale = false;
     for (const tag of tags) {
       const record = this.records.get(tag);
@@ -217,7 +218,7 @@ export class TagStore {
    * later identical update, however soon, is applied again.
    */
   update(tags: string[], durations?: Durations): Promise<void> {
-    const now = Date.now();
+    const now = nowMs();
     const key = JSON.stringify([[...tags].sort(), durations ?? null]);
     if (this.lastUpdate?.key === key) return this.lastUpdate.done;
 
@@ -288,7 +289,7 @@ export class TagStore {
     connection: RedisConnection,
     batch: Map<string, Durations | null>,
   ): Promise<void> {
-    const now = Date.now();
+    const now = nowMs();
     const updates = new Map<string, TagUpdate>();
     const scores: (string | number)[] = [];
     for (const [tag, durations] of batch) {
@@ -334,7 +335,7 @@ export class TagStore {
   sync(minIntervalMs = 0): Promise<void> {
     if (!this.connection) return Promise.resolve();
     if (this.syncing) return this.syncing;
-    if (minIntervalMs > 0 && Date.now() - this.lastSyncAt < minIntervalMs) {
+    if (minIntervalMs > 0 && nowMs() - this.lastSyncAt < minIntervalMs) {
       return Promise.resolve();
     }
     this.syncing = this.runSync().finally(() => {
@@ -355,7 +356,7 @@ export class TagStore {
     // An update that lands after this point is scored at least `startedAt - SYNC_SKEW_MS` by any
     // writer within the skew bound, so the next sync can start there. Scores read are not used:
     // one from a writer whose clock runs ahead would move the start past a lagging writer's.
-    const startedAt = Date.now();
+    const startedAt = nowMs();
 
     try {
       await this.readIndexFrom(connection.client, since);
@@ -369,7 +370,7 @@ export class TagStore {
       this.synced = false;
       this.reportError("refreshTags", error);
     }
-    this.lastSyncAt = Date.now();
+    this.lastSyncAt = nowMs();
   }
 
   /**

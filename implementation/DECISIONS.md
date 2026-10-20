@@ -84,6 +84,20 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
 - Next ages entries on `performance.timeOrigin + performance.now()`, not `Date.now()`. A stale
   entry's `lastModified` is moved back on that clock, by `revalidate` plus a 1 s margin. For a
   `fetch`, `revalidate` is the larger of `ctx.revalidate` and the entry's own.
+- **The handlers never read the time through `Date`; they use `nowMs()` (`shared/clock.ts`).**
+  With cacheComponents, Next extends `Date` (`server/node-environment-extensions/date.js`) so that
+  `Date.now()`, `new Date()` and `Date()` during a prerender count as IO and abort it. Next calls
+  the handlers inside the prerender's async context (`use-cache/use-cache-wrapper.js`
+  `saveToCacheHandler`), so a handler reading `Date.now()` aborted it, silently: a route handler
+  with two sequential `"use cache"` calls was built as dynamic (ISSUE-4). Next's own handlers read
+  `performance.timeOrigin + performance.now()` (`lib/cache-handlers/default.js`), and so does
+  `nowMs()`, rounded to whole ms because the times are stored in Redis as integers. Caveat: tag
+  times shared across instances are on this clock too. It is the clock Next stamps
+  `entry.timestamp` with, so tag/entry comparisons are consistent, but it can drift from wall time
+  in a long-running process (the clock-skew limit in ISSUE-2 covers the difference between
+  instances). A static test (`shared/clock.test.ts`) fails on any `Date` read outside
+  `clock.ts`, tests and `testing/`. Tests fake the time with `vi.setSystemTime`: the Vitest setup
+  points `nowMs()` at `Date.now()` (`testing/clock-setup.ts`).
 - `NEXT_PHASE=phase-production-build` is set before the build workers start (`build/index.js`),
   so the build phase never connects to Redis.
 - `BUILD_ID` sits next to `serverDistDir`; a standalone `server.js` sets

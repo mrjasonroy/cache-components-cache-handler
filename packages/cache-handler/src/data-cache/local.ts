@@ -20,6 +20,7 @@
  * Without Redis it is a plain memory handler.
  */
 
+import { nowMs } from "../shared/clock.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
@@ -83,7 +84,7 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
         const stored = await readPendingEntry(pendingEntry);
         if (!stored) return;
         const until = keepUntil(stored);
-        if (until <= Date.now()) return;
+        if (until <= nowMs()) return;
         stores.local.set(cacheKey, stored, stored.value.byteLength, until);
         log?.("set", cacheKey, { bytes: stored.value.byteLength });
       });

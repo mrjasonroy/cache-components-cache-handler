@@ -37,6 +37,7 @@
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
+import { nowMs } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
 import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
 import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
@@ -228,14 +229,6 @@ function lifetimeOf(
 const STALE_MARGIN_MS = 1000;
 
 /**
- * Next's clock for entry ages (next/dist/server/lib/incremental-cache/index.js):
- * `performance.timeOrigin + performance.now()`, which can drift from `Date.now()`.
- */
-function nextClock(): number {
-  return performance.timeOrigin + performance.now();
-}
-
-/**
  * The period after which Next treats this entry as stale, or `undefined` if it has none. For a
  * `fetch`, Next uses `ctx.revalidate || value.revalidate`; the larger of the two covers both.
  */
@@ -394,7 +387,7 @@ export class RedisCacheHandler {
         return undefined;
       }
       until = buildTime + lifetimeOf(periods.revalidate, periods.expire, 0) * 1000;
-      if (Date.now() >= until) {
+      if (nowMs() >= until) {
         this.log?.("get", cacheKey, "no build output (past its window)", { buildTime, until });
         return undefined;
       }
@@ -415,7 +408,7 @@ export class RedisCacheHandler {
       this.runtime.reportError("get", error);
       return undefined;
     }
-    const now = Date.now();
+    const now = nowMs();
     if (
       buildTime === undefined &&
       this.runtime.tags.check([...tags, ...softTags], 0, now) !== "fresh"
@@ -446,7 +439,7 @@ export class RedisCacheHandler {
     if (lifetime <= 0) return;
     if (!connection) {
       const bytes = encodeEntry(entry).byteLength;
-      stores.page.set(cacheKey, { entry }, bytes, Date.now() + lifetime * 1000);
+      stores.page.set(cacheKey, { entry }, bytes, nowMs() + lifetime * 1000);
       this.log?.("set", cacheKey, "build output, memory", { lifetime, bytes });
       return;
     }
@@ -471,7 +464,7 @@ export class RedisCacheHandler {
     allTags: string[],
     ctx: PageCacheGetContext | undefined,
   ): PageCacheHandlerValue | null {
-    const now = Date.now();
+    const now = nowMs();
     // No entry is served past the longest entry age, whatever TTL it was written with.
     if (now - entry.lastModified >= MAX_ENTRY_AGE_SECONDS * 1000) return null;
     const state = this.runtime.tags.check(allTags, entry.lastModified, now);
@@ -486,7 +479,7 @@ export class RedisCacheHandler {
       if (revalidate === undefined) return null;
       lastModified = Math.min(
         lastModified,
-        Math.floor(nextClock() - revalidate * 1000 - STALE_MARGIN_MS),
+        Math.floor(nowMs() - revalidate * 1000 - STALE_MARGIN_MS),
       );
     }
 
@@ -510,7 +503,7 @@ export class RedisCacheHandler {
     // Already expired; Redis rejects `EX 0`.
     if (lifetime <= 0) return;
 
-    const entry: StoredPageEntry = { value: data, tags, lastModified: Date.now() };
+    const entry: StoredPageEntry = { value: data, tags, lastModified: nowMs() };
     // Next reads a page's periods back from `get`, so an instance that did not render the page
     // revalidates it on the page's own schedule.
     if (!ctx?.fetchCache && ctx?.cacheControl) entry.cacheControl = ctx.cacheControl;

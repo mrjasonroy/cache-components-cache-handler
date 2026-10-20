@@ -1,6 +1,7 @@
 import { isImplicitTag } from "../helpers/is-implicit-tag.js";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
 import { jsonReplacer } from "../helpers/serialization.js";
+import { nowMs } from "../shared/clock.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -103,7 +104,7 @@ export class MemoryCacheHandler implements CacheHandler {
     return {
       value: entry.value,
       lastModified: entry.lastModified,
-      age: Date.now() - entry.lastModified,
+      age: nowMs() - entry.lastModified,
     };
   }
 
@@ -133,7 +134,7 @@ export class MemoryCacheHandler implements CacheHandler {
     const tags = context?.tags ?? [];
 
     const entry: CacheHandlerValue = {
-      lastModified: Date.now(),
+      lastModified: nowMs(),
       lifespan,
       tags,
       value,
@@ -146,7 +147,7 @@ export class MemoryCacheHandler implements CacheHandler {
     // Store revalidation timestamp
     // Note: profile parameter is used by Next.js for cache-life configuration
     // but for memory handler we just invalidate immediately
-    this.revalidatedTags.set(tag, Date.now());
+    this.revalidatedTags.set(tag, nowMs());
 
     // For explicit tags (non-implicit), we can directly delete entries
     if (!isImplicitTag(tag)) {

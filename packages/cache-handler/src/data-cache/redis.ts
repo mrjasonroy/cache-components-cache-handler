@@ -23,6 +23,7 @@
  *   cluster mode work (no cross-slot CROSSSLOT errors).
  */
 
+import { nowMs } from "../shared/clock.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
@@ -242,7 +243,7 @@ export function createRedisDataCacheHandler(
   function getEntryTTL(entry: DataCacheEntry): number {
     const expire = entry.expire >= INFINITE_CACHE ? defaultTTL : entry.expire;
     const lifetime = Math.min(expire, tagTTL);
-    return Math.ceil((entry.timestamp + lifetime * 1000 - Date.now()) / 1000);
+    return Math.ceil((entry.timestamp + lifetime * 1000 - nowMs()) / 1000);
   }
 
   /**
@@ -331,7 +332,7 @@ export function createRedisDataCacheHandler(
         // it first; this guards against clock skew between instances. Past
         // `revalidate` (but before `expire`) the entry is returned as-is and
         // Next's wrapper serves it while regenerating in the background.
-        if (Date.now() > entry.timestamp + entry.expire * 1000) {
+        if (nowMs() > entry.timestamp + entry.expire * 1000) {
           log?.("get", cacheKey, "expired");
           return undefined;
         }
@@ -357,7 +358,7 @@ export function createRedisDataCacheHandler(
 
           if (revalidatedAt && revalidatedAt > entry.timestamp) {
             // Like Next's areTagsExpired: an expiry that predates the entry doesn't apply to it.
-            if (expireAt && expireAt > entry.timestamp && Date.now() >= expireAt) {
+            if (expireAt && expireAt > entry.timestamp && nowMs() >= expireAt) {
               expiredTag = tag;
               break;
             }
@@ -444,7 +445,7 @@ export function createRedisDataCacheHandler(
     },
 
     async updateTags(tags, durations) {
-      const now = Date.now();
+      const now = nowMs();
       const expire = redis.expire?.bind(redis);
 
       if (!expire && !warnedMissingExpire) {

@@ -2,6 +2,7 @@
  * A `"use cache"` entry with its value read into bytes, as the remote and local handlers keep it.
  */
 
+import { nowMs } from "../shared/clock.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { bufferToStream, streamToBuffer } from "../shared/runtime.js";
 import type { TagStore } from "../shared/tag-store.js";
@@ -56,7 +57,7 @@ export async function readPendingEntry(
  * Seconds the entry may still be kept: until `timestamp + expire` (24 h for an infinite expire),
  * capped at the longest entry age so a tag record always outlives it.
  */
-export function storedEntryTTL(entry: StoredDataEntry, now: number = Date.now()): number {
+export function storedEntryTTL(entry: StoredDataEntry, now: number = nowMs()): number {
   const expire = entry.expire >= INFINITE_CACHE ? DEFAULT_DATA_TTL_SECONDS : entry.expire;
   const lifetime = Math.min(expire, MAX_ENTRY_AGE_SECONDS);
   return Math.ceil((entry.timestamp + lifetime * 1000 - now) / 1000);
@@ -71,7 +72,7 @@ export function toDataCacheEntry(
   stored: StoredDataEntry,
   tags: TagStore,
   until: number,
-  now: number = Date.now(),
+  now: number = nowMs(),
 ): DataCacheEntry | undefined {
   if (now > until || now >= stored.timestamp + MAX_ENTRY_AGE_SECONDS * 1000) return undefined;
   const state = tags.check(stored.tags, stored.timestamp, now);

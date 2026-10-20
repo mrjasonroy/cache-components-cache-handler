@@ -1,3 +1,4 @@
+import { nowMs } from "../shared/clock.js";
 import type { LifespanParameters } from "../types.js";
 
 /**
@@ -27,7 +28,7 @@ export function calculateLifespan(
     return null;
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const nowSeconds = Math.floor(nowMs() / 1000);
 
   return {
     lastModifiedAt: nowSeconds,
@@ -52,7 +53,7 @@ export function isExpired(lifespan: LifespanParameters | null): boolean {
     return false;
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const nowSeconds = Math.floor(nowMs() / 1000);
   return nowSeconds >= lifespan.expireAt;
 }
 
@@ -64,5 +65,5 @@ export function redisTtlSecondsFromLifespan(
   lifespan: LifespanParameters | null,
 ): number | undefined {
   if (!lifespan?.expireAt) return undefined;
-  return lifespan.expireAt - Math.floor(Date.now() / 1000);
+  return lifespan.expireAt - Math.floor(nowMs() / 1000);
 }

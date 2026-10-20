@@ -9,6 +9,8 @@
  * since the previous one.
  */
 
+import { nowMs } from "../shared/clock.js";
+
 /**
  * Report an error for the named operation (e.g. "get", "set", "connection").
  */
@@ -35,7 +37,7 @@ export function createErrorReporter(
   const operations = new Map<string, OperationState>();
 
   return (operation, error) => {
-    const now = Date.now();
+    const now = nowMs();
     const state = operations.get(operation);
 
     if (state && now - state.lastLoggedAt < intervalMs) {

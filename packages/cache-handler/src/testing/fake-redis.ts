@@ -5,6 +5,7 @@
 
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { nowMs } from "../shared/clock.js";
 import { decodeRecord, encodeRecord } from "../shared/tag-store.js";
 import { UPDATE_TAGS_SCRIPT, mergeUpdate } from "../shared/tag-update.js";
 
@@ -49,7 +50,7 @@ export class FakeRedis extends EventEmitter {
 
   private live(key: string): Item | undefined {
     const item = this.items.get(key);
-    if (item?.expiresAt !== undefined && Date.now() >= item.expiresAt) {
+    if (item?.expiresAt !== undefined && nowMs() >= item.expiresAt) {
       this.items.delete(key);
       return undefined;
     }
@@ -86,7 +87,7 @@ export class FakeRedis extends EventEmitter {
     const item = this.live(key);
     if (!item) return -2;
     if (item.expiresAt === undefined) return -1;
-    return Math.ceil((item.expiresAt - Date.now()) / 1000);
+    return Math.ceil((item.expiresAt - nowMs()) / 1000);
   }
 
   async get(key: string): Promise<string | null> {
@@ -105,7 +106,7 @@ export class FakeRedis extends EventEmitter {
     this.run("set");
     if (args.includes("NX") && this.live(key)) return null;
     const item: Item = { value: Buffer.isBuffer(value) ? value : Buffer.from(value) };
-    if (args[0] === "EX") item.expiresAt = Date.now() + Number(args[1]) * 1000;
+    if (args[0] === "EX") item.expiresAt = nowMs() + Number(args[1]) * 1000;
     this.items.set(key, item);
     return "OK";
   }
@@ -128,7 +129,7 @@ export class FakeRedis extends EventEmitter {
     this.run("expire");
     const item = this.live(key);
     if (!item) return 0;
-    item.expiresAt = Date.now() + seconds * 1000;
+    item.expiresAt = nowMs() + seconds * 1000;
     return 1;
   }
 

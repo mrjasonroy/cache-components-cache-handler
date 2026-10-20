@@ -1,3 +1,4 @@
+import { nowMs } from "../shared/clock.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -83,7 +84,7 @@ export class CompositeHandler implements CacheHandler {
 
   async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {
     // Build the full cache handler value for strategy function
-    const now = Date.now();
+    const now = nowMs();
     const cacheHandlerValue: CacheHandlerValue = {
       lastModified: now,
       lifespan: null, // Simplified - handlers will calculate their own

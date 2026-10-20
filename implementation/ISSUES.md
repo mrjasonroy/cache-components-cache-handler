@@ -108,3 +108,30 @@ The original report:
 application cannot change them (the 16.5 `redis: RedisOptions` object reaches only ioredis's own
 `connectTimeout`/`socketTimeout`). Adding them to `CacheOptions` and forwarding them in
 `resolveConnection` is a possible public API addition, pending approval; nobody has asked for it.
+
+## ISSUE-4: A route handler with sequential `"use cache"` calls is built as dynamic
+
+**Status:** Resolved (DEC-3, `shared/clock.ts`) · **Severity:** Medium · **Area:** every handler
+
+Next's deploy suite `test/e2e/app-dir/cache-components` (`/routes/use_cache-cached`, which awaits
+two cached calls in turn) showed the route as `ƒ` with this package's handlers and as static with
+Next's own. The build log printed no error: with `NEXT_PRIVATE_DEBUG_CACHE` it showed the first
+call generated and set through the handler, and then neither the second call nor a final render.
+
+Cause: with cacheComponents, Next extends `Date` so that reading the current time during a
+prerender aborts it (`next/dist/server/node-environment-extensions/date.js`, `io-utils.js`). Next
+calls the handlers' `get` and `set` inside the prerender's async context, and they read
+`Date.now()` (for example `local.ts` before storing a value). The aborted prospective render
+rejects the second call, so Next throws a `DynamicServerError`, which the build swallows. The
+debug print of the prospective render's error (`printDebugThrownValueForProspectiveRender`) is
+skipped for an aborted render, which is why nothing was printed.
+
+Reproduction (unit, `src/data-cache/prerender-clock.test.ts`): load Next's
+`node-environment-baseline` and `node-environment-extensions/date`, run a handler's calls inside
+`workUnitAsyncStorage.run({ type: "prerender", controller, ... })`, and check
+`controller.signal.aborted`. Before the fix the local, remote and Redis data cache handlers, the
+page handler (with and without build output) and the ISR memory and composite handlers all
+aborted it; only `createMemoryDataCacheHandler` (already on the performance clock) did not.
+
+Fix: every handler path reads `nowMs()` = `performance.timeOrigin + performance.now()`, as Next's
+own handlers do; `shared/clock.test.ts` keeps `Date` reads out of the source.

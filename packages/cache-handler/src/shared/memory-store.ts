@@ -5,6 +5,8 @@
  * Every store registers itself on a `globalThis` registry so `flushCache` can empty all of them.
  */
 
+import { nowMs } from "./clock.js";
+
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/memory-stores");
 
 export interface MemoryStoreOptions {
@@ -52,7 +54,7 @@ export class MemoryStore<T> {
   /**
    * The live value for `key`, marked most recently used, or `undefined`.
    */
-  get(key: string, now: number = Date.now()): T | undefined {
+  get(key: string, now: number = nowMs()): T | undefined {
     const item = this.items.get(key);
     if (!item) return undefined;
     this.items.delete(key);

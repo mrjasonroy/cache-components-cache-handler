@@ -16,6 +16,7 @@
  * Redis it should have invalidated stay until their TTL or the next revalidation of that tag.
  */
 
+import { nowMs } from "../shared/clock.js";
 import type { RedisConnection } from "../shared/connection.js";
 import { createErrorReporter } from "./error-reporter.js";
 import { createMemoryDataCacheHandler } from "./memory.js";
@@ -161,7 +162,7 @@ export function createFallbackDataCacheHandler(
 
       const outage = memory;
       const writtenAt = outage.writtenAt.get(cacheKey);
-      if (writtenAt === undefined || Date.now() - writtenAt >= fallbackTTL * 1000) {
+      if (writtenAt === undefined || nowMs() - writtenAt >= fallbackTTL * 1000) {
         outage.writtenAt.delete(cacheKey);
         return undefined;
       }
@@ -173,7 +174,7 @@ export function createFallbackDataCacheHandler(
       if (handler) return handler.set(cacheKey, pendingEntry);
 
       const outage = memory;
-      recordWrite(outage.writtenAt, cacheKey, Date.now(), fallbackTTL * 1000);
+      recordWrite(outage.writtenAt, cacheKey, nowMs(), fallbackTTL * 1000);
       return outage.handler.set(cacheKey, pendingEntry);
     },
 

@@ -18,6 +18,7 @@
  */
 
 import { getBuildId } from "../shared/build-id.js";
+import { nowMs } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored } from "../shared/codec.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { dataKey } from "../shared/keys.js";
@@ -151,7 +152,7 @@ export function createRemoteCacheHandler(
         const ttl = storedEntryTTL(stored);
         // Already expired (e.g. `expire: 0`); Redis rejects `EX 0`.
         if (ttl <= 0) return;
-        const now = Date.now();
+        const now = nowMs();
 
         if (!connection || stored.tags.includes(MEMORY_ONLY_TAG)) {
           stores.data.set(
