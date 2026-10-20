@@ -63,7 +63,7 @@ test.describe("Redis outage @outage", () => {
     }
 
     // Revalidate both entries on A during the outage. The tag write cannot reach Redis, so it
-    // applies to A only (README "When Redis goes down"); B may keep its copy until it ages out.
+    // applies to A only (docs/how-it-works.md "When Redis goes down"); B may keep its copy until it ages out.
     const revalidatedAt = Date.now();
     await revalidate(INSTANCE_A, { tag: PAGE_TAG });
     await revalidate(INSTANCE_A, { tag: `e2e-remote-${id}` });

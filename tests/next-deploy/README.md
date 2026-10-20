@@ -11,7 +11,7 @@ Every suite in `suites.txt` runs in three variants:
 | Variant | What `e2e-deploy.sh` does |
 |---|---|
 | `baseline` | Runs plain `pnpm build` (the fixture's `next build`), then one `next start`. No custom handlers. |
-| `pkg-16.4.2` | Installs the **published** `@mrjasonroy/cache-components-cache-handler@16.4.2` from npm and wires it the 16.4.2 way: `cacheHandlers.default` / `remote` pointing at a generated `data-cache-handler.mjs` that exports `createCacheHandler({ type: "redis" })`, and `cacheMaxMemorySize: 0`. (It was `pkg-16.5.1` until 16.5.0 and 16.5.1 were withdrawn from npm.) |
+| `pkg-16.4.2` | Installs the **published** `@mrjasonroy/cache-components-cache-handler@16.4.2` from npm and wires it the 16.4.2 way: `cacheHandlers.default` / `remote` pointing at a generated `data-cache-handler.mjs` that exports `createCacheHandler({ type: "redis" })`, and `cacheMaxMemorySize: 0`. |
 | `branch` | Installs this branch's package (built and packed once per run) and wraps the config in `withCache`. |
 
 Both handler variants then build and run `NEXT_DEPLOY_INSTANCES` (default 2) `next start`
@@ -77,8 +77,9 @@ artifact. It holds:
 
 - **`<ref>.json`** (for example `v16.4.2.json`): per-suite status and test counts (passed,
   failed, skipped, total) for each variant, per-variant totals, and the run URL and commit.
-  `results/baseline-v16.4.2.json` in this directory is a committed copy of it from a known run
-  (made before the published variant moved from 16.5.1 to 16.4.2, so it still says `pkg-16.5.1`).
+  `results/baseline-v16.4.2.json` in this directory is a committed copy of it from a known run.
+  Its informational `pkg-published` column came from an earlier published build of the package,
+  not from the current `pkg-16.4.2` variant.
 - **`<ref>.md`:** the same data as a table. It is also written to the job summary.
 
 Test counts come from the run-tests.js log (`count-results.mjs`). With

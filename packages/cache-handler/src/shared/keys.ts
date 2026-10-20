@@ -1,5 +1,5 @@
 /**
- * Redis key layout (documented for operators in the package README):
+ * Redis key layout (documented for operators in docs/redis.md):
  *
  * ```
  * <prefix><buildId>:page:<key>   page / route / fetch entry (singular cacheHandler)

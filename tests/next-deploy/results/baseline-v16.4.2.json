@@ -27,7 +27,7 @@
         "total": 578
       }
     },
-    "pkg-16.5.1": {
+    "pkg-published": {
       "state": "ran",
       "incomplete": [],
       "suites": {
@@ -81,7 +81,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 25,
         "passed": 1,
@@ -108,7 +108,7 @@
         "skipped": 7,
         "total": 96
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "fail",
         "seconds": 20,
         "passed": 0,
@@ -135,7 +135,7 @@
         "skipped": 8,
         "total": 79
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 246,
         "passed": 71,
@@ -162,7 +162,7 @@
         "skipped": 0,
         "total": 2
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 23,
         "passed": 2,
@@ -189,7 +189,7 @@
         "skipped": 2,
         "total": 3
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 14,
         "passed": 1,
@@ -216,7 +216,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "fail",
         "seconds": 32,
         "passed": 0,
@@ -245,7 +245,7 @@
         "skipped": 0,
         "total": 6
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 30,
         "passed": 6,
@@ -272,7 +272,7 @@
         "skipped": 22,
         "total": 22
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -299,7 +299,7 @@
         "skipped": 194,
         "total": 194
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -326,7 +326,7 @@
         "skipped": 3,
         "total": 3
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -353,7 +353,7 @@
         "skipped": 1,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 2,
         "passed": 0,
@@ -380,7 +380,7 @@
         "skipped": 0,
         "total": 2
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 37,
         "passed": 2,
@@ -407,7 +407,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 20,
         "passed": 1,
@@ -434,7 +434,7 @@
         "skipped": 104,
         "total": 104
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 6,
         "passed": 0,
@@ -461,7 +461,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 16,
         "passed": 1,
@@ -488,7 +488,7 @@
         "skipped": 9,
         "total": 9
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -515,7 +515,7 @@
         "skipped": 0,
         "total": 2
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 15,
         "passed": 2,
@@ -542,7 +542,7 @@
         "skipped": 5,
         "total": 5
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 2,
         "passed": 0,
@@ -569,7 +569,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 24,
         "passed": 1,
@@ -596,7 +596,7 @@
         "skipped": 0,
         "total": 2
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 13,
         "passed": 2,
@@ -631,7 +631,7 @@
         "skipped": 0,
         "total": 10
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 16,
         "passed": 10,
@@ -658,7 +658,7 @@
         "skipped": 0,
         "total": 9
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "fail",
         "seconds": 130,
         "passed": 8,
@@ -685,7 +685,7 @@
         "skipped": 1,
         "total": 4
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "fail",
         "seconds": 37,
         "passed": 2,
@@ -712,7 +712,7 @@
         "skipped": 7,
         "total": 7
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -739,7 +739,7 @@
         "skipped": 0,
         "total": 1
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "fail",
         "seconds": 20,
         "passed": 0,
@@ -766,7 +766,7 @@
         "skipped": 7,
         "total": 7
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 2,
         "passed": 0,
@@ -793,7 +793,7 @@
         "skipped": 3,
         "total": 3
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "skipped",
         "seconds": 3,
         "passed": 0,
@@ -820,7 +820,7 @@
         "skipped": 0,
         "total": 2
       },
-      "pkg-16.5.1": {
+      "pkg-published": {
         "status": "pass",
         "seconds": 37,
         "passed": 2,

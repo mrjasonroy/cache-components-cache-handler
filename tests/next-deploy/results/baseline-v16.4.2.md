@@ -1,14 +1,14 @@
 ## Next.js deploy tests (v16.4.2)
 
 - `baseline`: 16 suites pass, 2 fail, 10 ran no tests; tests 203/578 passed
-- `pkg-16.5.1`: 13 suites pass, 5 fail, 10 ran no tests; tests 112/578 passed
+- `pkg-published`: 13 suites pass, 5 fail, 10 ran no tests; tests 112/578 passed
 - `branch`: 15 suites pass, 3 fail, 10 ran no tests; tests 114/578 passed
 
 **0 regression(s)** of `branch` vs `baseline`.
 
-Cells are `status passed/total`. `pkg-16.5.1` is informational.
+Cells are `status passed/total`. `pkg-published` is informational: this column came from an earlier published build of the package, not the current `pkg-16.4.2` variant.
 
-| Suite | baseline | pkg-16.5.1 | branch | Verdict | Notes |
+| Suite | baseline | pkg-published | branch | Verdict | Notes |
 |---|---|---|---|---|---|
 | `test/e2e/app-dir/actions-revalidate-remount` | pass 1/1 | pass 1/1 | pass 1/1 | ok |  |
 | `test/e2e/app-dir/app-static` | pass 89/96 | fail 0/96 (89 failed) | fail 0/96 (89 failed) | known Next bug (vercel/next.js#100046: Turbopack edge cacheHandlers registration) |  |
