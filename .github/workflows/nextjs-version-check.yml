@@ -174,7 +174,7 @@ jobs:
 
           # The package's unit tests run against the Next it supports (a dev dependency)
           cd packages/cache-handler
-          pnpm add -D next@${{ steps.check_version.outputs.latest_version }}
+          pnpm add -D --save-exact next@${{ steps.check_version.outputs.latest_version }}
           cd ../..
 
           # Bump package version to match Next.js version, but never lower it: the

@@ -10,9 +10,11 @@ import {
   type BuildOutput,
   type BuildOutputOptions,
   OTHER,
+  POSTS_FALLBACK,
   SITEMAP,
   appPageCtx,
   appRouteCtx,
+  fallbackCtx,
   pagesCtx,
   writeBuildOutput,
 } from "../testing/build-output.js";
@@ -81,6 +83,59 @@ describe("page handler: prerendered build output", () => {
       "<urlset>built</urlset>",
     );
     expect((await handler.get(ABOUT, pagesCtx))?.value.html).toBe("<html>built about</html>");
+  });
+
+  test("a dynamic route's Partial Prerendering fallback shell is served from the build output", async () => {
+    const result = await handlerFor(new FakeRedis()).get(POSTS_FALLBACK, fallbackCtx);
+
+    expect(result?.value.kind).toBe("APP_PAGE");
+    expect(result?.value.html).toBe("<html>posts shell</html>");
+    expect(result?.value.postponed).toBe("postponed-state");
+    expect(result?.lastModified).toBe(build.builtAt);
+  });
+
+  test("a time-based fallback shell keeps its build output for its fallback window", async () => {
+    rebuild({ fallbacks: { "/posts/[slug]": { revalidate: 60 } }, ageMs: 30_000 });
+    expect((await handlerFor(new FakeRedis()).get(POSTS_FALLBACK, fallbackCtx))?.value.html).toBe(
+      "<html>posts shell</html>",
+    );
+    await restart();
+    rebuild({ fallbacks: { "/posts/[slug]": { revalidate: 60 } }, ageMs: 100_000 });
+    expect(await handlerFor(new FakeRedis()).get(POSTS_FALLBACK, fallbackCtx)).toBeNull();
+  });
+
+  test("a fallback shell's tags are checked: a revalidation beats it, across a restart", async () => {
+    const fake = new FakeRedis();
+    expect(await handlerFor(fake).get(POSTS_FALLBACK, fallbackCtx)).not.toBeNull();
+    // Read from the build output again, not from its write-through.
+    await fake.del(pageKey("nextjs:", "development", POSTS_FALLBACK));
+    await restart();
+    await handlerFor(fake).revalidateTag("_N_T_/posts/[slug]/page");
+
+    await restart();
+    expect(await handlerFor(fake).get(POSTS_FALLBACK, fallbackCtx)).toBeNull();
+  });
+
+  test("a flush is a barrier for a fallback shell too", async () => {
+    const fake = new FakeRedis();
+    expect(await handlerFor(fake).get(POSTS_FALLBACK, fallbackCtx)).not.toBeNull();
+    await flushCache({ client: asClient(fake), scope: "all" });
+
+    await restart();
+    expect(await handlerFor(fake).get(POSTS_FALLBACK, fallbackCtx)).toBeNull();
+  });
+
+  test("a pathname of a dynamic route rendered at runtime is a miss", async () => {
+    const posts = createRequire(import.meta.url)("next/dist/server/lib/route-cache-key.js") as {
+      getRouteCacheKey: (pathname: string, owner: object) => string;
+    };
+    const key = posts.getRouteCacheKey("/posts/hello", {
+      kind: "APP_PAGE",
+      sourceRoute: "/posts/[slug]/page",
+    });
+    expect(
+      await handlerFor(new FakeRedis()).get(key, { ...fallbackCtx, isFallback: false }),
+    ).toBeNull();
   });
 
   test("a prerendered route handler (sitemap) is served from the build output", async () => {

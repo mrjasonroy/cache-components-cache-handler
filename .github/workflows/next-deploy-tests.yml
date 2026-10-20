@@ -77,7 +77,8 @@ jobs:
         env:
           INPUT_REF: ${{ inputs.nextjsRef }}
         run: |
-          ref="${INPUT_REF:-v$(node -p "require('./packages/cache-handler/package.json').devDependencies.next")}"
+          # An exact pin is expected; drop a range prefix (^, ~) if one slipped in.
+          ref="${INPUT_REF:-v$(node -p "require('./packages/cache-handler/package.json').devDependencies.next.replace(/^[^0-9]*/, '')")}"
           echo "next.js $ref"
           echo "ref=$ref" >> "$GITHUB_OUTPUT"
 

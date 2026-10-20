@@ -18,15 +18,21 @@
  * build copy is older than anything Next would serve, and a miss renders it again, as Next's
  * own cache would once its newer renders are gone. A route with `revalidate: false` keeps it until
  * a tag or a flush rejects it. The periods are the ones Next reads, from
- * `<distDir>/prerender-manifest.json` (`routes[route].initialRevalidateSeconds` and
- * `initialExpireSeconds`; next/dist/server/lib/incremental-cache/shared-cache-controls.external.js).
+ * `<distDir>/prerender-manifest.json`: `routes[route].initialRevalidateSeconds` and
+ * `initialExpireSeconds`, or for a dynamic route's fallback shell `dynamicRoutes[route]
+ * .fallbackRevalidate` and `fallbackExpire`
+ * (next/dist/server/lib/incremental-cache/shared-cache-controls.external.js).
  *
- * Both files are read once per `distDir`, through `node:fs` loaded on first use (see
+ * A Pages Router key's locale (`/fr/products/[id]`) is dropped before the `dynamicRoutes` lookup,
+ * with the locales in `<distDir>/routes-manifest.json`, as Next drops it.
+ *
+ * These files are read once per `distDir`, through `node:fs` loaded on first use (see
  * `../shared/node-require.ts`).
  */
 
 import { getBuildId } from "../shared/build-id.js";
 import { nodeBuiltin } from "../shared/node-require.js";
+import { nowMs } from "../shared/clock.js";
 
 /**
  * The stamp's file name, in `serverDistDir`.
@@ -34,6 +40,8 @@ import { nodeBuiltin } from "../shared/node-require.js";
 export const BUILD_STAMP_FILE = "cache-handler-build.json";
 
 const PRERENDER_MANIFEST_FILE = "prerender-manifest.json";
+
+const ROUTES_MANIFEST_FILE = "routes-manifest.json";
 
 const ROUTE_CACHE_PREFIX = "/route-cache/";
 
@@ -55,10 +63,21 @@ interface PrerenderManifest {
     string,
     { initialRevalidateSeconds?: number | false; initialExpireSeconds?: number }
   >;
+  dynamicRoutes?: Record<string, { fallbackRevalidate?: number | false; fallbackExpire?: number }>;
+}
+
+/** What is read of `<distDir>/routes-manifest.json` (next/dist/build/generate-routes-manifest.js). */
+interface RoutesManifest {
+  i18n?: { locales?: string[] };
+}
+
+interface Manifests {
+  prerender?: PrerenderManifest;
+  locales?: string[];
 }
 
 const buildTimes = new Map<string, number | undefined>();
-const manifests = new Map<string, PrerenderManifest | undefined>();
+const manifests = new Map<string, Manifests>();
 
 function fs(): typeof import("node:fs") {
   return nodeBuiltin<typeof import("node:fs")>("node:fs");
@@ -111,7 +130,7 @@ function writeStamp(file: string, stamp: Partial<BuildStamp>): void {
  * which precedes every prerender. A stamp naming another build than the `BUILD_ID` on disk was
  * left by an earlier build (`cleanDistDir: false`) and is replaced.
  */
-export function writeBuildStamp(serverDistDir: string, now: number = Date.now()): void {
+export function writeBuildStamp(serverDistDir: string, now: number = nowMs()): void {
   const file = path().join(serverDistDir, BUILD_STAMP_FILE);
   const buildId = writtenBuildId(serverDistDir);
   const fresh: Partial<BuildStamp> = buildId ? { buildTime: now, buildId } : { buildTime: now };
@@ -175,26 +194,55 @@ function toRoute(cacheKey: string): string {
 }
 
 /**
- * The prerendered route's periods, or `undefined` when the manifest does not list it (or cannot
- * be read).
+ * The pathname without its leading locale, if `locales` names one, any case
+ * (next/dist/shared/lib/i18n/normalize-locale-path.js).
+ */
+function withoutLocale(pathname: string, locales: string[] | undefined): string {
+  const segment = pathname.split("/", 2)[1]?.toLowerCase();
+  const locale = segment && locales?.find((candidate) => candidate.toLowerCase() === segment);
+  return locale ? pathname.slice(locale.length + 1) || "/" : pathname;
+}
+
+function readManifests(serverDistDir: string): Manifests {
+  let read = manifests.get(serverDistDir);
+  if (!read) {
+    const distDir = path().join(serverDistDir, "..");
+    read = {
+      prerender: readJson<PrerenderManifest>(path().join(distDir, PRERENDER_MANIFEST_FILE)),
+      locales: readJson<RoutesManifest>(path().join(distDir, ROUTES_MANIFEST_FILE))?.i18n?.locales,
+    };
+    manifests.set(serverDistDir, read);
+  }
+  return read;
+}
+
+function periods(revalidate: number | false, expire: number | undefined): RoutePeriods {
+  return typeof expire === "number" ? { revalidate, expire } : { revalidate };
+}
+
+/**
+ * The prerendered route's periods, or a dynamic route's fallback periods for its fallback shell,
+ * or `undefined` when the manifest lists neither (or cannot be read).
  */
 export function readRoutePeriods(
   serverDistDir: string,
   cacheKey: string,
 ): RoutePeriods | undefined {
-  let manifest = manifests.get(serverDistDir);
-  if (!manifests.has(serverDistDir)) {
-    manifest = readJson<PrerenderManifest>(
-      path().join(serverDistDir, "..", PRERENDER_MANIFEST_FILE),
-    );
-    manifests.set(serverDistDir, manifest);
+  const { prerender: manifest, locales } = readManifests(serverDistDir);
+  // As Next reads them (next/dist/server/lib/incremental-cache/shared-cache-controls.external.js):
+  // a prerendered pathname's own periods, else, for a dynamic route's fallback shell (`/posts/[slug]`),
+  // the route's fallback periods; a Pages Router key carries the locale, the dynamic route not.
+  const route = toRoute(cacheKey);
+  const prerendered = manifest?.routes?.[route];
+  if (prerendered?.initialRevalidateSeconds !== undefined) {
+    return periods(prerendered.initialRevalidateSeconds, prerendered.initialExpireSeconds);
   }
-  const route = manifest?.routes?.[toRoute(cacheKey)];
-  const revalidate = route?.initialRevalidateSeconds;
-  if (revalidate === undefined) return undefined;
-  return typeof route?.initialExpireSeconds === "number"
-    ? { revalidate, expire: route.initialExpireSeconds }
-    : { revalidate };
+  const isPages = cacheKey.startsWith(`${ROUTE_CACHE_PREFIX}PAGES/`);
+  const fallback = manifest?.dynamicRoutes?.[isPages ? withoutLocale(route, locales) : route];
+  if (fallback?.fallbackRevalidate !== undefined) {
+    return periods(fallback.fallbackRevalidate, fallback.fallbackExpire);
+  }
+  return undefined;
 }
 
 /**

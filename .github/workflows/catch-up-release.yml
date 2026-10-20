@@ -92,7 +92,7 @@ jobs:
 
           # The package's unit tests run against the Next it supports (a dev dependency)
           cd packages/cache-handler
-          pnpm add -D next@${{ steps.versions.outputs.latest_nextjs }}
+          pnpm add -D --save-exact next@${{ steps.versions.outputs.latest_nextjs }}
           cd ../..
 
       - name: Update package version

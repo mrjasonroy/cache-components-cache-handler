@@ -51,6 +51,12 @@ including the `redis: RedisOptions` form, through `RuntimeOptions` → `resolveC
 options are never changed). `withCache` stays environment-only: the options are not on
 `CacheOptions` and there is no environment variable for them.
 
+Connections are shared per distinct option set, tuning included. A page handler given
+`connectTimeout: 5000` next to a data handler left on the defaults therefore opens two clients to
+the same server, each with its own tag store. Both stay correct, because each reads the Redis tag
+records with its entries, but the process makes twice the connections and syncs. Give every
+handler the same tuning to keep one connection.
+
 ## DEC-3: One cache through `withCache`; the Next 16 page handler; shared tag coordination
 
 **Status:** Accepted · **Date:** 2026-10-19
@@ -250,6 +256,11 @@ not let an invalidated entry through:
 - While Redis is down the page and remote handlers serve from the memory fallback, whose entries
   are dropped on reconnect. An immediate revalidation (`expired === stale`) counts as expired
   whatever the reader's clock says, so a reader whose clock lags never serves it as stale.
+- A revalidation with durations expires every entry older than its `expired` deadline once that
+  deadline passes, including entries rendered after the revalidation. That is Next 16.4.2's own
+  `areTagsExpired` (`expired > timestamp && expired <= now`), used by its default `"use cache"`
+  handler and by `FileSystemCache`. We match it on purpose, so a deploy behaves the same with or
+  without this package. The legacy 16.5 data cache's event-time rule (ISSUE-1) is not carried over.
 
 **Prerendered build output is served through Next's own `FileSystemCache`.** `next build` writes
 prerendered pages and route handler responses (`APP_PAGE`, `APP_ROUTE`, `PAGES`) to

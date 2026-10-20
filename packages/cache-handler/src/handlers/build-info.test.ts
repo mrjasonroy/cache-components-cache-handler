@@ -163,4 +163,68 @@ describe("build stamp", () => {
     });
     expect(readRoutePeriods(serverDistDir, key("/blog/[slug]/page", "/blog/b"))).toBeUndefined();
   });
+
+  test("readRoutePeriods: a fallback shell's periods come from dynamicRoutes", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    const owner = { kind: "APP_PAGE", sourceRoute: "/params/[a]/[b]/page" };
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: { "/params/one/two": { initialRevalidateSeconds: 30 } },
+        dynamicRoutes: {
+          "/params/[a]/[b]": { fallbackRevalidate: false },
+          "/params/one/[b]": { fallbackRevalidate: 60, fallbackExpire: 600 },
+        },
+      }),
+    );
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/[a]/[b]", owner))).toEqual({
+      revalidate: false,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/[b]", owner))).toEqual({
+      revalidate: 60,
+      expire: 600,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/two", owner))).toEqual({
+      revalidate: 30,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/three", owner))).toBe(
+      undefined,
+    );
+  });
+
+  test("readRoutePeriods: a Pages Router fallback's locale prefix is dropped, as Next does", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {},
+        dynamicRoutes: { "/products/[id]": { fallbackRevalidate: 60, dataRoute: "/x.json" } },
+      }),
+    );
+    // next/dist/build/generate-routes-manifest.js: `i18n: config.i18n`.
+    writeFileSync(
+      join(distDir, "routes-manifest.json"),
+      JSON.stringify({ i18n: { locales: ["en-US", "fr"], defaultLocale: "en-US" } }),
+    );
+    const pages = { kind: "PAGES", sourceRoute: "/products/[id]" };
+    const app = { kind: "APP_PAGE", sourceRoute: "/fr/products/[id]/page" };
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/fr/products/[id]", pages))).toEqual({
+      revalidate: 60,
+    });
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/EN-us/products/[id]", pages)),
+    ).toEqual({ revalidate: 60 });
+    // Only Pages Router keys are locale-prefixed (next/dist/server/lib/incremental-cache/
+    // shared-cache-controls.external.js).
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/fr/products/[id]", app)),
+    ).toBeUndefined();
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/de/products/[id]", pages)),
+    ).toBeUndefined();
+  });
 });

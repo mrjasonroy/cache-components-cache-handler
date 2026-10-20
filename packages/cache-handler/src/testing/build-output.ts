@@ -39,6 +39,11 @@ export interface BuildOutputOptions {
   mtimeMs?: number;
   /** Each route's periods in the prerender manifest. @default `revalidate: false` for all */
   routes?: Record<string, RoutePeriods>;
+  /**
+   * Each dynamic route's fallback periods in the prerender manifest.
+   * @default `revalidate: false` for `/posts/[slug]`
+   */
+  fallbacks?: Record<string, RoutePeriods>;
 }
 
 /**
@@ -53,10 +58,10 @@ export function writeBuildOutput(options: BuildOutputOptions = {}): BuildOutput 
   // Where a route's files go, without the extension.
   const at = (key: RouteCacheKey): string =>
     options.scoped ? join(serverDistDir, key.key) : join(serverDistDir, key.dir, key.pathname);
-  const routeCache = (key: RouteCacheKey) => ({
+  const routeCache = (key: RouteCacheKey, isFallback = false) => ({
     key: key.key,
     owner: key.owner,
-    isFallback: false,
+    isFallback,
   });
   const write = (path: string, data: string | Buffer): void => {
     mkdirSync(dirname(path), { recursive: true });
@@ -103,6 +108,20 @@ export function writeBuildOutput(options: BuildOutputOptions = {}): BuildOutput 
   write(`${about}.json`, JSON.stringify({ pageProps: { title: "about" } }));
   write(`${about}.meta`, JSON.stringify({ routeCache: routeCache(ABOUT_ROUTE) }));
 
+  // A Partial Prerendering fallback shell for `/posts/[slug]`: the HTML up to the first param
+  // read, its postponed state, no `.rsc` (next/dist/export/routes/app-page.js).
+  const posts = at(POSTS_ROUTE);
+  write(`${posts}.html`, "<html>posts shell</html>");
+  write(
+    `${posts}.meta`,
+    JSON.stringify({
+      status: 200,
+      headers: { "x-next-cache-tags": "_N_T_/layout,_N_T_/posts/[slug]/page" },
+      postponed: "postponed-state",
+      routeCache: routeCache(POSTS_ROUTE, true),
+    }),
+  );
+
   const routes: Record<string, RoutePeriods> = {
     "/blog": { revalidate: false },
     "/sitemap.xml": { revalidate: false },
@@ -120,7 +139,15 @@ export function writeBuildOutput(options: BuildOutputOptions = {}): BuildOutput 
           { initialRevalidateSeconds: revalidate, initialExpireSeconds: expire },
         ]),
       ),
-      dynamicRoutes: {},
+      // `dynamicRoutes[route].fallbackRevalidate` and `fallbackExpire`: a fallback shell's periods.
+      dynamicRoutes: Object.fromEntries(
+        Object.entries({ "/posts/[slug]": { revalidate: false }, ...options.fallbacks }).map(
+          ([route, { revalidate, expire }]) => [
+            route,
+            { fallbackRevalidate: revalidate, fallbackExpire: expire, dataRoute: `${route}.rsc` },
+          ],
+        ),
+      ),
     }),
   );
   // No BUILD_ID is written, so the build is `development`, as in the tests' keys.
@@ -160,6 +187,7 @@ function routeCacheKey(kind: string, sourceRoute: string, pathname: string): Rou
 const BLOG_ROUTE = routeCacheKey("APP_PAGE", "/blog/page", "/blog");
 const SITEMAP_ROUTE = routeCacheKey("APP_ROUTE", "/sitemap.xml/route", "/sitemap.xml");
 const ABOUT_ROUTE = routeCacheKey("PAGES", "/about", "/about");
+const POSTS_ROUTE = routeCacheKey("APP_PAGE", "/posts/[slug]/page", "/posts/[slug]");
 
 /** The cache key Next passes for the prerendered app page `/blog`. */
 export const BLOG = BLOG_ROUTE.key;
@@ -167,6 +195,9 @@ export const BLOG = BLOG_ROUTE.key;
 export const SITEMAP = SITEMAP_ROUTE.key;
 /** The cache key Next passes for the prerendered Pages Router page `/about`. */
 export const ABOUT = ABOUT_ROUTE.key;
+
+/** The cache key Next passes for the fallback shell of the dynamic app page `/posts/[slug]`. */
+export const POSTS_FALLBACK = POSTS_ROUTE.key;
 
 /** The cache key Next would pass for an app page `/other` that was not prerendered. */
 export const OTHER = routeCacheKey("APP_PAGE", "/other/page", "/other").key;
@@ -190,4 +221,12 @@ export const appRouteCtx = {
 export const pagesCtx = {
   kind: "PAGES",
   isFallback: false,
+};
+
+/** The get context Next passes for a Partial Prerendering fallback shell. */
+export const fallbackCtx = {
+  kind: "APP_PAGE",
+  isFallback: true,
+  isRoutePPREnabled: true,
+  softTags: ["_N_T_/layout", "_N_T_/posts/[slug]/page"],
 };
