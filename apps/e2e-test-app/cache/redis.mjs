@@ -1,8 +1,8 @@
 import Redis from "ioredis";
 
-// One client for both custom handler files (the escape hatch in the README). Next can load the
-// two handler modules separately, so the client is parked on globalThis to keep it to one
-// connection per process.
+// One client for both custom handler files (the escape hatch in docs/custom-handlers.md). Next
+// can load the two handler modules separately, so the client is parked on globalThis to keep it
+// to one connection per process.
 const globalKey = Symbol.for("e2e-test-app.redis-client");
 
 if (!globalThis[globalKey]) {

@@ -2,7 +2,7 @@ import { flushCache } from "@mrjasonroy/cache-components-cache-handler";
 import { type NextRequest, NextResponse } from "next/server";
 
 /**
- * Test-only flush endpoint, the shape the README tells sites to build: the package ships
+ * Test-only flush endpoint, the shape docs/operations.md tells sites to build: the package ships
  * `flushCache`, the route and its auth belong to the app. Disabled unless E2E_FLUSH_TOKEN is set.
  * POST /api/e2e/flush  (Authorization: Bearer <E2E_FLUSH_TOKEN>)
  * Body: { scope?: "build" | "all" }

@@ -9,9 +9,13 @@
 
 ## Install
 
+<!-- rc: drop "@rc" (and the note below) once 16.4.3 is the npm latest release -->
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler ioredis
+npm install @mrjasonroy/cache-components-cache-handler@rc ioredis
 ```
+
+`withCache` is new in 16.4.3, currently a release candidate on the `rc` tag. Drop `@rc` once
+16.4.3 is the latest release.
 
 `ioredis` is only loaded when Redis is configured, so a memory-only app can leave it out.
 
@@ -30,11 +34,15 @@ export default withCache({
 That one call sets `cacheHandler` (pages, route handlers, cached `fetch`), `cacheHandlers.default`
 (`"use cache"`), `cacheHandlers.remote` (`"use cache: remote"`) and `cacheMaxMemorySize: 0`. Don't
 set any of those yourself: `withCache` throws if the config already has `cacheHandlers`, or
-`cacheHandler` unless you pass `pages: false`. The README's [What goes where](../README.md#what-goes-where) table says what each
-one does.
+`cacheHandler` unless you pass `pages: false`. The [What goes where](./how-it-works.md#what-goes-where) table says what each one does.
+
+`nextConfig` can also be a config function, `(phase, { defaultConfig }) => config`, sync or
+async. `withCache` then returns an async function that applies the same settings to its result.
+The options (`useCache`, `pages`, `handlers`) are in the [README](../README.md#withcachenextconfig-options)
+and the [API reference](./api-reference.md#withcachenextconfig-options).
 
 The handler files ship inside the package, so there are no handler files to write. For your own
-client or timeouts, see [Custom handlers](../README.md#custom-handlers).
+client or timeouts, see [Custom handlers](./custom-handlers.md).
 
 ## Point it at Redis
 
@@ -68,19 +76,30 @@ ELASTICACHE_AUTH_TOKEN=...
 A URL takes precedence over the endpoint when both are set. For cluster-mode-enabled ElastiCache,
 see [Redis Cluster](./redis.md#redis-cluster).
 
-### Other settings
+## Environment variables
+
+Next loads handler files by path. It cannot pass them objects from `next.config`, and a standalone
+`server.js` never runs `next.config` at all. So the built-in handlers read their runtime settings
+from the environment, the same under `next start`, standalone and Docker.
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `REDIS_URL` (or `VALKEY_URL`) | unset → memory only | `redis://` or `rediss://` URL, password included. |
+| `REDIS_PASSWORD` | — | Password when the URL has none. |
+| `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN` | port `6379` | Host form, used when no URL is set. TLS is on. |
+| `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
-| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. |
+| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch for every backend: it turns off Valkey and ElastiCache too, whatever variable set the URL. |
 | `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
 | `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
 
-The full table is in the README under [Environment variables](../README.md#environment-variables).
+There are no tuning variables for timeouts or TTLs: the defaults are the product. If you need
+different ones, write a [custom handler file](./custom-handlers.md).
 
-`next build` never connects to Redis, whatever the environment says. If a dev `.env` file carries
-`REDIS_URL`, the dev server will use Redis; remove it there or set `CACHE_REDIS=off`.
+Redis is used whenever a URL or endpoint is set, except during `next build`, on the edge runtime
+and with `CACHE_REDIS=off`. `next build` never connects to Redis, whatever the environment says.
+If a dev `.env` file carries `REDIS_URL`, the dev server will use Redis; remove it there or set
+`CACHE_REDIS=off`.
 
 ## Verify
 
@@ -108,4 +127,4 @@ A local Redis for this is one command away: `pnpm docker:up` in this repo, or
 
 ## Upgrading from 16.4.2
 
-16.5.0 and 16.5.1 were withdrawn; upgrade from 16.4.2 to 16.4.3. See [Migrating](../README.md#migrating) in the README.
+See [Migrating](./migrating.md).

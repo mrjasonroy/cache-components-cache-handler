@@ -28,8 +28,8 @@ REDIS_URL=rediss://default:password@cache.example.com:6380   # TLS
 
 The package opens one connection per process and shares it between every handler. It reconnects
 forever, with backoff capped at 5 s. A command times out after 1 s, and a connection that times
-out 3 times in a row is dropped and redialled. What the app does meanwhile is in the README under
-[When Redis goes down](../README.md#when-redis-goes-down).
+out 3 times in a row is dropped and redialled. What the app does meanwhile is under
+[When Redis goes down](./how-it-works.md#when-redis-goes-down).
 
 ## Valkey
 
@@ -59,7 +59,7 @@ shown below.
 ## Your own client
 
 For Sentinel, Cluster, IAM auth or other ioredis options, build the client yourself and pass it to
-[custom handler files](../README.md#custom-handlers). Give all three handlers the same client so
+[custom handler files](./custom-handlers.md). Give all three handlers the same client so
 they share one connection and one tag store.
 
 A client you pass in is yours: the package never closes, disconnects or reconfigures it. Its own
@@ -114,7 +114,7 @@ globalThis[key] ??= new Cluster(
 
 Cluster mode needs no hash tags. Every command the handlers send touches a single key, so none
 can fail with `CROSSSLOT`. `flushCache` scans every master. The two tag keys live on one shard
-(see [Sizing](../README.md#sizing) for the hot-key cost).
+(see [Sizing](#sizing) for the hot-key cost).
 
 ## Running Redis locally
 
@@ -128,14 +128,23 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 
 ```
 <prefix><buildId>:page:<key>   page, route handler or cached fetch entry
-<prefix><buildId>:data:<key>   "use cache: remote" entry
+<prefix><buildId>:data:<key>   "use cache: remote" entry (and "use cache" with useCache: "redis")
 <prefix>tags                   hash of every tag record: field = tag, value = "<stale>,<expired>" in ms
 <prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```
 
-`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every entry key has a TTL; the two tag
-keys have none. Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy
-(`volatile-lru`), never `allkeys-lru`: an evicted tag hash brings every invalidated entry back. Entries are binary and not human-readable.
+`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
+is read from the build output that `next start` and a standalone `server.js` use, and it is
+`development` under `next dev`. Every entry key has a TTL. A remote entry is kept until its
+`expire`, or for `defaultTTL` (24 hours) when `expire` is infinite, at most 365 days; page entries
+as described under [Pages and route handlers](./how-it-works.md#pages-and-route-handlers). The two
+tag keys are shared by every build and have no TTL: they are kept until
+`flushCache({ scope: "all" })`. Run Redis with `maxmemory-policy noeviction` or a `volatile-*`
+policy (`volatile-lru`), never `allkeys-*` (such as `allkeys-lru`): an evicted tag hash brings
+every invalidated entry back. Entries are binary and not human-readable.
+
+`createCacheHandler` keeps its 16.4.2 layout: `nextjs:data-cache:<key>` and `nextjs:tags:<tag>`.
+
 `CACHE_DEBUG=1` (or `true`) on the app logs what is read and written, with each value's size: `bytes` (the value; the uncompressed entry for pages) and, for pages and `"use cache: remote"`, `encodedBytes` (as stored in Redis).
 
 ### Entry format and compression
@@ -173,10 +182,36 @@ The tag keys are shared by every build and never expire or get pruned: a deleted
 as never-invalidated. They grow with the distinct tags ever revalidated (about 230 B each; 100,000
 tags take about 23 MB). `flushCache({ scope: "all" })` clears them with the entries. In `INFO commandstats`, expect about one `HMGET` per
 page `GET`: every page read also reads the records of the tags that apply to it. See
-[Sizing](../README.md#sizing).
+[Sizing](#sizing).
 
 Old builds' entries are not deleted on deploy; they expire on their own. To clear them sooner, use
-[`flushCache`](../README.md#flushing-the-cache).
+[`flushCache`](./operations.md#flushing-the-cache).
+
+## Sizing
+
+Redis command volume, not latency, is what grows with traffic:
+
+| Operation | Redis commands |
+|---|---|
+| Page, route handler or cached `fetch` read | 1 `GET` + 1 `HMGET` of every tag that applies (soft tags, `fetch` tags, the entry's tags), in one round trip. The first read of an entry by a process that did not write it is 3 commands in 2 round trips. |
+| `"use cache: remote"` read | 1 `GET` + 1 `HMGET` of the entry's tags and the soft tags, in one round trip (2 round trips the first time a process reads an entry it did not write). |
+| `"use cache"` (memory) read | none. One tag sync per request, at most every 100 ms: 1 `ZRANGEBYSCORE` of the index since the last sync, plus 1 `HMGET` of the tags that changed, if any. |
+| `revalidateTag`, `updateTag`, `revalidatePath` | 1 `EVALSHA` (one single-key script) + 1 `ZADD GT`, however many tags. The first one on a server that has not seen the script adds 1 `EVAL`. |
+
+The tag read shares the entry's round trip, so page latency is unchanged; size Redis for the
+command rate. Nothing runs `HGETALL`: an `HMGET` costs in proportion to the tags it reads, not to
+the size of the hash. 100,000 tags take about 23 MB.
+
+**Memory and network.** Entries of 16 KB and more are stored Brotli-compressed (quality 4, off the
+event loop), usually 5 to 15 times smaller: a ~200 KB page entry takes about 14 KB in Redis. Size
+Redis memory for the compressed entries; `CACHE_DEBUG` logs both sizes for page and remote entries
+(`bytes`, `encodedBytes`).
+
+**Hot key.** One shard serves the tag hash, on a Cluster too. At 2,000 page reads/s that is about
+2% of one core; it starts to matter around 50,000 page reads/s, or with hundreds of tags per page.
+Read replicas are the escape hatch if it ever does.
+
+[DEC-3](../implementation/DECISIONS.md) in `implementation/DECISIONS.md` has the measurements.
 
 ## Managed Redis services
 

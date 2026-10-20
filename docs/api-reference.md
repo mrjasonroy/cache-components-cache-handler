@@ -1,8 +1,28 @@
 # API Reference
 
 Everything the package exports. Start with [`withCache`](#withcachenextconfig-options); the rest is
-for custom handler files, operations and the legacy data cache API. Behaviour (outages, tag coordination, key
-layout) is described in the [README](../README.md).
+for custom handler files, operations and the legacy data cache API. Behaviour (outages, tag
+coordination) is described in [How it works](./how-it-works.md), and the key layout in
+[Redis Configuration](./redis.md#whats-in-redis).
+
+## Exports
+
+| Export | Kind | Purpose |
+|---|---|---|
+| `withCache(nextConfig, options?)` | function | Configures the whole cache. [Below](#withcachenextconfig-options). |
+| `createRedisCacheHandler(options?)` | function → class | The page handler with code-level options, for a custom `cacheHandler` file. |
+| `RedisCacheHandler` | class | The page handler. Same constructor as 16.4.2, so subclasses still work. |
+| `createRemoteCacheHandler(options?)` | function → `DataCacheHandler` | Redis data handler plus memory fallback, for `"use cache: remote"`. |
+| `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
+| `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](./operations.md#flushing-the-cache). |
+| `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](./operations.md#closing-the-cache). |
+| `setCacheLogger(logger)` | function | Sends the package's log lines to your logger. [Logging](./operations.md#logging). |
+| `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
+| `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the original data handler factory ([legacy data cache API](#legacy-data-cache-api)). |
+| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the original building blocks behind `createCacheHandler`. |
+| `CacheOptions`, `CacheLogger`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
+
+The [deprecated exports](#deprecated) are still exported.
 
 ## `withCache(nextConfig, options?)`
 
@@ -39,7 +59,7 @@ Throws if `nextConfig` already sets `cacheHandlers`, or `cacheHandler` unless `p
 (then yours is kept). A config function is wrapped
 in an async one that applies the same settings to its result.
 
-The built-in handlers read the [environment](../README.md#environment-variables) at runtime.
+The built-in handlers read the [environment](./installation.md#environment-variables) at runtime.
 
 ## `CacheOptions`
 
@@ -108,7 +128,7 @@ The class Next constructs for the singular `cacheHandler`. It implements `get`, 
 records that apply to it in one round trip (1 `GET` + 1 `HMGET` of the `<prefix>tags` hash), so a
 revalidation on any instance is seen by the next read. The first read of an entry by a process
 that did not write it takes one more `HMGET`, for the tags it learns from the entry. See
-[Sizing](../README.md#sizing).
+[Sizing](./redis.md#sizing).
 
 `RedisCacheHandlerOptions` is Next's constructor context plus `CacheOptions` and:
 
@@ -179,7 +199,7 @@ dropped. It throws, deleting nothing, if Redis is configured but unavailable, or
 deleted, so run it again. After the delete it writes a tag record for the flush
 (`__cch_flush__`, or `__cch_flush__:<buildId>` for `scope: "build"`) that prerendered build output
 is checked against, so build output older than the flush is not served again. See
-[Flushing the cache](../README.md#flushing-the-cache).
+[Flushing the cache](./operations.md#flushing-the-cache).
 
 ## `closeCache()`
 
@@ -247,8 +267,36 @@ export default createCacheHandler({ type: process.env.REDIS_URL ? "redis" : "mem
 
 `type` is `"memory"`, `"redis"`, `"valkey"` or `"elasticache"`. The Redis types share the process's
 connection, fall back to memory during an outage, and use memory during `next build` and with
-`CACHE_REDIS=off`. Every option is listed in the README under
-[Legacy setup](../README.md#legacy-setup-deprecated).
+`CACHE_REDIS=off`.
+
+The 16.4.2 wiring still works: a handler file that exports `createCacheHandler({ type })`, wired
+with `createCacheConfig` or by hand into `cacheHandlers`. It covers `"use cache"` only, not
+pages. In production it logs a one-time reminder to use `withCache`; pass
+`suppressIsrWarning: true` to silence it.
+
+`createCacheHandler` reads `REDIS_URL` / `VALKEY_URL`, `REDIS_PASSWORD` and the `ELASTICACHE_*`
+variables, and honours `CACHE_REDIS=off` and the build phase. It does not read `CACHE_KEY_PREFIX`
+or `CACHE_DEBUG`. Its options:
+
+| Option | Default | What it does |
+|---|---|---|
+| `url` | `REDIS_URL` / `VALKEY_URL`, else `redis://localhost:6379` | Connection URL (redis, valkey) |
+| `endpoint` / `port` | `ELASTICACHE_ENDPOINT` / `ELASTICACHE_PORT`, `6379` | Host and port (elasticache) |
+| `tls` | `true` for elasticache, else `false` | Use TLS |
+| `password` | `ELASTICACHE_AUTH_TOKEN` / `REDIS_PASSWORD` | Auth token or password |
+| `client` | — | Your own ioredis `Redis` or `Cluster`; you own its lifecycle |
+| `keyPrefix` / `tagPrefix` | `"nextjs:data-cache:"` / `"nextjs:tags:"` | Key prefixes |
+| `commandTimeout` | `1000` (ms) | Per-command timeout |
+| `connectTimeout` | `2000` (ms; `10000` for elasticache) | Connect timeout |
+| `socketTimeout` | `2000` (ms) | Drop the connection when a pending command gets no reply for this long |
+| `maxConsecutiveTimeouts` | `3` | Timeouts in a row before the connection is dropped and redialled (with `client`: before it is marked not ready for 2 s) |
+| `memoryFallback` / `fallbackTTL` | `true` / `60` (s) | Serve from memory during an outage, each entry for at most `fallbackTTL` |
+| `defaultTTL` | `86400` (s) | TTL for entries without a finite `expire` |
+| `tagTTL` | `31622400` (s, 366 days) | TTL for tag records; entry TTLs are capped at it |
+| `errorLogIntervalMs` | `60000` | Redis errors are logged at most once per operation per interval |
+| `suppressIsrWarning` | `false` | Silence the one-time production reminder |
+| `maxSize` | 100 MB | Memory budget (memory) |
+| `debug` | `false` | Debug logging |
 
 ### `createMemoryDataCacheHandler(options?)`
 
@@ -281,7 +329,21 @@ export default createRedisDataCacheHandler({
 
 ## Deprecated
 
-Still exported and still working, removed on the Next 17 line.
+Kept until the Next 17 line, with JSDoc pointing at the replacement. They keep working in 16.x;
+on the Next 17 line they are removed or become a thin shim over the replacement.
+
+| Deprecated | Use instead | Why |
+|---|---|---|
+| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](./custom-handlers.md) | The original data stack: `"use cache"` only, its own key layout, and no page handler. It does not reconnect after `closeCache()`: create it again. |
+| `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
+| `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
+| `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
+| `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. They keep working. |
+| `CompositeHandler`, `createCompositeHandler` | built in | The memory fallback is now inside every handler. |
+| `MemoryCacheHandler`, `createMemoryCacheHandler` | `withCache` without `REDIS_URL` | Memory only is the no-URL mode. |
+| `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`, `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, and the Next 14 `CacheHandler*` / `CacheValue` / `LifespanParameters` types | none | Internals of the Next 14 handlers. They still work. |
+
+`RedisCacheHandler` is **not** deprecated. It is the page handler `withCache` uses.
 
 ### `createCacheConfig(options)` / `createCacheConfigWithProfiles(options)`
 
@@ -302,8 +364,8 @@ yourself:
 `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`,
 `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, and the types `CacheHandler`,
 `CacheHandlerContext`, `CacheHandlerGetMeta`, `CacheHandlerOptions`, `CacheHandlerValue`,
-`CacheValue` and `LifespanParameters`. See the README's [Deprecated](../README.md#deprecated)
-table for replacements.
+`CacheValue` and `LifespanParameters`. See the [Deprecated](#deprecated) table above for
+replacements.
 
 ## Types
 

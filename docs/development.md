@@ -100,6 +100,30 @@ ElastiCache lane (TLS and an auth token).
 `tests/next-deploy/` runs Next.js's caching e2e suites in deploy mode against the package. It runs
 in CI; see [tests/next-deploy/README.md](../tests/next-deploy/README.md).
 
+## How it's tested
+
+- **Unit tests** for every module: the codec, the connection, the fallback, the tag store, the page
+  handler's Next 16 contract, `withCache` and `flushCache`.
+- **A real-Redis outage suite** in CI on Redis 7 and Valkey 8: Redis down at boot, lost mid-run,
+  stalled (`docker pause`) and back; a tag revalidation reaching the page, remote and local
+  handlers; the build phase never connecting; build-ID scoping and tags crossing builds.
+- **End-to-end tests on production builds** (`next build && next start`) with Playwright, against
+  memory, Redis, Valkey and TLS + AUTH ElastiCache mode. They cover pages, `"use cache"`,
+  `"use cache: remote"`, `revalidateTag`, `revalidatePath`, two instances sharing Redis, and Redis
+  stopped mid-run.
+- **Next.js's own caching suites** through its deploy-test harness: each suite runs against a
+  plain `next start` baseline and against the package with two instances behind a proxy, and a
+  suite that passes on the baseline must pass with the package. See
+  [tests/next-deploy/README.md](../tests/next-deploy/README.md).
+
+| Workflow | What it verifies |
+|---|---|
+| `.github/workflows/ci.yml` | Lint, format, typecheck, unit tests, the Redis outage suite and the e2e matrix |
+| `.github/workflows/next-deploy-tests.yml` | Next.js's caching suites in deploy mode |
+| `.github/workflows/nextjs-canary-test.yml` | Daily compatibility runs against Next.js canary and latest |
+| `.github/workflows/nextjs-version-check.yml` | Nightly scan for new Next.js releases; opens bump PRs |
+| `.github/workflows/publish.yml` | Trusted publishing with provenance |
+
 ## Code Standards
 
 - TypeScript strict mode
@@ -132,7 +156,8 @@ Releases are automated: merging a pull request from a `version-bump/`, `nextjs-`
 branch to `main` tags the version in `packages/cache-handler/package.json` and publishes it to
 npm. See [auto-release.md](./auto-release.md) and
 [publishing/RELEASE.md](./publishing/RELEASE.md) (pre-releases:
-[publishing/PRERELEASE.md](./publishing/PRERELEASE.md)).
+[publishing/PRERELEASE.md](./publishing/PRERELEASE.md); the automated workflow:
+[publishing/AUTOMATED_RELEASE.md](./publishing/AUTOMATED_RELEASE.md)).
 
 ## CI/CD
 

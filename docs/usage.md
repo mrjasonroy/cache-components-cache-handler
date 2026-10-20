@@ -102,8 +102,8 @@ export async function renameUser(userId: string, name: string) {
 
 Either call reaches every instance and every handler. Pages see it on their next read, on any
 instance; `"use cache: remote"` entries and each instance's in-memory `"use cache"` values see it
-from the next request on. The README explains how, under
-[Distributed tag coordination](../README.md#distributed-tag-coordination-for-use-cache).
+from the next request on. [How it works](./how-it-works.md#distributed-tag-coordination-for-use-cache)
+explains how.
 
 ## Path-based revalidation
 
@@ -143,5 +143,5 @@ await flushCache({ scope: "all" });  // every key under CACHE_KEY_PREFIX
 ```
 
 Call it from a route you authenticate yourself. See
-[Flushing the cache](../README.md#flushing-the-cache) for an example route and what it does and
+[Flushing the cache](./operations.md#flushing-the-cache) for an example route and what it does and
 doesn't clear.
