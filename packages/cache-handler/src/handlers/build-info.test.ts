@@ -70,10 +70,35 @@ describe("build stamp", () => {
     expect(stamp()).toEqual({ buildTime: 2000, buildId: "b2" });
   });
 
-  test("nothing is written before Next has written BUILD_ID (collecting page data)", async () => {
-    await resetCacheState();
+  test("a real build: constructed before BUILD_ID exists, then again in the same worker after it", async () => {
+    // next@16.4.2 runs "collecting page data" and static generation in the same workers, and
+    // constructs the handler in both; BUILD_ID is written between them.
+    process.env.NEXT_PHASE = "phase-production-build";
+    const collecting = Date.now();
+    new RedisCacheHandler({ serverDistDir });
+    expect(stamp()).toEqual({ buildTime: expect.any(Number) });
+
+    writeFileSync(join(distDir, "BUILD_ID"), "b1");
+    new RedisCacheHandler({ serverDistDir });
+    const written = stamp() as { buildTime: number; buildId: string };
+    expect(written.buildId).toBe("b1");
+    // The earliest time is kept: it precedes every prerender.
+    expect(written.buildTime).toBeGreaterThanOrEqual(collecting);
+    expect(written.buildTime).toBeLessThanOrEqual(Date.now());
+
+    resetBuildInfoForTests();
+    await buildId("b1");
+    expect(readBuildTime(serverDistDir)).toBe(written.buildTime);
+  });
+
+  test("a stamp left by another build is replaced even before this build's BUILD_ID exists", async () => {
+    await buildId("old");
     writeBuildStamp(serverDistDir, 1000);
-    expect(() => stamp()).toThrow(/ENOENT/);
+    rmSync(join(distDir, "BUILD_ID"));
+    writeBuildStamp(serverDistDir, 2000);
+    writeFileSync(join(distDir, "BUILD_ID"), "new");
+    writeBuildStamp(serverDistDir, 3000);
+    expect(stamp()).toEqual({ buildTime: 2000, buildId: "new" });
   });
 
   test("readBuildTime: the stamp's time when it names this build, else undefined", async () => {

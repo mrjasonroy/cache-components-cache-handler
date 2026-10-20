@@ -6,11 +6,12 @@
  * (hiding revalidations made before the deploy), and reproducible image builds
  * (`SOURCE_DATE_EPOCH`, BuildKit, Nix) set them to 1970 or to a fixed date. So the page handler
  * writes its own stamp, `<distDir>/server/cache-handler-build.json` = `{ buildTime, buildId }`,
- * the first time it is constructed during `next build` (`NEXT_PHASE=phase-production-build`).
- * Next cleans `distDir` before it compiles and writes `BUILD_ID` before static generation, the
- * only time it constructs the handler in a build (next@16.4.2 next/dist/build/index.js: `clean`,
- * then `writeBuildId`, then `static-generation`), so the stamp names this build and predates every
- * page it renders. A stamp from another build (`cleanDistDir: false`) is replaced.
+ * during `next build` (`NEXT_PHASE=phase-production-build`). Next cleans `distDir` before it
+ * compiles, then constructs the handler while collecting page data, writes `BUILD_ID`, and
+ * constructs it again for static generation in the same workers (next@16.4.2
+ * next/dist/build/index.js: `clean`, `isPageStatic`, `writeBuildId`, `static-generation`). The
+ * first construction stamps the time, a later one adds the build ID (see
+ * {@link writeBuildStamp}), so the stamp names this build and predates every page it renders.
  *
  * **Lifetime.** A route with a revalidate period keeps its build output only as long as a render
  * of it is kept: `1.5 × revalidate`, capped at `expire`, from the build time. After that the
@@ -24,7 +25,7 @@
  * `../shared/node-require.ts`).
  */
 
-import { FALLBACK_BUILD_ID, getBuildId } from "../shared/build-id.js";
+import { getBuildId } from "../shared/build-id.js";
 import { nodeBuiltin } from "../shared/node-require.js";
 
 /**
@@ -79,32 +80,57 @@ function isStamp(value: unknown): value is BuildStamp {
 }
 
 /**
- * Write the build stamp unless this build already has one. Called during `next build`; never
- * throws (without a stamp the build output is only served conservatively).
+ * The `BUILD_ID` Next has written to `<serverDistDir>/..` so far, read now: during a build it
+ * appears only between collecting page data and static generation, which run in the same
+ * workers, so the process-wide {@link getBuildId} (resolved once) cannot be used here.
+ */
+function writtenBuildId(serverDistDir: string): string | undefined {
+  try {
+    const file = path().join(serverDistDir, "..", "BUILD_ID");
+    return fs().readFileSync(file, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeStamp(file: string, stamp: Partial<BuildStamp>): void {
+  const temporary = `${file}.${process.pid}`;
+  fs().writeFileSync(temporary, JSON.stringify(stamp));
+  fs().renameSync(temporary, file);
+}
+
+/**
+ * Write or complete the build stamp. Called each time the page handler is constructed during
+ * `next build`; never throws (without a stamp the build output is only served conservatively).
+ *
+ * next@16.4.2 constructs it first while collecting page data, before `BUILD_ID` exists: the first
+ * of those writes `{ buildTime }` (`wx`, so the build's other workers keep it). Static generation
+ * constructs it again once `BUILD_ID` is written, and the build ID is added, keeping that time,
+ * which precedes every prerender. A stamp naming another build than the `BUILD_ID` on disk was
+ * left by an earlier build (`cleanDistDir: false`) and is replaced.
  */
 export function writeBuildStamp(serverDistDir: string, now: number = Date.now()): void {
-  const buildId = getBuildId();
-  // Collecting page data, before Next writes BUILD_ID: the static generation that follows stamps
-  // the build.
-  if (buildId === FALLBACK_BUILD_ID) return;
   const file = path().join(serverDistDir, BUILD_STAMP_FILE);
-  const json = JSON.stringify({ buildTime: now, buildId } satisfies BuildStamp);
+  const buildId = writtenBuildId(serverDistDir);
+  const fresh: Partial<BuildStamp> = buildId ? { buildTime: now, buildId } : { buildTime: now };
   try {
     fs().mkdirSync(serverDistDir, { recursive: true });
-    // The first handler of the build wins; the build's other workers find it.
-    fs().writeFileSync(file, json, { flag: "wx" });
+    fs().writeFileSync(file, JSON.stringify(fresh), { flag: "wx" });
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") return;
   }
-  const existing = readJson<unknown>(file);
-  if (isStamp(existing) && existing.buildId === buildId) return;
   try {
-    const temporary = `${file}.${process.pid}`;
-    fs().writeFileSync(temporary, json);
-    fs().renameSync(temporary, file);
+    const existing = readJson<Partial<BuildStamp>>(file);
+    if (existing?.buildId === buildId && typeof existing?.buildTime === "number") return;
+    if (existing?.buildId === undefined && typeof existing?.buildTime === "number") {
+      // This build's stamp, written before BUILD_ID existed.
+      if (buildId) writeStamp(file, { buildTime: existing.buildTime, buildId });
+      return;
+    }
+    writeStamp(file, fresh);
   } catch {
-    // Left as it is: a stamp naming another build is ignored at runtime.
+    // Left as it is: a stamp without this build's ID is ignored at runtime.
   }
 }
 
