@@ -222,7 +222,8 @@ Sends the package's warnings, errors and `CACHE_DEBUG` lines to `logger` for the
 connection and tag state use the logger of the handler that opened them. `message` is what the
 console would print; `meta` holds the details (`error`, `operation`). Without `info` or `debug`
 those lines are dropped. Errors stay rate-limited. No line carries a Redis URL or connection
-options. A logger that throws never fails a cache call: the line goes to the console.
+options; errors, their causes, objects and URLs are scrubbed of credentials, but other free text in
+a message is not. A logger that throws never fails a cache call: the line goes to the console.
 
 ## `MEMORY_ONLY_TAG`
 

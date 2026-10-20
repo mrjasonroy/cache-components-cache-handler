@@ -233,9 +233,15 @@ is dropped silently.
 - **M1, credentials in logged errors.** ioredis 5.8 attaches `command: { name, args }` to a reply
   error (`DataHandler.returnError`), so a rejected `AUTH` reached the logger and the console with
   the password it tried. `writeLog` now passes every message, meta and console argument through
-  `redactForLog`: errors become a new `Error` with only name, message, `code`, stack and cause;
-  plain objects lose `command`, `password`, `options` and similar keys; URLs lose their user
-  information. Reproduce: emit that error shape on the client (`logger.test.ts`, "a rejected AUTH").
+  `redactForLog`: errors (and error-like objects) become a new `Error` with only name, message,
+  stack, `code`, `errno`, `syscall`, `address`, `port` and a cause redacted the same way; plain
+  objects lose `command`, `password`, `options` and similar keys; any other object (a `Buffer`, a
+  typed array, a class instance) becomes a placeholder, never kept by identity; URLs lose their user
+  information through the last `@` of the authority (`redis://u:pre@fix@host`). Free text that
+  spells a credential out some other way is not scrubbed; the guarantee is structured fields,
+  causes and URL user information. Reproduce: emit that error shape on the client
+  (`logger.test.ts`, "a rejected AUTH"); a class-instance or `Buffer` cause and a multi-`@` URL
+  ("causes that are not plain objects").
 - **M2, a Cluster flush could hang.** `flushCache` scans `nodes("master")`, whose clients and
   pipelines were outside the `commandTimeout` proxy over an application client. The proxy now
   bounds what `nodes()` returns and a pipeline's `exec`; a flush that fails part-way throws, saying
@@ -245,4 +251,6 @@ is dropped silently.
   so the runtime it opens logs connection and tag errors there too.
 - **L2, corrupt blob references.** A `__nch_b` reference must be two safe non-negative integers
   inside the blob section, and a marker object must be the marker alone; anything else is a miss.
-  Before, `[-1, 1]` decoded into a byte of the header.
+  Before, `[-1, 1]` decoded into a byte of the header. Only an array under `__nch_b` / `__nch_m` is
+  a marker, as the encoder writes it: an ordinary object with that key and any other value (a
+  header named `__nch_b`) is plain JSON and round-trips (final gate 2, L2).

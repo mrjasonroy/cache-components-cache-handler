@@ -10,7 +10,7 @@
 // Exit 1 only when `branch` ran and either
 //   - a suite passes on `baseline` and does not pass on `branch`, passes fewer tests on `branch`
 //     than on `baseline`, or has a test, by name, that passes on `baseline` and not on `branch`
-//     (from <variant>-<shard>.tests.tsv; without it, counts only), and is not in
+//     (from <variant>-<shard>.tests.jsonl; without it, counts only), and is not in
 //     known-failures.txt, or
 //   - `baseline` or `branch` results are incomplete (a shard never finished, or a suite has no
 //     result: its path matched no files), since a missing result can hide a regression.
@@ -163,31 +163,55 @@ for (const file of readdirSync(resultsDir).filter((name) => name.endsWith(".note
   }
 }
 
-/** variant -> suite -> test name -> jest status, from <variant>-<shard>.tests.tsv. */
+/**
+ * variant -> suite -> test identity -> how many tests of that identity passed, from
+ * <variant>-<shard>.tests.jsonl. The identity is the file and the exact jest full name. Jest can
+ * report the same full name more than once in a file; which of them passed cannot be told apart,
+ * so they are compared by how many passed. A suite reported by several result files (a retry in
+ * another shard) keeps the fewest passed: a test counts as passed only if it always passed.
+ */
 const tests = Object.fromEntries(VARIANTS.map((variant) => [variant, new Map()]));
-for (const file of readdirSync(resultsDir).filter((name) => name.endsWith(".tests.tsv"))) {
+for (const file of readdirSync(resultsDir).filter((name) => name.endsWith(".tests.jsonl"))) {
   const variant = VARIANTS.find((v) => file.startsWith(`${v}-`));
   if (!variant) continue;
+  /** suite -> identity -> passed, in this result file only. */
+  const inFile = new Map();
   for (const row of readRows(join(resultsDir, file))) {
-    const [suite, name, testStatus] = row.split("\t");
-    const bySuite = tests[variant].get(suite) ?? new Map();
-    // A test reported twice (a retry in another part) counts as passed only if it always passed.
-    if (bySuite.get(name) !== "failed") bySuite.set(name, testStatus);
-    tests[variant].set(suite, bySuite);
+    const { suite, file: testFile, name, status: testStatus } = JSON.parse(row);
+    const bySuite = inFile.get(suite) ?? new Map();
+    const identity = JSON.stringify([testFile, name]);
+    bySuite.set(identity, (bySuite.get(identity) ?? 0) + (testStatus === "passed" ? 1 : 0));
+    inFile.set(suite, bySuite);
+  }
+  for (const [suite, bySuite] of inFile) {
+    const merged = tests[variant].get(suite);
+    if (!merged) {
+      tests[variant].set(suite, bySuite);
+      continue;
+    }
+    for (const [identity, passed] of bySuite) {
+      merged.set(identity, Math.min(passed, merged.get(identity) ?? passed));
+    }
   }
 }
 
 /**
- * Tests that pass on `baseline` and not on `branch`, by name; `null` when either has no per-test
- * results for the suite (older result files), so only the counts are compared.
+ * Tests that pass on `baseline` and not on `branch`, as "<file> › <full name>" (with how many,
+ * for a duplicated name); `null` when either has no per-test results for the suite (older result
+ * files), so only the counts are compared.
  */
 function lostTests(suite) {
   const baseline = tests.baseline.get(suite);
   const branch = tests.branch.get(suite);
   if (!baseline || !branch) return null;
-  return [...baseline]
-    .filter(([name, testStatus]) => testStatus === "passed" && branch.get(name) !== "passed")
-    .map(([name]) => name);
+  const lost = [];
+  for (const [identity, passed] of baseline) {
+    const missing = passed - (branch.get(identity) ?? 0);
+    if (missing <= 0) continue;
+    const [file, name] = JSON.parse(identity);
+    lost.push(`${file} › ${JSON.stringify(name)}${missing > 1 ? ` (${missing} of them)` : ""}`);
+  }
+  return lost;
 }
 
 const branchRan = variants.branch.state === "ran";

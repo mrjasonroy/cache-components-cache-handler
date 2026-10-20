@@ -326,11 +326,15 @@ In a custom handler file, `createRemoteCacheHandler`, `createLocalCacheHandler` 
 The Redis connection and tag state that handlers share log through the logger of the handler
 that opened them, so give every handler the same one, or use `setCacheLogger`.
 
-No line carries a Redis URL or the connection options, which can hold a password, and errors
-from Redis are logged with only their name, message, `code` and stack: ioredis attaches the failed
-command to an error, so a rejected `AUTH` would otherwise carry the password it tried. A logger that
-throws never fails a cache call: the line goes to the console instead, with one note that the
-logger threw.
+The package never logs a Redis URL or the connection options, which can hold a password. What it
+logs is scrubbed on the way out: an error (and each error in its `cause` chain) keeps only its
+name, message, stack, `code`, `errno`, `syscall`, `address` and `port`, so the failed command
+ioredis attaches to an error (a rejected `AUTH` carries the password it tried) is dropped; objects
+lose `command`, `password` and similar keys; other values (a `Buffer`, a class instance) are logged
+as a placeholder such as `[Buffer 12 bytes]`; and URLs in any text lose their user information.
+Other free text in a message is not scrubbed: a credential an error message spells out some other
+way reaches the log. A logger that throws never fails a cache call: the line goes to the console
+instead, with one note that the logger threw.
 
 ## Custom handlers
 

@@ -28,7 +28,7 @@ mkdir -p "$RESULTS_DIR/logs"
 RESULTS="$RESULTS_DIR/$VARIANT-$SHARD.tsv"
 : >"$RESULTS"
 # One row per test, by name (count-results.mjs), for report.mjs's per-test comparison.
-TESTS="$RESULTS_DIR/$VARIANT-$SHARD.tests.tsv"
+TESTS="$RESULTS_DIR/$VARIANT-$SHARD.tests.jsonl"
 : >"$TESTS"
 
 if [ -n "${NEXT_DEPLOY_SKIP_REASON:-}" ]; then

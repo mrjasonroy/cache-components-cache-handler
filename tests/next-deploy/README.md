@@ -39,9 +39,11 @@ The job fails only when `branch` ran and either:
   passes fewer of its tests than `baseline` does, or a test that passes on `baseline` does not
   pass on `branch` (this catches a suite that already fails on `baseline`, even when one test
   newly fails while another is fixed), and it is not listed in `known-failures.txt`. Tests are
-  compared by file and full name, from the jest results (`<variant>-<shard>.tests.tsv`); results
-  without that file are compared by counts only. A suite in `known-failures.txt` is not checked
-  at all.
+  compared by file and exact full name, from the jest results (`<variant>-<shard>.tests.jsonl`);
+  results without that file are compared by counts only. A full name jest reports more than once
+  in a file is compared by how many of it pass, since which of them passed cannot be told apart.
+  A suite in `known-failures.txt` is not checked at all. `node --test tests/next-deploy/` checks
+  the gate end to end on small fixtures.
 - **Incomplete results:** a `baseline` or `branch` shard did not finish, or a suite has no result
   on one of them (a suite path in `suites.txt` that matched no files).
 

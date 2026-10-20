@@ -5,8 +5,9 @@
 Approved by Jason on 2026-10-20. His app logs through its own logger, and the package wrote 23
 lines straight to the console.
 
-- **Shape.** `CacheLogger { error; warn; info?; debug? }`, each `(message, meta?)`: pino, winston,
-  bunyan and `console` fit as they are. `message` is the line the console printed before; `meta`
+- **Shape.** `CacheLogger { error; warn; info?; debug? }`, each `(message, meta?)`: winston and
+  `console` fit as they are; pino and bunyan take the fields first, so they need a one-line
+  adapter (README, Logging). `message` is the line the console printed before; `meta`
   holds the details (`error`, `operation`, a debug line's `args`). A logger without `info` or
   `debug` drops those lines rather than sending them to the console.
 - **Two ways to set it, because `withCache` cannot carry one.** `withCache` points Next at handler

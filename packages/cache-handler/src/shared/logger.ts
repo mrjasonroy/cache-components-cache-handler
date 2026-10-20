@@ -10,7 +10,8 @@
  * Nothing logged carries a Redis URL or the connection options: they can hold a password. Every
  * line also goes through {@link redactForLog} on its way out, because errors from Redis can carry
  * credentials of their own: ioredis attaches the failed command, arguments included, to a reply
- * error, so a rejected `AUTH` carries the password it tried.
+ * error, so a rejected `AUTH` carries the password it tried. The guarantee covers structured
+ * fields, error causes and URL user information, not arbitrary free text in a message.
  */
 
 /**
@@ -129,8 +130,14 @@ const SECRET_KEYS = new Set([
   "redisOptions",
 ]);
 
-/** The user information of a URL (`redis://user:password@`). */
-const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi;
+/**
+ * The user information of a URL (`redis://user:password@`), through the last `@` of the
+ * authority: a password may itself hold an `@` (`redis://user:pre@fix@host`).
+ */
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
+
+/** Error properties kept besides name, message, stack and cause: none can hold a credential. */
+const SAFE_ERROR_FIELDS = ["code", "errno", "syscall", "address", "port"] as const;
 
 const REDACTED = "[redacted]";
 
@@ -139,9 +146,16 @@ function redactText(text: string): string {
 }
 
 /**
- * `value` safe to log: an error as a new `Error` with only its name, message, `code`, stack and
- * cause; plain objects and arrays copied without {@link SECRET_KEYS}; URLs in strings without
- * their user information. Anything else (a `Buffer`, a class instance) is passed as it is.
+ * `value` safe to log, never the value itself:
+ * - an error (or error-like object) as a new `Error` with only its name, message, stack,
+ *   {@link SAFE_ERROR_FIELDS} and a cause redacted the same way;
+ * - plain objects and arrays copied without {@link SECRET_KEYS};
+ * - URLs in strings without their user information;
+ * - anything else (a `Buffer`, a typed array, a class instance) as a placeholder such as
+ *   `[Buffer 12 bytes]` or `[ClassName]`.
+ *
+ * Free text is not scrubbed beyond URL user information: a credential written into a message
+ * some other way reaches the log.
  */
 export function redactForLog<T>(value: T): T {
   return redact(value, 0, new WeakSet()) as T;
@@ -160,22 +174,42 @@ function redact(value: unknown, depth: number, ancestors: WeakSet<object>): unkn
   }
 }
 
+function isErrorLike(value: object): value is Error {
+  if (value instanceof Error) return true;
+  const { name, message } = value as { name?: unknown; message?: unknown };
+  return typeof name === "string" && typeof message === "string";
+}
+
+/** What stands in for a value that is neither an error, an array nor a plain object. */
+function placeholder(value: object): string {
+  if (ArrayBuffer.isView(value)) {
+    const kind =
+      typeof Buffer !== "undefined" && Buffer.isBuffer(value) ? "Buffer" : value.constructor.name;
+    return `[${kind} ${value.byteLength} bytes]`;
+  }
+  if (value instanceof ArrayBuffer) return `[ArrayBuffer ${value.byteLength} bytes]`;
+  const name = (value.constructor as { name?: unknown } | undefined)?.name;
+  return `[${typeof name === "string" && name ? name : "object"}]`;
+}
+
 function redactObject(value: object, depth: number, seen: WeakSet<object>): unknown {
-  if (value instanceof Error) {
+  const prototype = Object.getPrototypeOf(value);
+  const plain = prototype === Object.prototype || prototype === null;
+  if (!Array.isArray(value) && !plain && isErrorLike(value)) {
     const cause = value.cause === undefined ? {} : { cause: redact(value.cause, depth + 1, seen) };
     const safe = new Error(redactText(value.message), cause);
     // As on any error: not enumerable, so the copy prints like the original.
     Object.defineProperty(safe, "name", { value: value.name, configurable: true, writable: true });
-    safe.stack = value.stack === undefined ? undefined : redactText(value.stack);
-    const { code } = value as { code?: unknown };
-    if (typeof code === "string" || typeof code === "number") {
-      Object.assign(safe, { code });
+    safe.stack = typeof value.stack === "string" ? redactText(value.stack) : undefined;
+    for (const field of SAFE_ERROR_FIELDS) {
+      const item = (value as unknown as Record<string, unknown>)[field];
+      if (typeof item === "number") Object.assign(safe, { [field]: item });
+      else if (typeof item === "string") Object.assign(safe, { [field]: redactText(item) });
     }
     return safe;
   }
   if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1, seen));
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) return value;
+  if (!plain) return placeholder(value);
   const copy: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
     copy[key] = SECRET_KEYS.has(key) ? REDACTED : redact(item, depth + 1, seen);

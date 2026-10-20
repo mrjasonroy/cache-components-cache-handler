@@ -48,7 +48,7 @@ import { setCacheLogger } from "../index.js";
 import { resetCacheState } from "../testing/env.js";
 import { getRedisConnection } from "./connection.js";
 import { createErrorReporter } from "./error-reporter.js";
-import { type CacheLogger, redactForLog } from "./logger.js";
+import { type CacheLogger, processLogger, redactForLog, writeLog } from "./logger.js";
 import { createDebugLog, getCacheRuntime } from "./runtime.js";
 
 const PASSWORD = "s3cr3t-pw";
@@ -359,6 +359,87 @@ describe("the cache logger", () => {
     expect(safe.args).toEqual(["k", 1]);
     expect(safe.url).toBe("redis://[redacted]@logger-test:6379");
     expect(inspected([safe])).not.toContain(PASSWORD);
+  });
+
+  /** A wrapper's own diagnostic class, carrying the failed command as ioredis does. */
+  class CommandDiagnostic {
+    readonly command = { name: "auth", args: ["app-user", PASSWORD] };
+    readonly hint = "rejected";
+  }
+
+  test.each(["logger", "console"])(
+    "causes that are not plain objects never carry a credential to the %s",
+    (destination) => {
+      const consoleCalls = spyConsole();
+      const { logger, lines } = recorder();
+      if (destination === "logger") setCacheLogger(logger);
+      const multiAt = `redis://alice:prefix@${PASSWORD}@redis.example:6379`;
+      const errors = [
+        new Error("wrapper failed", { cause: new CommandDiagnostic() }),
+        new Error("wrapper failed", { cause: Buffer.from(`AUTH app-user ${PASSWORD}`) }),
+        new Error("wrapper failed", { cause: new TextEncoder().encode(PASSWORD) }),
+        new Error(`could not reach ${multiAt}`, { cause: new Error(`via ${multiAt}`) }),
+      ];
+      for (const error of errors) {
+        writeLog(processLogger, "error", `[RedisCache]: ${error.message}`, { error });
+      }
+
+      const written = [
+        ...lines.map((line) => inspected([line.message, line.meta])),
+        ...Object.values(consoleCalls).flatMap((spy) =>
+          spy.mock.calls.map((call: unknown[]) => inspected(call)),
+        ),
+      ];
+      expect(written).toHaveLength(errors.length);
+      for (const line of written) expect(line).not.toContain(PASSWORD);
+      expect(written[0]).toContain("[CommandDiagnostic]");
+      expect(written[1]).toContain(
+        `[Buffer ${Buffer.byteLength(`AUTH app-user ${PASSWORD}`)} bytes]`,
+      );
+      expect(written[2]).toContain(`[Uint8Array ${PASSWORD.length} bytes]`);
+      expect(written[3]).toContain("redis://[redacted]@redis.example:6379");
+    },
+  );
+
+  test("a redacted error cause goes through the same allowlist; values are never kept by identity", () => {
+    const inner = Object.assign(new Error("inner"), {
+      code: "ECONNREFUSED",
+      command: { name: "auth", args: ["app-user", PASSWORD] },
+    });
+    const cause = new CommandDiagnostic();
+    const outer = new Error("outer", { cause: new Error("middle", { cause: inner }) });
+    const safe = redactForLog({ outer, cause });
+    const middle = safe.outer.cause as Error;
+    const safeInner = middle.cause as Error & { code?: string };
+    expect(safeInner).not.toBe(inner);
+    expect(safeInner.message).toBe("inner");
+    expect(safeInner.code).toBe("ECONNREFUSED");
+    expect(Object.keys(safeInner)).toEqual(["code"]);
+    expect(safe.cause).toBe("[CommandDiagnostic]");
+    // A cause cycle ends instead of recursing.
+    const looped = new Error("looped");
+    Object.assign(looped, { cause: looped });
+    expect(inspected([redactForLog(looped)])).toContain("[omitted]");
+  });
+
+  test("a redacted error keeps its safe network fields, never the command", () => {
+    const error = Object.assign(new Error("connect ECONNREFUSED 10.0.0.7:6379"), {
+      code: "ECONNREFUSED",
+      errno: -61,
+      syscall: "connect",
+      address: "10.0.0.7",
+      port: 6379,
+      command: { name: "auth", args: ["app-user", PASSWORD] },
+      args: ["app-user", PASSWORD],
+    });
+    const safe = redactForLog(error) as Error & Record<string, unknown>;
+    expect(Object.fromEntries(Object.entries(safe))).toEqual({
+      code: "ECONNREFUSED",
+      errno: -61,
+      syscall: "connect",
+      address: "10.0.0.7",
+      port: 6379,
+    });
   });
 
   test("no line carries the password of the Redis URL or options", async () => {

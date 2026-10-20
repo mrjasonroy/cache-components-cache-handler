@@ -195,14 +195,14 @@ function parseHeader<T>(header: string, bytes: Buffer, blobStart: number): T {
   return JSON.parse(header, (_key, value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return value;
     const object = value as Record<string, unknown>;
-    // A marker object is the marker alone, in the shape the encoder writes; anything else is a
-    // corrupt entry (thrown, so a miss).
-    if (BLOB_MARKER in object) return blobAt(object, bytes, blobStart);
-    if (MAP_MARKER in object) {
-      const entries = object[MAP_MARKER];
+    // The encoder writes a marker as an array under the marker key: an object without one is
+    // ordinary JSON (a header named `__nch_b`). A marker must be alone and in the encoder's shape;
+    // anything else is a corrupt entry (thrown, so a miss).
+    if (Array.isArray(object[BLOB_MARKER])) return blobAt(object, bytes, blobStart);
+    const entries = object[MAP_MARKER];
+    if (Array.isArray(entries)) {
       if (
         Object.keys(object).length !== 1 ||
-        !Array.isArray(entries) ||
         !entries.every((entry) => Array.isArray(entry) && entry.length === 2)
       ) {
         throw new Error("Corrupt cache entry: bad map");

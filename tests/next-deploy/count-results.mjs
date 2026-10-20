@@ -4,9 +4,9 @@
 //   node count-results.mjs <log> <testFile> [<testFile> ...]
 //
 // Prints "passed\tfailed\tskipped\ttotal\tunknown" (unknown = test files with no results).
-// With COUNT_RESULTS_TESTS_FILE and COUNT_RESULTS_SUITE set, it also appends one row per test,
-// "suite\t<testFile> › <full test name>\tstatus" (jest's status: passed, failed, pending...), to
-// that file, so report.mjs can compare tests by name and not only by count.
+// With COUNT_RESULTS_TESTS_FILE and COUNT_RESULTS_SUITE set, it also appends one JSON line per
+// test, {"suite","file","name","status"} (the exact jest full name; jest's status: passed, failed,
+// pending...), to that file, so report.mjs can compare tests by name and not only by count.
 //
 // run-tests.js (v16.4.2, the loop in runTest) prints each test file's jest JSON once, after its
 // last attempt, as one line `--test output start-- {json} --test output end--`. It does that for
@@ -81,8 +81,8 @@ if (testsFile && suite) {
   for (const file of testFiles) {
     for (const { assertionResults = [] } of results.get(file)?.testResults ?? []) {
       for (const { fullName, title, status } of assertionResults) {
-        const name = `${file} › ${fullName ?? title ?? ""}`.replace(/\s+/g, " ");
-        rows.push(`${suite}\t${name}\t${status}\n`);
+        const name = fullName ?? title ?? "";
+        rows.push(`${JSON.stringify({ suite, file, name, status })}\n`);
       }
     }
   }

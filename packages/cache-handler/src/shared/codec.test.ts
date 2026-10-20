@@ -133,8 +133,6 @@ describe("entry codec", () => {
       [Number.MAX_SAFE_INTEGER + 2, 1],
       [0],
       [0, 1, 2],
-      "0,1",
-      { start: 0 },
     ]) {
       expect(
         decodeEntry(entry({ value: { __nch_b: ref } }, 4)),
@@ -144,8 +142,25 @@ describe("entry codec", () => {
     // The exact case from the review: `[-1, 1]` with no blob section read the header's last byte.
     expect(decodeEntry(entry({ value: { __nch_b: [-1, 1] } }))).toBeUndefined();
     expect(decodeEntry(entry({ value: { __nch_b: [0, 1], other: 1 } }, 4))).toBeUndefined();
-    for (const map of ["x", [1], [[1, 2, 3]], { a: 1 }]) {
+    for (const map of [[1], [[1, 2, 3]]]) {
       expect(decodeEntry(entry({ value: { __nch_m: map } })), JSON.stringify(map)).toBeUndefined();
+    }
+    // Only an array under the marker key is a marker: anything else is ordinary JSON.
+    for (const ordinary of [{ __nch_b: "0,1" }, { __nch_b: { start: 0 } }, { __nch_m: { a: 1 } }]) {
+      expect(decodeEntry(entry({ value: ordinary }, 4)), JSON.stringify(ordinary)).toEqual({
+        value: ordinary,
+      });
+    }
+  });
+
+  test("an ordinary object whose key is a marker's name round-trips", () => {
+    for (const headers of [
+      { __nch_b: "ordinary-header-value" },
+      { __nch_m: "x" },
+      { __nch_b: "x", __nch_m: "y", other: "z" },
+    ]) {
+      const value = { kind: "APP_PAGE", headers, body: Buffer.from("body") };
+      expect(decodeEntry(encodeEntry(value)), JSON.stringify(headers)).toEqual(value);
     }
   });
 
