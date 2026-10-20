@@ -27,14 +27,12 @@ import {
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
 import {
-  type HandoverKey,
-  clearHandoversForTests,
-  publishHandover,
-  releaseHandover,
-  republishHandover,
-  takeHandover,
-} from "./tag-handover.js";
-import { type TagHandover, TagStore } from "./tag-store.js";
+  type TagStateKey,
+  clearTagStatesForTests,
+  releaseTagState,
+  tagStateOf,
+} from "./tag-states.js";
+import { TagStore } from "./tag-store.js";
 
 /**
  * Tag an entry with this (`cacheTag(MEMORY_ONLY_TAG)`, or in a page's tags) to keep it out of
@@ -164,10 +162,10 @@ export interface CacheRuntime {
 interface OwnedRuntime extends CacheRuntime {
   closed: boolean;
   /**
-   * Where `closeCache` leaves this runtime's tag state for the next runtime of the same connection
-   * and key prefix; `undefined` without Redis, whose tag state is this process's only.
+   * The key of this runtime's tag state, which the next runtime of the same connection and key
+   * prefix uses too; `undefined` without Redis, whose tag state is this process's only.
    */
-  readonly handoverKey: HandoverKey | undefined;
+  readonly stateKey: TagStateKey | undefined;
   /** Stop following the connection and leave the memory store registry. */
   dispose(): void;
 }
@@ -279,13 +277,17 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
 
   // Unlike `key`, the same for the connection that replaces a closed one: an application client
   // keeps its connection, and a connection of the package's own is pooled by its options.
-  const handoverKey: HandoverKey | undefined =
+  const stateKey: TagStateKey | undefined =
     request && connection
       ? "client" in request
         ? { client: request.client, keyPrefix }
         : { pooled: connectionKey(request.options), keyPrefix }
       : undefined;
-  const runtime = createRuntime(connection, keyPrefix, handoverKey);
+  const runtime = createRuntime(connection, keyPrefix, {
+    stateKey,
+    // Once closed, its tag store sends updates to the live runtime of the same options.
+    liveStore: () => getCacheRuntime({ ...options, keyPrefix }).tags,
+  });
   registry.set(key, runtime);
   return runtime;
 }
@@ -336,7 +338,7 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
 function createRuntime(
   connection: RedisConnection | undefined,
   keyPrefix: string,
-  handoverKey?: HandoverKey,
+  shared?: { stateKey: TagStateKey | undefined; liveStore(): TagStore },
 ): OwnedRuntime {
   const stores: RuntimeStores = {
     page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
@@ -351,8 +353,15 @@ function createRuntime(
     stores.pageFallback.clear();
     stores.dataFallback.clear();
   });
-  const adopt = handoverKey === undefined ? undefined : takeHandover(handoverKey);
-  const tags = new TagStore(connection, keyPrefix, { adopt });
+  const stateKey = shared?.stateKey;
+  const tags = new TagStore(connection, keyPrefix, {
+    state: stateKey && tagStateOf(stateKey),
+    key: shared && {
+      liveStore: shared.liveStore,
+      currentState: () =>
+        stateKey ? tagStateOf(stateKey) : { records: new Map(), unsent: new Map() },
+    },
+  });
 
   return {
     connection,
@@ -361,7 +370,7 @@ function createRuntime(
     stores,
     reportError: createErrorReporter("[RedisCache]:"),
     closed: false,
-    handoverKey,
+    stateKey,
     dispose() {
       stopListening?.();
       tags.dispose();
@@ -392,7 +401,7 @@ let lastClose: Promise<void> | undefined;
 export function closeCache(): Promise<void> {
   // A cache call during a close opens a new connection; a later call must close that one too, so
   // it runs a close of its own after the current one rather than sharing it.
-  // The first starts at once, so the handlers' state is handed over before the caller goes on.
+  // The first starts at once, so the runtimes are closed before the caller goes on.
   const close = lastClose ? lastClose.then(closeOnce, closeOnce) : closeOnce();
   lastClose = close;
   const settled = () => {
@@ -404,25 +413,23 @@ export function closeCache(): Promise<void> {
 
 async function closeOnce(): Promise<void> {
   // Everything up to the first await runs at once, so a cache call made during the close gets a
-  // new runtime, on a new connection, that adopts the tag state handed over here.
+  // new runtime, on a new connection, which takes over the tag state of its key, and an update on
+  // a closed runtime goes to that one.
   const registry = getRegistry();
   const runtimes = [...registry.values()];
   registry.clear();
   const connections = detachAllRedisConnections();
-  const handovers = runtimes.map((runtime) => {
+  for (const runtime of runtimes) {
     runtime.closed = true;
-    const key = runtime.handoverKey;
-    if (key === undefined) return undefined;
-    // A send of this store that fails after the release below leaves its state again.
-    const handover: TagHandover = runtime.tags.handOver(() => republishHandover(key, handover));
-    publishHandover(key, handover);
-    return { key, handover };
-  });
+    runtime.tags.close();
+  }
   clearAllMemoryStores();
   await Promise.allSettled(runtimes.map((runtime) => runtime.tags.drain()));
-  // Kept only while it holds work: an adopted one belongs to its new runtime, and one with
-  // nothing unsent has nothing to hand over.
-  for (const entry of handovers) if (entry) releaseHandover(entry.key, entry.handover);
+  // Dropped unless a newer runtime has taken it over or Redis has not taken all of it; a kept
+  // state is the next runtime's of its key.
+  for (const runtime of runtimes) {
+    if (runtime.stateKey) releaseTagState(runtime.stateKey, runtime.tags);
+  }
   for (const runtime of runtimes) runtime.dispose();
   await Promise.all(connections.map((connection) => connection.close()));
 }
@@ -433,7 +440,7 @@ async function closeOnce(): Promise<void> {
  */
 export function resetCacheRuntimesForTests(): void {
   getRegistry().clear();
-  clearHandoversForTests();
+  clearTagStatesForTests();
 }
 
 /**

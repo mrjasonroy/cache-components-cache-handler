@@ -18,36 +18,48 @@
   `closeCache` empties the registry, so a stale id is never reused. `RedisCacheHandler#close()`
   is deprecated and calls `closeCache()`.
   **Pending invalidations survive a close** (Codex merge-gate M1). An invalidation or flush
-  barrier Redis refused (READONLY during a failover, an outage) lives only in its tag store's
-  local records and `unsent` queue, so dropping the store lost it: a handler reused after the
-  close served the invalidated entries again. Now `closeCache`, before awaiting anything, hands
-  each runtime's tag state (`TagStore.handOver`: the records map and the `unsent` queue, by
-  reference) to a process-wide slot on `globalThis` (DEC-5), keyed by the connection key (the
-  pool key for a connection of the package's own, the client's id for an application client)
-  plus the key prefix. It then waits for the batches in flight and, if Redis is ready, sends the
-  queue once more (`TagStore.drain`), and only then closes the connections. The next runtime of
-  the same key adopts the two maps on creation and sends the queue straight away, and again on
-  its syncs and reconnects, like any unsent update; until then its local records keep applying
-  the invalidation, with the times it was made, so this process never serves the entries again.
-  Handing over by reference, not a copy, is what keeps a batch that was in flight during the
-  close: when it fails afterwards it is queued in the same map the next store sends from. A
-  replayed update is stamped when it is sent, as every replay after an outage is (see
-  `TagStore.send`), so it can only invalidate more. `closeCache` never rejects for Redis: a test
-  or script can always close and exit, and what Redis did not take survives only for reuse in
-  the same process, as it would without the close.
-  **Retention of the hand-over** (Codex merge-gate M2, `shared/tag-handover.ts`). Publishing every
-  runtime's whole records map and never removing it kept the tag history of every retired key
-  prefix and replaced application client for the life of the process. An entry now lives only
-  while it may hold work: adopting it removes it; once `closeCache`'s drain settles it removes an
-  entry nobody adopted that has nothing unsent, and only if the slot still holds that very object,
-  so a newer close's state is never removed. A runtime that adopted mid-close owns the maps, and
-  the slot keeps nothing. A closed store whose update is queued after that removal (a handler
-  call that resolved the runtime before the close) publishes it again unless it was adopted. What
-  remains holds invalidations Redis has not taken: for a connection of the package's own it is
-  keyed by pool key and prefix, so bounded by distinct option sets times prefixes, and the same
-  options reconnect to it; for an application client it is keyed by the client object in a
-  `WeakMap`, so it goes when the application drops the client. Pending invalidations are never
-  dropped to impose a limit.
+  barrier Redis refused (READONLY during a failover, an outage) lives only in local tag state
+  (the records and the `unsent` queue), so dropping that state lost it: a handler reused after the
+  close served the invalidated entries again. `closeCache` waits for the batches in flight and,
+  if Redis is ready, sends the queue once more (`TagStore.drain`), and only then closes the
+  connections. What Redis still has not taken stays in this process for the next runtime of the
+  same connection and key prefix, which keeps applying it locally, with the times it was made,
+  and sends it on creation, syncs and reconnects, like any unsent update. A replayed update is
+  stamped when it is sent, as every replay after an outage is (see `TagStore.send`), so it can only
+  invalidate more. `closeCache` never rejects for Redis: a test or script can always close and
+  exit, and what Redis did not take survives only for reuse in the same process.
+  **One tag state per key, and closed stores forward** (Codex merge-gates M2 to M4,
+  `shared/tag-states.ts`). The first designs handed a closed store's maps over through a global
+  slot, to be adopted, released and republished; each review found another ordering of close,
+  late update, failed send and new runtime that lost an invalidation (a closed store's late
+  update landing in maps no runtime would read, a newer store's close overwriting them) or kept
+  acknowledged history forever. The design now leaves no such ordering:
+  - A process-wide registry on `globalThis` (DEC-5) holds at most one tag state (`KeyTagState`:
+    records and `unsent`) per key: the pool key plus key prefix for a connection of the package's
+    own, and for an application client the client object, in a `WeakMap`, then the prefix. The
+    key is the same for the connection that replaces a closed one. A new runtime's tag store uses
+    the state of its key, creating it if there is none, and becomes its owner.
+  - A closed tag store never writes to its own state. `update()` (revalidations and flush barriers
+    alike) goes to the live tag store of its key, `getCacheRuntime` for the same options, created
+    if need be. A send that was in flight at the close and fails is requeued, with its records,
+    into whatever state the key has at that moment, looked up again, never a captured map.
+    (`closeCache` waits for every send in flight before it releases a state, so through it that
+    lookup finds the store's own state; the rule makes it hold whatever the timing.)
+  - After the drain, `closeCache` drops each runtime's state if that runtime still owns it and
+    nothing in it is unsent, and keeps it otherwise. A kept state keeps its records, so the
+    invalidations go on applying locally; the next runtime of the key takes it over. A dropped
+    state drops its records: nothing Redis acknowledged outlives a close. A runtime created
+    mid-close owns the state, so it is not dropped.
+  What can remain after a close is states holding invalidations Redis has not taken: bounded by
+  distinct option sets times prefixes for the package's connections, and gone with the client for
+  an application client. Pending invalidations are never dropped to impose a limit. A forwarded
+  late update opens the key's runtime, and its connection, again; the next `closeCache` closes it.
+  A state kept with no runtime of its key is sent once a runtime of that key exists.
+  A seeded random test (`close-cache-random.test.ts`) runs 500 sequences of runtimes, updates on
+  live and closed runtimes, flushes, closes awaited and overlapping, refused, held and accepted
+  writes and syncs, and checks after every step that each invalidation is in Redis or visible to
+  its key's live runtime (or kept state), and at the end that all are in Redis, no state remains
+  and no connection of the package's own is open.
   Not covered: the deprecated `createCacheHandler` captures its connection when it is created, so
   after `closeCache` it serves from its memory fallback until it is created again. Reworking the
   16.5 stack to re-resolve was judged not worth it for a deprecated API.
@@ -69,7 +81,7 @@ the `cacheHandlers` entries, an instrumentation file). The rule:
 - **On `globalThis`** (under a `Symbol.for("@mrjasonroy/cache-components-cache-handler/…")` key)
   when every graph must see the same object: the Redis connections and application-client
   connections (`shared/connection.ts`), the runtimes and the ids that key them
-  (`shared/runtime.ts`), the tag state `closeCache` hands over (`shared/tag-handover.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
+  (`shared/runtime.ts`), the tag state of each connection and key prefix (`shared/tag-states.ts`), the memory store registry (`shared/memory-store.ts`), the build-id state
   (`shared/build-id.ts`) and the page-handler flag (`data-cache/isr-warning.ts`).
 - **In the module** when a copy per graph is harmless: the clock offset and its module storage
   lookup (`shared/clock.ts`; a second graph measures the same offset), the build info and build

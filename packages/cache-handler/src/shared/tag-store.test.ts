@@ -4,6 +4,7 @@ import { FakeRedis } from "../testing/fake-redis.js";
 import { getClientConnection } from "./connection.js";
 import { tagIndexKey, tagsKey } from "./keys.js";
 import {
+  type KeyTagState,
   SYNC_PAGE_SIZE,
   SYNC_SKEW_MS,
   type TagRecord,
@@ -574,5 +575,39 @@ describe("TagStore", () => {
     await tags.sync(1_000);
     expect(fake.commands).toContain("zrangebyscore");
     expect(tags.isSynced()).toBe(true);
+  });
+
+  test("a closed store sends updates to the live store of its key", async () => {
+    const fake = new FakeRedis();
+    const connection = getClientConnection(asClient(fake));
+    const live = new TagStore(connection, PREFIX);
+    const state: KeyTagState = { records: new Map(), unsent: new Map() };
+    const closed = new TagStore(connection, PREFIX, {
+      key: { liveStore: () => live, currentState: () => state },
+    });
+    closed.close();
+    await closed.update(["a"]);
+    expect(live.get("a")).toBeDefined();
+    expect(closed.get("a")).toBeUndefined();
+  });
+
+  test("a send in flight at close that fails is queued in the key's current state", async () => {
+    const fake = new FakeRedis();
+    const connection = getClientConnection(asClient(fake));
+    // The state the key has by the time the send fails: a newer store's, not the closed one's.
+    const current: KeyTagState = { records: new Map(), unsent: new Map() };
+    const tags = new TagStore(connection, PREFIX, {
+      key: { liveStore: () => new TagStore(connection, PREFIX), currentState: () => current },
+    });
+    const { held, release } = holdWrites(fake);
+    const update = tags.update(["a"]);
+    await held;
+    tags.close();
+    fake.failWith = new Error("READONLY You can't write against a read only replica.");
+    release();
+    await update;
+    expect(current.unsent.has("a")).toBe(true);
+    expect(current.records.get("a")?.stale).toBeGreaterThan(0);
+    expect(tags.hasUnsent()).toBe(false);
   });
 });

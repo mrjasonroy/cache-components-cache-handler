@@ -1,7 +1,8 @@
 /**
  * `closeCache()` never drops an invalidation Redis has not acknowledged: it tries to send it one
- * last time, and what is still unsent passes to the next tag store of the same connection and
- * key prefix in this process, which keeps applying it locally and sends it once Redis takes it.
+ * last time, and what is still unsent stays in the tag state of its connection and key prefix,
+ * which the next runtime of that key uses: it keeps applying it locally and sends it once Redis
+ * takes it. An update on a closed runtime goes to the live runtime of its key.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -73,15 +74,13 @@ function redisRecord(tag: string): string | undefined {
 }
 
 /**
- * The hand-over slot: pooled connections by string key, application clients by the client
- * object (a `WeakMap`, so a dropped client takes its hand-over with it).
+ * The tag state registry, one state per key: connections of the package's own by pool key and
+ * prefix, application clients by the client object (a `WeakMap`), then prefix.
  */
 function slot(): { pooled: Map<string, unknown>; clients: WeakMap<object, Map<string, unknown>> } {
-  const value = (globalThis as unknown as Record<symbol, unknown>)[
-    Symbol.for("@mrjasonroy/cache-components-cache-handler/pending-tags")
-  ];
-  // Before the split, the slot was one string-keyed Map holding both.
-  if (value instanceof Map) return { pooled: value, clients: new WeakMap() };
+  const global = globalThis as unknown as Record<symbol, unknown>;
+  const value = global[Symbol.for("@mrjasonroy/cache-components-cache-handler/tag-states")];
+  if (!value) return { pooled: new Map(), clients: new WeakMap() };
   return value as ReturnType<typeof slot>;
 }
 
@@ -210,17 +209,19 @@ describe("closeCache with invalidations Redis has not taken", () => {
     expect(slot().pooled.size).toBe(0);
   });
 
-  test("a runtime that adopts mid-close owns the state; the slot keeps nothing", async () => {
+  test("a runtime created mid-close owns the one state of its key; nothing else is kept", async () => {
     await getCacheRuntime(options).tags.update(["products"]);
     const closing = closeCache();
     const adopter = getCacheRuntime(options);
     await closing;
-    expect(slot().pooled.size).toBe(0);
+    expect(slot().pooled.size).toBe(1);
 
     expect(adopter.tags.get("products")).toBeDefined();
     await adopter.tags.update(["orders"]);
     expect(adopter.tags.hasUnsent()).toBe(false);
     expect(redisRecord("orders")).toBeDefined();
+    await closeCache();
+    expect(slot().pooled.size).toBe(0);
   });
 
   test("a refused update keeps exactly its entry until it is adopted and replayed", async () => {
@@ -232,11 +233,13 @@ describe("closeCache with invalidations Redis has not taken", () => {
 
     redis.readonly = false;
     await syncNow();
-    expect(slot().pooled.size).toBe(0);
     expect(redisRecord("products")).toBeDefined();
+    // Now the live runtime's own state; a close with nothing unsent drops it.
+    await closeCache();
+    expect(slot().pooled.size).toBe(0);
   });
 
-  test("a replaced application client's hand-over is held by the client, not the global map", async () => {
+  test("a replaced application client's kept state is held by the client, not the global map", async () => {
     const client = new FakeRedis();
     vi.spyOn(client, "evalsha").mockRejectedValue(new Error("READONLY"));
     await getCacheRuntime({ client: asClient(client), keyPrefix: "app:" }).tags.update([
@@ -248,7 +251,7 @@ describe("closeCache with invalidations Redis has not taken", () => {
     expect(slot().clients.get(client)?.size).toBe(1);
   });
 
-  test("an update queued on a closed runtime after its release is left in the slot again", async () => {
+  test("an update on a closed runtime goes to the live runtime of its key", async () => {
     const old = getCacheRuntime(options);
     await old.tags.update(["products"]);
     await closeCache();
@@ -256,8 +259,48 @@ describe("closeCache with invalidations Redis has not taken", () => {
 
     // A handler call that resolved the runtime before the close, and revalidates after it.
     await old.tags.update(["late"]);
-    expect(slot().pooled.size).toBe(1);
     expect(getCacheRuntime(options).tags.get("late")).toBeDefined();
+    expect(redisRecord("late")).toBeDefined();
+    await closeCache();
     expect(slot().pooled.size).toBe(0);
+  });
+
+  test("gate-3 M3: a refused late update on a closed runtime reaches the runtimes after it", async () => {
+    const client = new FakeRedis();
+    let refusing = false;
+    const evalsha = client.evalsha.bind(client);
+    vi.spyOn(client, "evalsha").mockImplementation(async (...args) => {
+      if (refusing) throw new Error("READONLY You can't write against a read only replica.");
+      return evalsha(...args);
+    });
+    const clientOptions = { client: asClient(client), keyPrefix: "app:" };
+    const a = getCacheRuntime(clientOptions);
+    await closeCache();
+    getCacheRuntime(clientOptions); // B
+    refusing = true;
+    await a.tags.update(["lost"]);
+    await closeCache();
+
+    const c = getCacheRuntime(clientOptions);
+    expect(c.tags.get("lost")).toBeDefined();
+    expect(c.tags.hasUnsent()).toBe(true);
+    refusing = false;
+    await c.tags.sync();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect((client.items.get("app:tags")?.value as Map<string, string>).get("lost")).toBeDefined();
+  });
+
+  test("gate-3 M4: acknowledged late updates on 100 closed prefixes leave no state after a close", async () => {
+    const client = new FakeRedis();
+    for (let i = 0; i < 100; i++) {
+      const old = getCacheRuntime({ client: asClient(client), keyPrefix: `tenant${i}:` });
+      await closeCache();
+      await old.tags.update(["ack"]);
+    }
+    await closeCache();
+    expect(slot().clients.get(client)?.size ?? 0).toBe(0);
+    expect(
+      (client.items.get("tenant99:tags")?.value as Map<string, string>).get("ack"),
+    ).toBeDefined();
   });
 });

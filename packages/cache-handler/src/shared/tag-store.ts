@@ -88,15 +88,23 @@ export type TagState = "fresh" | "stale" | "expired";
 type Durations = { expire?: number };
 
 /**
- * A closed tag store's state, for the next store of the same connection and key prefix in this
- * process (see {@link TagStore.handOver}): its local records, and the updates Redis has not
- * acknowledged.
+ * The tag state of one connection and key prefix: the local records, and the updates Redis has
+ * not acknowledged. One exists per key in the process (`shared/tag-states.ts`); the live tag store
+ * of the key is its owner.
  */
-export interface TagHandover {
+export interface KeyTagState {
   readonly records: Map<string, TagRecord>;
   readonly unsent: Map<string, Durations | null>;
-  /** Set once a new store has taken it over. */
-  adopted?: boolean;
+  /** The store that uses it; a newer one takes it over. */
+  owner?: TagStore;
+}
+
+/** Where a store of a runtime `closeCache` can close sends what reaches it after the close. */
+export interface TagStoreKey {
+  /** The live store of the same connection and key prefix, created if there is none. */
+  liveStore(): TagStore;
+  /** The current state of the same connection and key prefix, created if there is none. */
+  currentState(): KeyTagState;
 }
 
 /**
@@ -146,10 +154,11 @@ function toUpdate(now: number, durations?: Durations): TagUpdate {
  * Process-local tag state, synced with Redis when a connection is given.
  */
 export class TagStore {
-  private readonly records: Map<string, TagRecord>;
+  private readonly state: KeyTagState;
   private readonly reportError: ErrorReporter;
-  /** Updates Redis has not acknowledged, by tag: their durations, `null` for an immediate one. */
-  private readonly unsent: Map<string, Durations | null>;
+  private readonly key: TagStoreKey | undefined;
+  /** Set by {@link close}: updates go to the live store of the key from then on. */
+  private closed = false;
   private syncedUpTo = 0;
   private lastSyncAt = 0;
   private synced = false;
@@ -160,19 +169,21 @@ export class TagStore {
   private readonly sending = new Set<Promise<void>>();
   private lastUpdate: { key: string; done: Promise<void> } | undefined;
   private readonly stopListening: (() => void) | undefined;
-  /** Set by {@link handOver}: called when an update is queued after the hand-over. */
-  private onRequeue: (() => void) | undefined;
 
+  /**
+   * @param options.state The state of its key to use and own (a kept one is sent on), or a new
+   *   one of its own.
+   * @param options.key Where updates go once {@link close}d; without it, it is never closed.
+   */
   constructor(
     private readonly connection: RedisConnection | undefined,
     private readonly keyPrefix: string,
-    options: { errorLogIntervalMs?: number; adopt?: TagHandover } = {},
+    options: { errorLogIntervalMs?: number; state?: KeyTagState; key?: TagStoreKey } = {},
   ) {
     this.reportError = createErrorReporter("[RedisCache]:", options.errorLogIntervalMs);
-    // Adopted by reference: a send of the closed store that fails after the hand-over still lands
-    // in this queue.
-    this.records = options.adopt?.records ?? new Map();
-    this.unsent = options.adopt?.unsent ?? new Map();
+    this.key = options.key;
+    this.state = options.state ?? { records: new Map(), unsent: new Map() };
+    this.state.owner = this;
     this.stopListening = connection?.onReady(() => {
       this.connectedSince += 1;
       this.synced = false;
@@ -180,6 +191,16 @@ export class TagStore {
       void this.send();
     });
     if (this.unsent.size > 0) void this.send();
+  }
+
+  /** Local records. */
+  private get records(): Map<string, TagRecord> {
+    return this.state.records;
+  }
+
+  /** Updates Redis has not acknowledged, by tag: their durations, `null` for an immediate one. */
+  private get unsent(): Map<string, Durations | null> {
+    return this.state.unsent;
   }
 
   /**
@@ -244,6 +265,7 @@ export class TagStore {
    * later identical update, however soon, is applied again.
    */
   update(tags: string[], durations?: Durations): Promise<void> {
+    if (this.closed && this.key) return this.key.liveStore().update(tags, durations);
     const now = nowMs();
     const key = JSON.stringify([[...tags].sort(), durations ?? null]);
     if (this.lastUpdate?.key === key) return this.lastUpdate.done;
@@ -268,15 +290,13 @@ export class TagStore {
   }
 
   /**
-   * For `closeCache`: stop following the connection, and give the local records and the queue of
-   * unacknowledged updates to whoever takes over (the next store of the same connection and key
-   * prefix). They are handed over by reference, so an update that fails later, in a send already
-   * started, is still queued for the next store.
+   * For `closeCache`: stop following the connection. From then on an update goes to the live
+   * store of the key, and a send already started that fails is queued in the key's current state,
+   * never in this store's own: the state may have been dropped, or taken over by a newer store.
    */
-  handOver(onRequeue?: () => void): TagHandover {
+  close(): void {
+    this.closed = true;
     this.dispose();
-    this.onRequeue = onRequeue;
-    return { records: this.records, unsent: this.unsent };
   }
 
   /**
@@ -299,7 +319,6 @@ export class TagStore {
   private queue(tag: string, durations: Durations | null): void {
     const queued = this.unsent.get(tag);
     this.unsent.set(tag, queued === null ? null : durations);
-    this.onRequeue?.();
   }
 
   /**
@@ -363,11 +382,18 @@ export class TagStore {
         client.zadd(tagIndexKey(this.keyPrefix), "GT", ...scores),
       ]);
     } catch (error) {
+      const state = this.closed && this.key ? this.key.currentState() : this.state;
       for (const [tag, durations] of batch) {
-        if (!this.unsent.has(tag)) this.unsent.set(tag, durations);
-        else if (durations === null) this.unsent.set(tag, null);
+        // The update reaches the key's live store locally too, as well as on its next send.
+        if (state !== this.state) {
+          state.records.set(
+            tag,
+            mergeUpdate(state.records.get(tag), updates.get(tag) as TagUpdate),
+          );
+        }
+        if (!state.unsent.has(tag)) state.unsent.set(tag, durations);
+        else if (durations === null) state.unsent.set(tag, null);
       }
-      this.onRequeue?.();
       this.reportError("updateTags", error);
     }
   }
@@ -392,7 +418,7 @@ export class TagStore {
    * sync; a call within `minIntervalMs` of the last sync that reached Redis does nothing.
    */
   sync(minIntervalMs = 0): Promise<void> {
-    if (!this.connection) return Promise.resolve();
+    if (!this.connection || this.closed) return Promise.resolve();
     if (this.syncing) return this.syncing;
     if (minIntervalMs > 0 && nowMs() - this.lastSyncAt < minIntervalMs) {
       return Promise.resolve();
