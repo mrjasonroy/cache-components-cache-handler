@@ -1,10 +1,29 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "vitest";
-import { UPDATE_TAGS_SCRIPT, UPDATE_TAGS_SHA, mergeUpdate, updateArgs } from "./tag-update.js";
+import {
+  UPDATE_EXPIRING_TAGS_SCRIPT,
+  UPDATE_EXPIRING_TAGS_SHA,
+  UPDATE_TAGS_SCRIPT,
+  UPDATE_TAGS_SHA,
+  mergeUpdate,
+  updateArgs,
+} from "./tag-update.js";
 
 describe("UPDATE_TAGS_SCRIPT", () => {
   test("UPDATE_TAGS_SHA is the script's SHA1", () => {
     expect(createHash("sha1").update(UPDATE_TAGS_SCRIPT).digest("hex")).toBe(UPDATE_TAGS_SHA);
+  });
+
+  test("field-expiring variant SHA1 matches the script", () => {
+    expect(createHash("sha1").update(UPDATE_EXPIRING_TAGS_SCRIPT).digest("hex")).toBe(
+      UPDATE_EXPIRING_TAGS_SHA,
+    );
+  });
+
+  test("the expiring variant keeps its TTL command and failure guard", () => {
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("redis.pcall('HPEXPIREAT'");
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("if result.err then ttlFailed = true end");
+    expect(UPDATE_EXPIRING_TAGS_SCRIPT).toContain("if ttlFailed then return -#ARGV / 3 end");
   });
 
   test("arguments are tag, stale, expired, with an empty expired to keep the stored one", () => {
