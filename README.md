@@ -295,8 +295,7 @@ keeps its closed connection and serves from memory, so create it again after `cl
 ## Logging
 
 Warnings, errors and `CACHE_DEBUG` lines go to the console by default. To send them to your own
-logger (pino, winston, bunyan, or anything with `error` and `warn` methods), set it once per
-process in `instrumentation.ts`:
+logger (anything with `error` and `warn` methods), set it once per process in `instrumentation.ts`:
 
 ```ts
 // instrumentation.ts
@@ -312,6 +311,15 @@ Each line is `logger.error(message, meta)`, `logger.warn(...)`, `logger.info?.(.
 `logger.debug?.(...)`. `message` is the line the console would have printed, and `meta` carries
 its details (an `error`, the `operation`). A logger without `info` or `debug` drops those lines. Errors stay rate-limited, as on the console. Lines written before `register()`
 runs (a `withCache` warning while `next.config` loads) still go to the console.
+
+winston and `console` take `(message, meta)` as they are. pino and bunyan take the fields first,
+so pass an adapter, or `meta` is lost:
+
+```ts
+const log = (level: "error" | "warn" | "info" | "debug") =>
+  (message: string, meta?: Record<string, unknown>) => logger[level](meta ?? {}, message);
+setCacheLogger({ error: log("error"), warn: log("warn"), info: log("info"), debug: log("debug") });
+```
 
 In a custom handler file, `createRemoteCacheHandler`, `createLocalCacheHandler` and
 `createRedisCacheHandler` also take `logger`, which wins over `setCacheLogger` for that handler.
@@ -405,7 +413,7 @@ All three factories take `CacheOptions`:
 | `keyPrefix` | `CACHE_KEY_PREFIX` / `nextjs:` | Prefix for every key. |
 | `memoryFallback` | `true` | Serve from memory (each entry at most 60 s) while Redis is down. `false` → miss instead. |
 | `commandTimeout` | `1000` | Per-command timeout in ms. Also bounds the package's commands on a `client` you pass in. |
-| `connectTimeout` | `2000` | Ms to wait for a connection the package opens. Not used with `client`. |
+| `connectTimeout` | `2000` (`10000` with the `ELASTICACHE_*` host form) | Ms to wait for a connection the package opens. Not used with `client`. |
 | `socketTimeout` | `2000` | Ms a pending command may go without a reply before a connection the package opens is dropped and reopened. Not used with `client`. |
 | `maxConsecutiveTimeouts` | `3` | Command timeouts in a row that drop a connection the package opens or, for a `client` you pass in, send the handlers to memory for 2 s at a time. |
 | `debug` | `CACHE_DEBUG` | Log hits, misses and state changes. |

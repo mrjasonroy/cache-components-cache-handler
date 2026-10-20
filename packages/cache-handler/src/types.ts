@@ -12,6 +12,8 @@ export const IMPLICIT_TAG_PREFIX = "_N_T_";
 
 /**
  * Cache entry value types supported by Next.js
+ *
+ * @deprecated The Next 14 handlers' type. For the Next 16 page cache use `PageCacheValue`. Still works; removed on the Next 17 line.
  */
 export type CacheValue =
   | {
@@ -63,6 +65,8 @@ export type CacheValue =
 /**
  * Lifespan parameters for cache entries
  * All time values are in SECONDS (not milliseconds)
+ *
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
  */
 export interface LifespanParameters {
   /**
@@ -99,6 +103,8 @@ export interface LifespanParameters {
 /**
  * Internal cache handler value with metadata
  * This is what handlers store internally
+ *
+ * @deprecated The Next 14 handlers' type. For the Next 16 page cache use `PageCacheHandlerValue`. Still works; removed on the Next 17 line.
  */
 export interface CacheHandlerValue {
   /**
@@ -124,6 +130,8 @@ export interface CacheHandlerValue {
 
 /**
  * Context provided when setting cache entries
+ *
+ * @deprecated The Next 14 handlers' type. For the Next 16 page cache use `PageCacheHandlerContext`. Still works; removed on the Next 17 line.
  */
 export interface CacheHandlerContext {
   /**
@@ -144,6 +152,8 @@ export interface CacheHandlerContext {
 
 /**
  * Metadata passed to get() method
+ *
+ * @deprecated The Next 14 handlers' type. For the Next 16 page cache use `PageCacheGetContext`. Still works; removed on the Next 17 line.
  */
 export interface CacheHandlerGetMeta {
   /**
@@ -180,6 +190,8 @@ export interface CacheHandlerGetResult {
 
 /**
  * Cache handler interface that must be implemented
+ *
+ * @deprecated The Next 14 handlers' interface. Use `withCache`, or `RedisCacheHandler` for a custom page handler. Still works; removed on the Next 17 line.
  */
 export interface CacheHandler {
   /**
@@ -213,6 +225,8 @@ export interface CacheHandler {
 
 /**
  * Cache handler constructor parameters
+ *
+ * @deprecated The Next 14 handlers' options. Use `withCache`. Still works; removed on the Next 17 line.
  */
 export interface CacheHandlerOptions {
   /**

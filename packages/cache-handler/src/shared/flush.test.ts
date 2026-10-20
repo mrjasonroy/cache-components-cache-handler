@@ -172,9 +172,32 @@ describe("flushCache", () => {
     expect(entryKeys(one)).toEqual([]);
   });
 
-  /** Timers still pending in this process. */
-  const pendingTimers = () =>
-    process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+  /**
+   * Track the timers set from now on: the returned set holds those neither fired nor cleared.
+   * (Counting the process's timers would also count other tests' timers expiring meanwhile.)
+   */
+  const trackTimers = (): Set<unknown> => {
+    const pending = new Set<unknown>();
+    const realSet = globalThis.setTimeout;
+    const realClear = globalThis.clearTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      callback: (...args: unknown[]) => void,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      const timer = realSet(() => {
+        pending.delete(timer);
+        callback(...args);
+      }, ms);
+      pending.add(timer);
+      return timer;
+    }) as typeof setTimeout);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(((timer) => {
+      pending.delete(timer);
+      realClear(timer);
+    }) as typeof clearTimeout);
+    return pending;
+  };
 
   test.each(["SCAN", "pipeline exec"])(
     "a Cluster master whose %s never answers fails the flush within commandTimeout",
@@ -184,7 +207,7 @@ describe("flushCache", () => {
       const cluster = new FakeCluster([one]);
       if (stalled === "SCAN") vi.spyOn(one, "scan").mockReturnValue(new Promise<never>(() => {}));
       else cluster.stallExec = true;
-      const timers = pendingTimers();
+      const timers = trackTimers();
 
       const started = performance.now();
       const flushing = flushCache({
@@ -197,7 +220,7 @@ describe("flushCache", () => {
         /flushCache: the flush failed part-way.*Command timed out/,
       );
       expect(performance.now() - started).toBeLessThan(100);
-      expect(pendingTimers()).toBe(timers);
+      expect(timers.size).toBe(0);
       // The application's client is left as it was.
       expect(one.status).toBe("ready");
       expect(one.commands).not.toContain("quit");

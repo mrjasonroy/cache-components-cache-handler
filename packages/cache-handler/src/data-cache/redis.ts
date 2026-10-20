@@ -18,7 +18,8 @@
  * - A `get` waits for an in-flight `set` of the same key in this process, so
  *   concurrent requests don't each render the same entry.
  * - Errors never throw out of the handler (a cache outage degrades to misses),
- *   but they are always logged with `console.error`, rate-limited per operation.
+ *   but they are always logged, to the cache logger's `error` (see `setCacheLogger`) or else
+ *   `console.error`, rate-limited per operation.
  * - Only single-key commands are issued, so Redis Cluster and ElastiCache in
  *   cluster mode work (no cross-slot CROSSSLOT errors).
  */
@@ -86,7 +87,7 @@ export interface RedisDataCacheHandlerOptions {
 
   /**
    * Minimum time in milliseconds between two logged errors of the same operation.
-   * Errors are always logged with `console.error`; this only stops an outage
+   * Errors are always logged (the cache logger's `error`, or `console.error`); this only stops an outage
    * from producing one log line per request.
    * @default 60000
    */

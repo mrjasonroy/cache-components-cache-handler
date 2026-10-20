@@ -192,6 +192,22 @@ describe("page handler: prerendered build output", () => {
     expect(await fake.getBuffer(BLOG_KEY)).toEqual(written);
   });
 
+  test("an entry another instance writes while the build output is promoted is not overwritten (NX)", async () => {
+    const fake = new FakeRedis();
+    const racer = Buffer.from("written by another instance");
+    const set = fake.set.bind(fake);
+    // The read missed; another instance's write lands just before this one's promotion does.
+    vi.spyOn(fake, "set").mockImplementation(async (key, value, ...args) => {
+      if (key === BLOG_KEY && args.includes("NX")) await set(BLOG_KEY, racer);
+      return set(key, value, ...args);
+    });
+
+    expect((await handlerFor(fake).get(BLOG, appPageCtx))?.value.html).toBe(
+      "<html>built blog</html>",
+    );
+    expect(await fake.getBuffer(BLOG_KEY)).toEqual(racer);
+  });
+
   test("a tag revalidated since the build beats the build output", async () => {
     const handler = handlerFor(new FakeRedis());
     await handler.revalidateTag("products");

@@ -1,5 +1,6 @@
 /**
- * The 16.5 data cache stack and `RedisCacheHandler.close()` are deprecated in 16.6: each keeps
+ * The 16.5 data cache stack, the Next 14 handlers' types and `RedisCacheHandler.close()` are
+ * deprecated in 16.6: each keeps
  * working in 16.x, and its JSDoc says so and names the replacement, so editors strike it through.
  */
 
@@ -39,6 +40,16 @@ describe("deprecations", () => {
       "createRemoteCacheHandler",
     ],
     ["handlers/redis.ts", "  async close(): Promise<void>", "closeCache"],
+    // The Next 14 types, used only by the deprecated memory and composite handlers.
+    ["types.ts", "export type CacheValue =", "PageCacheValue"],
+    ["types.ts", "export interface LifespanParameters {", "no replacement"],
+    ["types.ts", "export interface CacheHandlerValue {", "PageCacheHandlerValue"],
+    ["types.ts", "export interface CacheHandlerContext {", "PageCacheHandlerContext"],
+    ["types.ts", "export interface CacheHandlerGetMeta {", "PageCacheGetContext"],
+    ["types.ts", "export interface CacheHandler {", "withCache"],
+    ["types.ts", "export interface CacheHandlerOptions {", "withCache"],
+    ["handlers/memory.ts", "export interface MemoryCacheHandlerOptions ", "withCache"],
+    ["handlers/composite.ts", "export interface CompositeHandlerOptions ", "withCache"],
   ])("%s: %s is @deprecated in favour of %s", (file, declaration, replacement) => {
     const jsdoc = jsdocOf(file, declaration);
     expect(jsdoc).toMatch(/@deprecated/);

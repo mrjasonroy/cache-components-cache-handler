@@ -27,6 +27,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$RESULTS_DIR/logs"
 RESULTS="$RESULTS_DIR/$VARIANT-$SHARD.tsv"
 : >"$RESULTS"
+# One row per test, by name (count-results.mjs), for report.mjs's per-test comparison.
+TESTS="$RESULTS_DIR/$VARIANT-$SHARD.tests.tsv"
+: >"$TESTS"
 
 if [ -n "${NEXT_DEPLOY_SKIP_REASON:-}" ]; then
   echo "$VARIANT skipped: $NEXT_DEPLOY_SKIP_REASON"
@@ -127,7 +130,8 @@ for suite in "${suite_order[@]}"; do
   stop_leftover_servers
 
   # passed, failed, skipped, total (and test files without results) for this part.
-  counts="$(cd "$NEXT_REPO_DIR" && node "$HERE/count-results.mjs" "$log" "${files[@]}")"
+  counts="$(cd "$NEXT_REPO_DIR" && COUNT_RESULTS_TESTS_FILE="$TESTS" COUNT_RESULTS_SUITE="$suite" \
+    node "$HERE/count-results.mjs" "$log" "${files[@]}")"
   IFS=$'\t' read -r passed failed skipped total unknown <<<"$counts"
   counts="$passed"$'\t'"$failed"$'\t'"$skipped"$'\t'"$total"
 

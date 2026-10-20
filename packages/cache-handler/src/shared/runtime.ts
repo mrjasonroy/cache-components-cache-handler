@@ -86,7 +86,7 @@ export interface CacheOptions {
 
   /**
    * Milliseconds to wait for the connection to open. Not used with `client`.
-   * @default 2000
+   * @default 2000 (10000 with the `ELASTICACHE_*` host form)
    */
   connectTimeout?: number;
 

@@ -36,7 +36,9 @@ export interface TagUpdate {
 
 /**
  * `KEYS[1]` = the tags hash; `ARGV` = tag, stale, expired (`""` to keep), repeated. Timestamps
- * stay strings: Lua 5.1 prints large numbers in exponent form.
+ * stay strings: Lua 5.1 prints large numbers in exponent form. A stored value is read as
+ * `decodeRecord` reads it: without a comma it is the stale time, and a field that is not a number
+ * makes it missing (comparing it would fail the whole script, and with it every tag of the batch).
  */
 export const UPDATE_TAGS_SCRIPT = `local key = KEYS[1]
 for i = 1, #ARGV, 3 do
@@ -48,6 +50,11 @@ for i = 1, #ARGV, 3 do
     if comma then
       cs = string.sub(current, 1, comma - 1)
       ce = string.sub(current, comma + 1)
+    else
+      cs = current
+    end
+    if (cs ~= '' and tonumber(cs) == nil) or (ce ~= '' and tonumber(ce) == nil) then
+      cs, ce = '', ''
     end
   end
   local ns, ne
@@ -71,7 +78,7 @@ return #ARGV / 3`;
 /**
  * SHA1 of {@link UPDATE_TAGS_SCRIPT}, for EVALSHA. A unit test keeps it in step with the script.
  */
-export const UPDATE_TAGS_SHA = "bf03bd390c7b4fa57584737835e3dff24acd86f7";
+export const UPDATE_TAGS_SHA = "75240142587a54b700c9640527398e853f0abcb5";
 
 /**
  * {@link UPDATE_TAGS_SCRIPT}'s merge, for local state and the test double.

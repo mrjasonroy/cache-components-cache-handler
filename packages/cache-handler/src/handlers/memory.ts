@@ -12,6 +12,11 @@ import type {
   CacheValue,
 } from "../types.js";
 
+/**
+ * Options for the deprecated `MemoryCacheHandler`.
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
+ */
 export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
   /**
    * Maximum number of items to store (LRU eviction when exceeded)

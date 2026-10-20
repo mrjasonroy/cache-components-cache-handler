@@ -271,6 +271,14 @@ function serverKey(key: string): string | undefined {
 const warnedSplits = new Set<string>();
 
 /**
+ * Forget which servers were warned about, so each test sees its own warning. Test-only.
+ * @internal
+ */
+export function resetSplitWarningsForTests(): void {
+  warnedSplits.clear();
+}
+
+/**
  * Warn, once per server, when a connection opens to a server another connection already reaches
  * with different tuning: the handlers then no longer share one client and one tag state (DEC-4).
  * Never logs the options, which can hold a password.

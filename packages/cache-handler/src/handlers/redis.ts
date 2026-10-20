@@ -90,7 +90,8 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
   tagPrefix?: string;
 
   /**
-   * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 365 days).
+   * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 365 days,
+   * rounded up to whole seconds). A finite number greater than 0; anything else throws.
    * @default 31536000 (365 days)
    */
   defaultTTL?: number;
@@ -198,7 +199,8 @@ function lifetimeOf(
   } else if (typeof expire === "number") {
     lifetime = Math.ceil(expire);
   } else {
-    lifetime = fallback;
+    // Whole seconds: Redis takes no other `EX`.
+    lifetime = Math.ceil(fallback);
   }
   return Math.min(lifetime, MAX_ENTRY_AGE_SECONDS);
 }
@@ -253,6 +255,15 @@ export class RedisCacheHandler {
   private readonly edge = isEdgeRuntime();
 
   constructor(options: RedisCacheHandlerOptions = {}) {
+    const { defaultTTL } = options;
+    if (
+      defaultTTL !== undefined &&
+      (typeof defaultTTL !== "number" || !Number.isFinite(defaultTTL) || defaultTTL <= 0)
+    ) {
+      throw new Error(
+        `RedisCacheHandler: defaultTTL must be a finite number of seconds greater than 0, got ${String(defaultTTL)}`,
+      );
+    }
     registerServerDistDir(options.serverDistDir);
     if (options.serverDistDir && isBuildPhase()) writeBuildStamp(options.serverDistDir);
     markPageHandlerCreated();

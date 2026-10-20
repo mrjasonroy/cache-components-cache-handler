@@ -8,10 +8,12 @@
 // the job summary). <ref> is NEXT_REF, e.g. v16.4.2.
 //
 // Exit 1 only when `branch` ran and either
-//   - a suite passes on `baseline` and does not pass on `branch`, or passes fewer tests on
-//     `branch` than on `baseline` (either not in known-failures.txt), or
-//   - `baseline` or `branch` results are incomplete (a shard never finished), since a missing
-//     result can hide a regression.
+//   - a suite passes on `baseline` and does not pass on `branch`, passes fewer tests on `branch`
+//     than on `baseline`, or has a test, by name, that passes on `baseline` and not on `branch`
+//     (from <variant>-<shard>.tests.tsv; without it, counts only), and is not in
+//     known-failures.txt, or
+//   - `baseline` or `branch` results are incomplete (a shard never finished, or a suite has no
+//     result: its path matched no files), since a missing result can hide a regression.
 // `pkg-16.5.1` is informational. A skipped `branch` (no withCache yet) never fails the job.
 //
 // known-failures.txt lines are `<suite> [<constraint>] <reason>`. The optional constraint limits
@@ -161,6 +163,33 @@ for (const file of readdirSync(resultsDir).filter((name) => name.endsWith(".note
   }
 }
 
+/** variant -> suite -> test name -> jest status, from <variant>-<shard>.tests.tsv. */
+const tests = Object.fromEntries(VARIANTS.map((variant) => [variant, new Map()]));
+for (const file of readdirSync(resultsDir).filter((name) => name.endsWith(".tests.tsv"))) {
+  const variant = VARIANTS.find((v) => file.startsWith(`${v}-`));
+  if (!variant) continue;
+  for (const row of readRows(join(resultsDir, file))) {
+    const [suite, name, testStatus] = row.split("\t");
+    const bySuite = tests[variant].get(suite) ?? new Map();
+    // A test reported twice (a retry in another part) counts as passed only if it always passed.
+    if (bySuite.get(name) !== "failed") bySuite.set(name, testStatus);
+    tests[variant].set(suite, bySuite);
+  }
+}
+
+/**
+ * Tests that pass on `baseline` and not on `branch`, by name; `null` when either has no per-test
+ * results for the suite (older result files), so only the counts are compared.
+ */
+function lostTests(suite) {
+  const baseline = tests.baseline.get(suite);
+  const branch = tests.branch.get(suite);
+  if (!baseline || !branch) return null;
+  return [...baseline]
+    .filter(([name, testStatus]) => testStatus === "passed" && branch.get(name) !== "passed")
+    .map(([name]) => name);
+}
+
 const branchRan = variants.branch.state === "ran";
 const regressions = [];
 const staleKnown = [];
@@ -173,7 +202,10 @@ for (const [suite, bySuite] of [...suites].sort(([a], [b]) => a.localeCompare(b)
   const branch = status("branch");
   // A suite that fails on baseline still guards the tests it passes there.
   const baselinePassed = bySuite.baseline?.passed ?? 0;
-  const fewerPassed = baselinePassed > 0 && (bySuite.branch?.passed ?? 0) < baselinePassed;
+  const lost = lostTests(suite) ?? [];
+  // Fewer passed, or as many but not the same ones (one test newly fails while another is fixed).
+  const fewerPassed =
+    (baselinePassed > 0 && (bySuite.branch?.passed ?? 0) < baselinePassed) || lost.length > 0;
   let verdict;
 
   if (!branchRan) {
@@ -195,14 +227,28 @@ for (const [suite, bySuite] of [...suites].sort(([a], [b]) => a.localeCompare(b)
     verdict = "no baseline pass";
   }
 
-  report[suite] = { verdict };
+  report[suite] = { verdict, ...(lost.length > 0 ? { lostTests: lost } : {}) };
   for (const variant of VARIANTS) {
     report[suite][variant] = bySuite[variant] ?? { status: status(variant) };
   }
 }
 
+// A suite with no result on a variant that ran (a path in suites.txt that matched no files, or a
+// suite no shard reported) could hide a regression, so it blocks like an unfinished shard.
+const missingSuites = Object.entries(report).flatMap(([suite, row]) =>
+  ["baseline", "branch"]
+    .filter((variant) => row[variant].status === "missing")
+    .map(
+      (variant) => `${variant} ${suite}: no results (no test files matched, or no shard ran it)`,
+    ),
+);
 const blockingIncomplete = branchRan
-  ? ["baseline", "branch"].flatMap((v) => variants[v].incomplete.map((item) => `${v} ${item}`))
+  ? [
+      ...["baseline", "branch"].flatMap((v) =>
+        variants[v].incomplete.map((item) => `${v} ${item}`),
+      ),
+      ...missingSuites,
+    ]
   : [];
 
 const totals = Object.fromEntries(
@@ -316,6 +362,19 @@ const lines = [
 ];
 if (blockingIncomplete.length > 0) {
   lines.push("### Incomplete", "", ...blockingIncomplete.map((item) => `- ${item}`), "");
+}
+const withLost = Object.entries(report).filter(([, row]) => row.lostTests);
+if (withLost.length > 0) {
+  lines.push(
+    "### Tests that pass on `baseline` but not on `branch`",
+    "",
+    ...withLost.flatMap(([suite, row]) => [
+      `- \`${suite}\`:`,
+      ...row.lostTests.slice(0, 20).map((name) => `  - ${name}`),
+      ...(row.lostTests.length > 20 ? [`  - ...and ${row.lostTests.length - 20} more`] : []),
+    ]),
+    "",
+  );
 }
 if (staleKnown.length > 0) {
   lines.push("### Known failures that now pass", "", ...staleKnown.map((s) => `- \`${s}\``), "");

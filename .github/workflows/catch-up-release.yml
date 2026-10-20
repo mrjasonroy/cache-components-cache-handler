@@ -140,10 +140,8 @@ jobs:
         if: steps.versions.outputs.needs_update == 'true'
         id: test_redis
         run: |
-          # Flush Redis (service container is accessible on localhost)
-          redis-cli -h localhost FLUSHALL
-
-          # Build and test with Redis
+          # The Redis service container starts empty, so there is nothing to flush.
+          # (redis-cli is not installed on the runner; calling it exited 127.)
           cd apps/e2e-test-app
           REDIS_URL=redis://localhost:6379 pnpm build
           REDIS_URL=redis://localhost:6379 pnpm test:e2e

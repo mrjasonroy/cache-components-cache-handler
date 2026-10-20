@@ -10,6 +10,11 @@ import type {
   CacheValue,
 } from "../types.js";
 
+/**
+ * Options for the deprecated `CompositeHandler`.
+ *
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
+ */
 export interface CompositeHandlerOptions extends CacheHandlerOptions {
   /**
    * Array of cache handlers to use (ordered by priority)

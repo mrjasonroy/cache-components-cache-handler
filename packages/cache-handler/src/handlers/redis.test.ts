@@ -568,6 +568,27 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(debug).toHaveBeenCalled();
     });
 
+    test("a fractional defaultTTL is rounded up to whole seconds", async () => {
+      const fake = new FakeRedis();
+      const handler = new RedisCacheHandler({
+        redis: asClient(fake),
+        keyPrefix: "app:",
+        defaultTTL: 0.5,
+      });
+      await handler.set("/blog", page("x", "t1"), { cacheControl: { revalidate: false } });
+      expect(fake.ttlOf("app:development:page:/blog")).toBe(1);
+    });
+
+    test("an invalid defaultTTL throws at construction, as for the remote handler", () => {
+      for (const defaultTTL of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "60" as never]) {
+        expect(
+          () => new RedisCacheHandler({ client: asClient(new FakeRedis()), defaultTTL }),
+        ).toThrow(
+          /RedisCacheHandler: defaultTTL must be a finite number of seconds greater than 0/,
+        );
+      }
+    });
+
     test("a URL string opens a connection from the URL", () => {
       ioredisMock.mockImplementation(() => new FakeRedis());
       new RedisCacheHandler({ redis: "redis://legacy:6379" });

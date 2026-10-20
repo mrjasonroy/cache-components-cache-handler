@@ -61,7 +61,10 @@ interface CacheOptions {
    * through a proxy; 3 timeouts in a row → memory for 2 s. @default 1000
    */
   commandTimeout?: number;
-  /** Ms to wait for a connection the package opens. Not used with client. @default 2000 */
+  /**
+   * Ms to wait for a connection the package opens. Not used with client.
+   * @default 2000 (10000 with the ELASTICACHE_* host form)
+   */
   connectTimeout?: number;
   /** Ms a pending command may wait for a reply before an owned connection is reopened. @default 2000 */
   socketTimeout?: number;

@@ -36,10 +36,14 @@ write a "skipped" result without running anything. That way the first runs still
 The job fails only when `branch` ran and either:
 
 - **A regression:** a suite passes on `baseline` and does not pass on `branch`, or `branch`
-  passes fewer of its tests than `baseline` does (this catches a suite that already fails on
-  `baseline`), and it is not listed in `known-failures.txt`.
-- **Incomplete results:** a `baseline` or `branch` shard did not finish, or a suite path in
-  `suites.txt` matched no files.
+  passes fewer of its tests than `baseline` does, or a test that passes on `baseline` does not
+  pass on `branch` (this catches a suite that already fails on `baseline`, even when one test
+  newly fails while another is fixed), and it is not listed in `known-failures.txt`. Tests are
+  compared by file and full name, from the jest results (`<variant>-<shard>.tests.tsv`); results
+  without that file are compared by counts only. A suite in `known-failures.txt` is not checked
+  at all.
+- **Incomplete results:** a `baseline` or `branch` shard did not finish, or a suite has no result
+  on one of them (a suite path in `suites.txt` that matched no files).
 
 `pkg-16.5.1` is informational. A skipped `branch` never fails the job.
 

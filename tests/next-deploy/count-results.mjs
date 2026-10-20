@@ -4,6 +4,9 @@
 //   node count-results.mjs <log> <testFile> [<testFile> ...]
 //
 // Prints "passed\tfailed\tskipped\ttotal\tunknown" (unknown = test files with no results).
+// With COUNT_RESULTS_TESTS_FILE and COUNT_RESULTS_SUITE set, it also appends one row per test,
+// "suite\t<testFile> › <full test name>\tstatus" (jest's status: passed, failed, pending...), to
+// that file, so report.mjs can compare tests by name and not only by count.
 //
 // run-tests.js (v16.4.2, the loop in runTest) prints each test file's jest JSON once, after its
 // last attempt, as one line `--test output start-- {json} --test output end--`. It does that for
@@ -12,7 +15,7 @@
 // retry run-tests.js runs `git clean -fdx <suite dir>`, which deletes the results of every other
 // file in that directory too. A file with no block in the log falls back to its .results.json
 // (relative to the cwd, the next.js checkout). When a file has several blocks the last one wins.
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 
 const START = "--test output start--";
 const END = "--test output end--";
@@ -70,5 +73,19 @@ for (const file of testFiles) {
   sum[1] += r.numFailedTests ?? 0;
   sum[2] += (r.numPendingTests ?? 0) + (r.numTodoTests ?? 0);
   sum[3] += r.numTotalTests ?? 0;
+}
+const testsFile = process.env.COUNT_RESULTS_TESTS_FILE;
+const suite = process.env.COUNT_RESULTS_SUITE;
+if (testsFile && suite) {
+  const rows = [];
+  for (const file of testFiles) {
+    for (const { assertionResults = [] } of results.get(file)?.testResults ?? []) {
+      for (const { fullName, title, status } of assertionResults) {
+        const name = `${file} › ${fullName ?? title ?? ""}`.replace(/\s+/g, " ");
+        rows.push(`${suite}\t${name}\t${status}\n`);
+      }
+    }
+  }
+  if (rows.length > 0) appendFileSync(testsFile, rows.join(""));
 }
 console.log(sum.join("\t"));

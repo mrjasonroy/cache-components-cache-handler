@@ -104,6 +104,10 @@ export class FakeRedis extends EventEmitter {
 
   async set(key: string, value: string | Buffer, ...args: unknown[]): Promise<"OK" | null> {
     this.run("set");
+    if (args[0] === "EX" && !(Number.isInteger(Number(args[1])) && Number(args[1]) > 0)) {
+      // As Redis: EX takes a whole number of seconds greater than 0.
+      throw new Error("ERR invalid expire time in 'set' command");
+    }
     if (args.includes("NX") && this.live(key)) return null;
     const item: Item = { value: Buffer.isBuffer(value) ? value : Buffer.from(value) };
     if (args[0] === "EX") item.expiresAt = nowMs() + Number(args[1]) * 1000;

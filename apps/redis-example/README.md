@@ -63,8 +63,11 @@ pnpm docker:down
 # List all cache keys
 docker exec -it redis-example-redis-1 redis-cli KEYS "example:*"
 
-# Keys are <prefix><buildId>:page:*, <prefix><buildId>:data:* and <prefix>tag:*
-docker exec -it redis-example-redis-1 redis-cli KEYS "example:tag:*"
+# Entries are <prefix><buildId>:page:* and <prefix><buildId>:data:* strings. Tags live in two
+# keys: <prefix>tags, a hash of every tag record, and <prefix>tag-index, a sorted set of the same
+# tags scored by last update time (ms)
+docker exec -it redis-example-redis-1 redis-cli HGETALL example:tags
+docker exec -it redis-example-redis-1 redis-cli ZRANGE example:tag-index 0 -1 WITHSCORES
 
 # Clear all cache
 docker exec -it redis-example-redis-1 redis-cli FLUSHDB
@@ -100,7 +103,8 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 ┌──────────────────┐
 │   Redis Cache    │
 │ example:<build>:*│
-│ example:tag:*    │
+│ example:tags     │
+│ example:tag-index│
 └──────────────────┘
 ```
 

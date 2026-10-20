@@ -169,6 +169,30 @@ describe.runIf(Boolean(url))("TagStore (real Redis)", () => {
     }
   });
 
+  test("a malformed stored record is merged as the decoder reads it, never failing the batch", async () => {
+    const t = 1_700_000_000_000;
+    const corrupt = ["x,y", "x", `${t}`, `${t},x`, `x,${t}`, ",", `,${t}`, ""];
+    const key = tagsKey(prefix);
+    const fields: Record<string, string> = {};
+    const batch = new Map<string, TagUpdate>();
+    corrupt.forEach((value, i) => {
+      fields[`c${i}`] = value;
+      batch.set(`c${i}`, { stale: t - 1, expired: t - 1 });
+    });
+    // A healthy tag in the same batch.
+    batch.set("ok", { stale: t, expired: t });
+    await raw.hset(key, fields);
+    expect(await raw.eval(UPDATE_TAGS_SCRIPT, 1, key, ...updateArgs(batch))).toBe(batch.size);
+
+    const raws = await raw.hmget(key, ...batch.keys());
+    [...batch.entries()].forEach(([tag, update], i) => {
+      const current = decodeRecord(fields[tag]);
+      expect(decodeRecord(raws[i]), JSON.stringify({ stored: fields[tag], update })).toEqual(
+        mergeUpdate(current, update),
+      );
+    });
+  });
+
   test("the script merges exactly as mergeUpdate", async () => {
     const t = 1_700_000_000_000;
     const stored: (TagRecord | undefined)[] = [

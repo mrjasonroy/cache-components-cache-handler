@@ -14,9 +14,10 @@
  */
 
 /**
- * A logger for the package's warnings, errors and `CACHE_DEBUG` output (pino, winston, bunyan
- * and `console` fit as they are). `info` and `debug` are optional; without them those lines are
- * dropped.
+ * A logger for the package's warnings, errors and `CACHE_DEBUG` output. winston and `console`
+ * fit as they are; pino and bunyan take the fields first, so wrap them:
+ * `warn: (message, meta) => pino.warn(meta ?? {}, message)`. `info` and `debug` are optional;
+ * without them those lines are dropped.
  */
 export interface CacheLogger {
   error(message: string, meta?: Record<string, unknown>): void;
