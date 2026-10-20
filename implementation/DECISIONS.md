@@ -88,11 +88,20 @@ lines straight to the console.
   an application client. Pending invalidations are never dropped to impose a limit. A forwarded
   late update opens the key's runtime, and its connection, again; the next `closeCache` closes it.
   A state kept with no runtime of its key is sent once a runtime of that key exists.
-  A seeded random test (`close-cache-random.test.ts`) runs 500 sequences of runtimes, updates on
-  live and closed runtimes, flushes, closes awaited and overlapping, refused, held and accepted
-  writes and syncs, and checks after every step that each invalidation is in Redis or visible to
-  its key's live runtime (or kept state), and at the end that all are in Redis, no state remains
-  and no connection of the package's own is open.
+  A seeded random test (`close-cache-random.test.ts`) runs 1,000 sequences of 30 steps: runtimes,
+  updates (immediate or with durations) on live and closed runtimes, flushes, closes awaited and
+  overlapping, syncs, Redis going down and coming back, entry writes and reads, and Redis refusing
+  or holding the tag record write (`EVALSHA`) and the tag index write (`ZADD`) separately. A
+  controlled clock moves before every revalidation, so one revalidation's acknowledgement never
+  stands for another's. After every step each invalidation is in Redis (hash and index) or visible
+  to its key's live runtime (or kept state), and no read serves an entry a later invalidation made
+  stale as fresh; at the end all are in Redis, no state remains and no connection of the package's
+  own is open. A failed send requeueing into the store's own state instead of the key's current
+  one is caught only by `tag-store.test.ts`: through `closeCache` the two are the same object
+  whenever a send is in flight, because a state is released only after the drain has awaited its
+  sends, and a closed store forwards updates and never starts a send.
+  A connection fans its `ready` event out to its subscribers from one client listener, so an
+  application client shared by many prefixes, or closed and reopened, keeps one listener.
   Not covered: the deprecated `createCacheHandler` captures its connection when it is created, so
   after `closeCache` it serves from its memory fallback until it is created again. Reworking the
   16.5 stack to re-resolve was judged not worth it for a deprecated API.

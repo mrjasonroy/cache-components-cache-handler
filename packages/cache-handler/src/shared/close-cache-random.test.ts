@@ -1,10 +1,16 @@
 /**
- * Random sequences of runtimes, revalidations, flushes, closes (awaited or overlapping the next
- * step) and Redis refusing or taking writes, on two connections of the package's own and one
- * application client. After every step, each invalidation issued so far is visible to the live
- * runtime of its key (or, with none, in the state kept for it), or is in Redis. At the end, with
- * Redis taking writes, a runtime for every key and a `closeCache()` leave every invalidation in
- * Redis, no tag state and no connection of the package's own open.
+ * Random sequences of runtimes, revalidations (immediate or with durations), flushes, entry
+ * writes and reads, closes (awaited or overlapping the next steps), Redis going down and coming
+ * back, and Redis refusing or holding tag record writes (the hash) and tag index writes (the sorted
+ * set) apart, on two connections of the package's own and one application client. The clock is
+ * controlled and moves before every revalidation, so two revalidations of a tag never share a
+ * time and one's acknowledgement cannot stand for the other's.
+ *
+ * After every step, each invalidation issued so far is in Redis (hash and index) or visible to
+ * the live runtime of its key (or, with none, in the state kept for it); and a read never serves
+ * an entry an invalidation made after it as fresh. At the end, with Redis up and taking writes, a
+ * runtime for every key and a `closeCache()` leave every invalidation in Redis, no tag state and
+ * no connection of the package's own open.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -13,24 +19,36 @@ import { FakeRedis } from "../testing/fake-redis.js";
 const redis = vi.hoisted(() => ({
   items: new Map(),
   /** Every client the package opened, and whether it was quit or disconnected. */
-  opened: [] as { closed: boolean }[],
-  /** Tag writes are refused with READONLY while set. */
-  readonly: false,
-  /** When set, the next tag write is held until a later step releases it. */
-  stall: false,
+  opened: [] as { client: FakeRedis; closed: boolean }[],
+  /** Tag record writes (EVALSHA) and tag index writes (ZADD) refused with READONLY. */
+  refuse: { hash: false, index: false },
+  /** When set, the next tag write of that kind is held until a later step releases it. */
+  stall: undefined as "hash" | "index" | undefined,
   /** Held tag writes: the step that held each, and its release. */
   held: [] as { step: number; release: () => void }[],
   step: 0,
 }));
 
-/** A tag write: held if a stall is armed, then refused while Redis refuses. */
-async function tagWrite<T>(write: () => Promise<T>): Promise<T> {
-  if (redis.stall) {
-    redis.stall = false;
+/** A tag write: held if a stall of its kind is armed, then refused while Redis refuses it. */
+async function tagWrite<T>(kind: "hash" | "index", write: () => Promise<T>): Promise<T> {
+  if (redis.stall === kind) {
+    redis.stall = undefined;
     await new Promise<void>((release) => redis.held.push({ step: redis.step, release }));
   }
-  if (redis.readonly) throw new Error("READONLY You can't write against a read only replica.");
+  if (redis.refuse[kind]) {
+    throw new Error("READONLY You can't write against a read only replica.");
+  }
   return write();
+}
+
+/** Route `client`'s tag writes through {@link tagWrite}. */
+function watchTagWrites(client: FakeRedis): void {
+  const evalsha = client.evalsha.bind(client);
+  const zadd = client.zadd.bind(client);
+  vi.spyOn(client, "evalsha").mockImplementation((...args) =>
+    tagWrite("hash", () => evalsha(...args)),
+  );
+  vi.spyOn(client, "zadd").mockImplementation((...args) => tagWrite("index", () => zadd(...args)));
 }
 
 // ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
@@ -42,12 +60,9 @@ vi.mock("./node-require.js", async (importOriginal) => {
       if (moduleName !== "ioredis") throw new Error(`Unexpected require for module: ${moduleName}`);
       return function Redis() {
         const client = new Fake(redis.items);
-        const opened = { closed: false };
+        const opened = { client, closed: false };
         redis.opened.push(opened);
-        const evalsha = client.evalsha.bind(client);
-        vi.spyOn(client, "evalsha").mockImplementation((...args) =>
-          tagWrite(() => evalsha(...args)),
-        );
+        watchTagWrites(client);
         // A closed client takes no more commands.
         vi.spyOn(client, "quit").mockImplementation(async () => {
           opened.closed = true;
@@ -64,16 +79,48 @@ vi.mock("./node-require.js", async (importOriginal) => {
   };
 });
 
+import { createRemoteCacheHandler } from "../data-cache/remote.js";
+import type { DataCacheEntry } from "../data-cache/types.js";
 import { closeCache, flushCache } from "../index.js";
 import { asClient, resetCacheState } from "../testing/env.js";
-import { buildFlushTag, tagsKey } from "./keys.js";
+import { setClockForTests } from "./clock.js";
+import { getClientConnection } from "./connection.js";
+import { buildFlushTag, tagIndexKey, tagsKey } from "./keys.js";
 import { type CacheRuntime, type RuntimeOptions, getCacheRuntime } from "./runtime.js";
 import type { KeyTagState } from "./tag-store.js";
 
-const SEEDS = 500;
-const STEPS = 20;
+const SEEDS = 1000;
+const STEPS = 30;
 const url = "redis://random-test:6379";
 const TAGS = ["t0", "t1", "t2"];
+
+/**
+ * The kinds of step, weighted: revalidations, closes and held writes are where invalidations can be
+ * lost, so they come up more often than outages, entry writes and reads.
+ */
+const STEP_KINDS = [
+  ...["acquire", "flush", "refuse", "accept", "sync", "down", "up", "write", "read", "wait"],
+  ...["update", "update", "update", "close", "close", "hold", "hold"],
+] as const;
+
+/** The controlled clock: moved only by the test. */
+const clock = { now: 1_800_000_000_000 };
+
+function entry(tag: string, timestamp: number): Promise<DataCacheEntry> {
+  return Promise.resolve({
+    value: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(tag));
+        controller.close();
+      },
+    }),
+    tags: [tag],
+    stale: 30,
+    timestamp,
+    expire: 300,
+    revalidate: 60,
+  });
+}
 
 /** mulberry32: a small seeded PRNG. */
 function prng(seed: number): () => number {
@@ -137,23 +184,22 @@ function keptState(key: Key): KeyTagState | undefined {
   return undefined;
 }
 
+/** Whether Redis holds the invalidation of `tag` made `at`: in the record hash and the index. */
 function inRedis(key: Key, tag: string, at: number): boolean {
-  const hash = key.items.get(tagsKey(key.options.keyPrefix as string)) as
-    | { value: Map<string, string> }
-    | undefined;
-  return stale(hash?.value.get(tag)) >= at;
+  const prefix = key.options.keyPrefix as string;
+  const hash = key.items.get(tagsKey(prefix)) as { value: Map<string, string> } | undefined;
+  const index = key.items.get(tagIndexKey(prefix)) as { value: Map<string, number> } | undefined;
+  return stale(hash?.value.get(tag)) >= at && (index?.value.get(tag) ?? 0) >= at;
 }
 
 /** One sequence; `trace` gets each step's action. */
 async function run(seed: number, trace: string[]): Promise<void> {
   const random = prng(seed);
   const pick = <T>(list: readonly T[]): T => list[Math.floor(random() * list.length)] as T;
-  redis.readonly = false;
   const appClient = new FakeRedis();
-  const appEvalsha = appClient.evalsha.bind(appClient);
-  vi.spyOn(appClient, "evalsha").mockImplementation((...args) =>
-    tagWrite(() => appEvalsha(...args)),
-  );
+  watchTagWrites(appClient);
+  // Its connection exists before Redis can go down, so no step waits for a first connect.
+  getClientConnection(asClient(appClient));
   const keys: Key[] = [
     { name: "pooled a:", options: { url, keyPrefix: "a:" }, items: redis.items },
     { name: "pooled b:", options: { url, keyPrefix: "b:" }, items: redis.items },
@@ -164,8 +210,19 @@ async function run(seed: number, trace: string[]): Promise<void> {
       client: appClient,
     },
   ];
+  const handlers = new Map(
+    keys.map((key) => [key, createRemoteCacheHandler({ ...key.options, buildId: "b1" })]),
+  );
+  const clients = () => [appClient, ...redis.opened.filter((o) => !o.closed).map((o) => o.client)];
   const runtimes: { key: Key; runtime: CacheRuntime }[] = [];
-  const issued: { key: Key; tag: string; at: number; step: string }[] = [];
+  const issued: {
+    key: Key;
+    tag: string;
+    at: number;
+    durations: { expire: number } | undefined;
+    step: string;
+  }[] = [];
+  const entries: { key: Key; name: string; tag: string; timestamp: number }[] = [];
   /** Work left running past its step, settled at the end. */
   const running: Promise<unknown>[] = [];
   /** Awaited at once while no write is held, or left running into the next steps. */
@@ -190,44 +247,96 @@ async function run(seed: number, trace: string[]): Promise<void> {
     }
   };
 
+  /** Read an entry: one an invalidation made after it is never fresh, and a miss when that is immediate. */
+  const read = async (written: (typeof entries)[number]): Promise<string> => {
+    const found = await handlers.get(written.key)?.get(written.name, []);
+    const later = issued.filter(
+      (i) => i.key === written.key && i.tag === written.tag && i.at > written.timestamp,
+    );
+    if (later.length === 0) return found ? "hit" : "miss";
+    if (found && found.revalidate !== -1) {
+      throw new Error(
+        `${written.name} on ${written.key.name} is served fresh after ${later[0]?.step}`,
+      );
+    }
+    // A revalidation with durations, even an earlier one replayed later, can leave it stale.
+    const durationsUsed = issued.some(
+      (i) => i.key === written.key && i.tag === written.tag && i.durations,
+    );
+    if (found && !durationsUsed) {
+      throw new Error(`${written.name} on ${written.key.name} is served after ${later[0]?.step}`);
+    }
+    return found ? "stale" : "miss";
+  };
+
   for (let step = 0; step < STEPS; step++) {
     redis.step = step;
-    const choice = Math.floor(random() * 9);
+    const choice = pick(STEP_KINDS);
     const key = pick(keys);
     let action: string;
-    if (choice === 0) {
+    if (choice === "acquire") {
       action = `acquire ${key.name}`;
       runtimes.push({ key, runtime: getCacheRuntime(key.options) });
-    } else if (choice <= 2 && runtimes.length > 0) {
+    } else if (choice === "update" && runtimes.length > 0) {
       const { key: owner, runtime } = pick(runtimes);
       const tag = pick(TAGS);
-      action = `update ${tag} on ${runtime.closed ? "closed" : "live"} ${owner.name}`;
-      issued.push({ key: owner, tag, at: Date.now(), step: action });
-      action += `, ${await perform(runtime.tags.update([tag]))}`;
-    } else if (choice === 3 && !key.client) {
+      const durations = random() < 0.3 ? { expire: 1 + Math.floor(random() * 2) } : undefined;
+      clock.now += 1 + Math.floor(random() * 3);
+      action = `update ${tag}${durations ? ` expire ${durations.expire}` : ""} on ${runtime.closed ? "closed" : "live"} ${owner.name}`;
+      issued.push({ key: owner, tag, at: clock.now, durations, step: action });
+      action += `, ${await perform(runtime.tags.update([tag], durations))}`;
+    } else if (choice === "flush" && !key.client) {
       action = `flush ${key.name}`;
-      const at = Date.now();
+      clock.now += 1;
+      const at = clock.now;
       const flush = flushCache({ ...key.options, buildId: "b1" }).then(
         // Counted only once it resolves: a flush on a connection of its own throws when Redis
         // refuses the barrier, and says so.
-        () => issued.push({ key, tag: buildFlushTag("b1"), at, step: `flush ${key.name}` }),
+        () =>
+          issued.push({
+            key,
+            tag: buildFlushTag("b1"),
+            at,
+            durations: undefined,
+            step: `flush ${key.name}`,
+          }),
         () => undefined,
       );
       action += `, ${await perform(flush)}`;
-    } else if (choice === 4) {
+    } else if (choice === "close") {
       action = `closeCache, ${await perform(closeCache())}`;
-    } else if (choice === 5) {
-      action = "Redis refuses";
-      redis.readonly = true;
-    } else if (choice === 6) {
-      action = "Redis accepts";
-      redis.readonly = false;
-    } else if (choice === 7) {
-      action = "Redis holds the next tag write";
-      redis.stall = true;
-    } else {
+    } else if (choice === "refuse") {
+      const kind = pick(["hash", "index", "both"] as const);
+      action = `Redis refuses tag writes (${kind})`;
+      redis.refuse = { hash: kind !== "index", index: kind !== "hash" };
+    } else if (choice === "accept") {
+      action = "Redis accepts tag writes";
+      redis.refuse = { hash: false, index: false };
+    } else if (choice === "hold") {
+      redis.stall = pick(["hash", "index"] as const);
+      action = `Redis holds the next tag write (${redis.stall})`;
+    } else if (choice === "sync") {
       action = "sync";
       if (runtimes.length > 0) action += `, ${await perform(pick(runtimes).runtime.tags.sync())}`;
+    } else if (choice === "down") {
+      action = "Redis goes down";
+      for (const client of clients()) if (client.status === "ready") client.goDown();
+    } else if (choice === "up") {
+      action = "Redis comes back";
+      for (const client of clients()) if (client.status === "reconnecting") client.comeUp();
+    } else if (choice === "write") {
+      const tag = pick(TAGS);
+      const name = `e${step}`;
+      const timestamp = clock.now;
+      action = `write ${name} (${tag}) on ${key.name}`;
+      await handlers.get(key)?.set(name, entry(tag, timestamp));
+      entries.push({ key, name, tag, timestamp });
+    } else if (choice === "read" && entries.length > 0) {
+      const written = pick(entries);
+      action = `read ${written.name} on ${written.key.name}: ${await read(written)}`;
+    } else {
+      action = "3 s pass";
+      clock.now += 3000;
     }
     // A write held in an earlier step is answered now; then whatever can run, runs.
     for (const held of redis.held.filter((held) => held.step < step)) held.release();
@@ -237,13 +346,15 @@ async function run(seed: number, trace: string[]): Promise<void> {
     check(`step ${step}: ${action}`);
   }
 
-  redis.stall = false;
+  redis.stall = undefined;
   for (const held of redis.held) held.release();
   redis.held = [];
   await Promise.allSettled(running);
-  redis.readonly = false;
+  redis.refuse = { hash: false, index: false };
+  for (const client of clients()) if (client.status === "reconnecting") client.comeUp();
   // A state kept for a key is sent once a runtime of the key exists.
   for (const key of keys) getCacheRuntime(key.options);
+  for (const written of entries) await read(written);
   await closeCache();
   check("the final close");
 
@@ -256,16 +367,20 @@ async function run(seed: number, trace: string[]): Promise<void> {
 
 describe("closeCache, random sequences", () => {
   beforeEach(async () => {
-    // Refused writes are logged; thousands of them here.
-    vi.spyOn(console, "error").mockImplementation(() => {});
+    // Refused writes and outages are logged; thousands of them here.
+    for (const level of ["error", "warn", "info"] as const) {
+      vi.spyOn(console, level).mockImplementation(() => {});
+    }
+    setClockForTests(() => clock.now);
     await resetCacheState();
     redis.items.clear();
     redis.opened.length = 0;
   });
 
   afterEach(async () => {
-    redis.readonly = false;
-    redis.stall = false;
+    setClockForTests(() => Date.now());
+    redis.refuse = { hash: false, index: false };
+    redis.stall = undefined;
     for (const held of redis.held) held.release();
     redis.held = [];
     await resetCacheState();

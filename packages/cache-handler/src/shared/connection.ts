@@ -495,7 +495,12 @@ export function createRedisConnection(
   const warn = (message: string) => writeLog(logger, "warn", message, undefined);
   const initialConnectWaitMs = options.initialConnectWaitMs ?? DEFAULT_INITIAL_CONNECT_WAIT_MS;
   const maxTimeouts = options.maxConsecutiveTimeouts ?? DEFAULT_MAX_CONSECUTIVE_TIMEOUTS;
+  // Subscribers to `ready`: one client listener calls them all, so the client's listener count
+  // stays the same however many runtimes (key prefixes) share the connection.
   const readyListeners = new Set<() => void>();
+  const notifyReady = () => {
+    for (const listener of [...readyListeners]) listener();
+  };
   const stats: MutableStats = { timeouts: 0, drops: 0 };
 
   // Log each change of state once. Never the URL: it can carry credentials.
@@ -503,6 +508,7 @@ export function createRedisConnection(
   client.on("ready", () => {
     if (state === "down") info("[RedisCache]: Redis connected again");
     state = "up";
+    notifyReady();
   });
   client.on("error", (error: Error) => {
     if (state !== "down") {
@@ -533,7 +539,7 @@ export function createRedisConnection(
       },
       () => {
         info("[RedisCache]: Redis answering again");
-        for (const listener of readyListeners) listener();
+        notifyReady();
       },
     );
     commandClient = watched.proxy;
@@ -565,10 +571,8 @@ export function createRedisConnection(
     isReady: () => client.status === "ready" && health.healthy(),
     waitForInitialConnection: () => initialConnection,
     onReady(listener) {
-      client.on("ready", listener);
       readyListeners.add(listener);
       return () => {
-        client.off("ready", listener);
         readyListeners.delete(listener);
       };
     },

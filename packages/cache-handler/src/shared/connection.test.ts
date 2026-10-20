@@ -435,6 +435,20 @@ describe("a client the application passes in", () => {
     vi.restoreAllMocks();
   });
 
+  test("subscribers to ready add no listener to the client, and each is called once", () => {
+    const app = new AppClient();
+    const connection = getClientConnection(app as unknown as Redis);
+    const baseline = app.listenerCount("ready");
+    const listeners = Array.from({ length: 50 }, () => vi.fn());
+    const stops = listeners.map((listener) => connection.onReady(listener));
+    expect(app.listenerCount("ready")).toBe(baseline);
+
+    stops[0]?.();
+    app.emit("ready");
+    expect(listeners[0]).not.toHaveBeenCalled();
+    for (const listener of listeners.slice(1)) expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   test("its commands are bounded by commandTimeout without touching the client", async () => {
     const app = new AppClient();
     const connection = getClientConnection(app as unknown as Redis, { commandTimeout: 20 });

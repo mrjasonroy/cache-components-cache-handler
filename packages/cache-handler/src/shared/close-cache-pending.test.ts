@@ -14,7 +14,9 @@ const redis = vi.hoisted(() => ({
   /** Tag writes are refused with READONLY (a failover) while set. */
   readonly: false,
   /** When set, the next tag write waits for this promise instead. */
-  hold: undefined as Promise<never> | undefined,
+  hold: undefined as Promise<void> | undefined,
+  /** Tag index writes (ZADD) are refused while set, whatever happens to the records. */
+  refuseIndex: false,
 }));
 
 // ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
@@ -35,6 +37,11 @@ vi.mock("./node-require.js", async (importOriginal) => {
             throw new Error("READONLY You can't write against a read only replica.");
           return evalsha(...args);
         });
+        const zadd = client.zadd.bind(client);
+        vi.spyOn(client, "zadd").mockImplementation(async (...args) => {
+          if (redis.refuseIndex) throw new Error("OOM command not allowed");
+          return zadd(...args);
+        });
         redis.created.push(client);
         return client;
       };
@@ -46,7 +53,7 @@ import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import type { DataCacheEntry } from "../data-cache/types.js";
 import { closeCache, flushCache } from "../index.js";
 import { asClient, resetCacheState } from "../testing/env.js";
-import { FLUSH_TAG } from "./keys.js";
+import { FLUSH_TAG, tagIndexKey } from "./keys.js";
 import { getCacheRuntime } from "./runtime.js";
 
 const url = "redis://pending-test:6379";
@@ -97,6 +104,7 @@ describe("closeCache with invalidations Redis has not taken", () => {
     redis.created = [];
     redis.readonly = false;
     redis.hold = undefined;
+    redis.refuseIndex = false;
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
   });
@@ -125,6 +133,26 @@ describe("closeCache with invalidations Redis has not taken", () => {
     redis.readonly = false;
     await syncNow();
     expect(redisRecord("products")).toBeDefined();
+    expect(getCacheRuntime(options).tags.hasUnsent()).toBe(false);
+  });
+
+  test("an update whose record was written but whose index write failed is replayed after closeCache", async () => {
+    const data = createRemoteCacheHandler(options);
+    redis.refuseIndex = true;
+    await data.updateTags(["products"]);
+    // Redis took the record but not the index entry other processes sync from.
+    expect(redisRecord("products")).toBeDefined();
+    const index = () =>
+      redis.items.get(tagIndexKey("app:"))?.value as Map<string, number> | undefined;
+    expect(index()?.get("products")).toBeUndefined();
+
+    await closeCache();
+    expect(index()?.get("products")).toBeUndefined();
+    expect(getCacheRuntime(options).tags.hasUnsent()).toBe(true);
+
+    redis.refuseIndex = false;
+    await syncNow();
+    expect(index()?.get("products")).toBeGreaterThan(0);
     expect(getCacheRuntime(options).tags.hasUnsent()).toBe(false);
   });
 
@@ -157,7 +185,7 @@ describe("closeCache with invalidations Redis has not taken", () => {
     const data = createRemoteCacheHandler(options);
     await data.set("k", entry("x"));
     let refuse: (error: Error) => void = () => {};
-    redis.hold = new Promise<never>((_, reject) => {
+    redis.hold = new Promise<void>((_, reject) => {
       refuse = reject;
     });
     redis.readonly = true;
@@ -174,6 +202,28 @@ describe("closeCache with invalidations Redis has not taken", () => {
     redis.readonly = false;
     await syncNow();
     expect(redisRecord("products")).toBeDefined();
+  });
+
+  test("closeCache waits for a send in flight; once Redis takes it, nothing is kept", async () => {
+    const data = createRemoteCacheHandler(options);
+    let answer: () => void = () => {};
+    redis.hold = new Promise<void>((resolve) => {
+      answer = resolve;
+    });
+
+    const updating = data.updateTags(["products"]);
+    await vi.waitFor(() => expect(redis.hold).toBeUndefined());
+    let closed = false;
+    const closing = closeCache().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(closed).toBe(false);
+
+    answer();
+    await Promise.all([updating, closing]);
+    expect(redisRecord("products")).toBeDefined();
+    expect(slot().pooled.size).toBe(0);
   });
 
   test("with an application client, the same client's next tag store takes the update over", async () => {
@@ -288,6 +338,21 @@ describe("closeCache with invalidations Redis has not taken", () => {
     await c.tags.sync();
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect((client.items.get("app:tags")?.value as Map<string, string>).get("lost")).toBeDefined();
+  });
+
+  test("an application client shared by many prefixes keeps a bounded number of listeners", async () => {
+    const client = new FakeRedis();
+    getCacheRuntime({ client: asClient(client), keyPrefix: "tenant0:" });
+    const baseline = client.listenerCount("ready");
+    for (let i = 1; i < 50; i++)
+      getCacheRuntime({ client: asClient(client), keyPrefix: `tenant${i}:` });
+    expect(client.listenerCount("ready")).toBe(baseline);
+    for (let i = 0; i < 20; i++) {
+      await closeCache();
+      getCacheRuntime({ client: asClient(client), keyPrefix: "tenant0:" });
+    }
+    expect(client.listenerCount("ready")).toBe(baseline);
+    expect(client.listenerCount("error")).toBe(1);
   });
 
   test("gate-3 M4: acknowledged late updates on 100 closed prefixes leave no state after a close", async () => {
