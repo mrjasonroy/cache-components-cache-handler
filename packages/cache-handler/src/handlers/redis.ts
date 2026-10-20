@@ -145,6 +145,7 @@ function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
     socketTimeout: options.socketTimeout,
     maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
     debug: options.debug,
+    logger: options.logger,
   };
 }
 

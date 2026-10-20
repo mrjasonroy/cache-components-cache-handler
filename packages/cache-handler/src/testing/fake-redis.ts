@@ -70,10 +70,10 @@ export class FakeRedis extends EventEmitter {
     if (this.status !== "ready") throw new Error("Stream isn't writeable");
   }
 
-  /** Simulate losing the connection. */
-  goDown(): void {
+  /** Simulate losing the connection, with `error` as the reason. */
+  goDown(error: Error = new Error("ECONNREFUSED")): void {
     this.status = "reconnecting";
-    this.emit("error", new Error("ECONNREFUSED"));
+    this.emit("error", error);
   }
 
   /** Simulate (re)connecting. */

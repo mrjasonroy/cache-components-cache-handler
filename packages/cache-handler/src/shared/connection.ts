@@ -381,6 +381,10 @@ function buildClient(options: RedisConnectionOptions): Redis {
   return new RedisClient(options.url ?? "redis://localhost:6379", clientOptions);
 }
 
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+
 /**
  * Health of an application client, seen only through the package's own commands.
  */
@@ -391,7 +395,8 @@ interface UnownedHealth {
 
 /**
  * A proxy over a client the application owns. Every method call that returns a promise (a
- * command) is raced against `commandTimeout`; the client and its options are left as they are,
+ * command) is raced against `commandTimeout`, also on a Cluster's master clients and on a
+ * pipeline's `exec`; the client and its options are left as they are,
  * and the command itself is not cancelled. After `max` timeouts in a row the client is reported
  * not ready for `cooldownMs`; after that, the first command that succeeds marks it ready again
  * and calls `onRecover` (as a reconnect would). Only the package's calls go through the proxy.
@@ -455,18 +460,28 @@ function watchUnownedClient(
       );
     });
 
-  const proxy = new Proxy(client, {
-    get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver);
-      if (typeof value !== "function") return value;
-      return (...args: unknown[]) => {
-        const result: unknown = value.apply(target, args);
-        return result instanceof Promise ? withTimeout(result) : result;
-      };
-    },
-  });
+  // A Cluster's master clients (`nodes()`, used by flushCache's SCAN) and a pipeline's `exec` run
+  // outside the client's own methods, so what they return is bounded the same way.
+  const bound = <T extends object>(object: T): T =>
+    new Proxy(object, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (typeof value !== "function") return value;
+        return (...args: unknown[]) => {
+          const result: unknown = value.apply(target, args);
+          if (result instanceof Promise) return withTimeout(result);
+          if (property === "nodes" && Array.isArray(result)) {
+            return result.map((node: object) => bound(node));
+          }
+          if ((property === "pipeline" || property === "multi") && isObject(result)) {
+            return bound(result);
+          }
+          return result;
+        };
+      },
+    });
 
-  return { proxy, health: { healthy: () => nowMs() >= unhealthyUntil } };
+  return { proxy: bound(client), health: { healthy: () => nowMs() >= unhealthyUntil } };
 }
 
 /**

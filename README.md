@@ -264,6 +264,8 @@ means everything under it, 16.5's `nextjs:cache:*`, `nextjs:tags:*` and `nextjs:
 included, and any other app's keys that share the `nextjs:` prefix. On a Cluster, a key caught
 in a slot migration is retried through the Cluster client; if any still fail, `flushCache` logs a
 warning and returns `{ deleted, partial: true, failed }` instead of throwing, so run it again.
+A Redis node that stops answering (each Cluster master is bounded by `commandTimeout` too) or
+refuses part-way makes `flushCache` throw; some keys may already be deleted, so run it again.
 
 ## Closing the cache
 
@@ -316,7 +318,9 @@ In a custom handler file, `createRemoteCacheHandler`, `createLocalCacheHandler` 
 The Redis connection and tag state that handlers share log through the logger of the handler
 that opened them, so give every handler the same one, or use `setCacheLogger`.
 
-No line carries a Redis URL or the connection options, which can hold a password. A logger that
+No line carries a Redis URL or the connection options, which can hold a password, and errors
+from Redis are logged with only their name, message, `code` and stack: ioredis attaches the failed
+command to an error, so a rejected `AUTH` would otherwise carry the password it tried. A logger that
 throws never fails a cache call: the line goes to the console instead, with one note that the
 logger threw.
 
@@ -405,6 +409,7 @@ All three factories take `CacheOptions`:
 | `socketTimeout` | `2000` | Ms a pending command may go without a reply before a connection the package opens is dropped and reopened. Not used with `client`. |
 | `maxConsecutiveTimeouts` | `3` | Command timeouts in a row that drop a connection the package opens or, for a `client` you pass in, send the handlers to memory for 2 s at a time. |
 | `debug` | `CACHE_DEBUG` | Log hits, misses and state changes. |
+| `logger` | `setCacheLogger`'s, else the console | Where this handler's warnings, errors and debug lines go (see [Logging](#logging)). |
 
 Handlers given the same connection settings share one connection and one tag state. Give every
 handler file the same `url`, timeouts and `maxConsecutiveTimeouts`: different settings open a

@@ -56,7 +56,9 @@ export interface FlushCacheResult {
  * tag records a running process holds; they are older than the flush and change nothing. Throws, deleting nothing, if Redis is configured but
  * unavailable, or for `scope: "all"` with an empty `keyPrefix`. On a Cluster, a key caught in a slot
  * migration is retried through the Cluster client; any that still fail are reported with
- * `partial: true` and `failed`, and a warning is logged, instead of failing the whole flush.
+ * `partial: true` and `failed`, and a warning is logged, instead of failing the whole flush. A node
+ * that stops answering (bounded by `commandTimeout`, on every Cluster master too) or refuses
+ * part-way makes it throw; some keys may already be deleted, so run it again.
  *
  * Put it behind your own authenticated route; the package ships no HTTP endpoint. It uses the
  * handlers' Redis connection when they have opened it, and otherwise one of its own that it closes
@@ -106,7 +108,18 @@ async function flush(
     options.scope === "all"
       ? `${prefix}*`
       : `${prefix}${escapeGlob(options.buildId ?? getBuildId())}:*`;
-  const { deleted, failed } = await unlinkMatching(connection.client, pattern);
+  let unlinked: Awaited<ReturnType<typeof unlinkMatching>>;
+  try {
+    unlinked = await unlinkMatching(connection.client, pattern);
+  } catch (error) {
+    // Keys may already be deleted; process memory and the barrier are left as they were, as for
+    // a flush that could not start.
+    throw new Error(
+      `flushCache: the flush failed part-way (a Redis node did not answer or refused), so some keys may not be deleted; run it again: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const { deleted, failed } = unlinked;
   // Only once Redis is flushed: a failed flush leaves this process as consistent as Redis.
   clearAllMemoryStores();
   // After the UNLINK, which deletes the tag records with `scope: "all"`. A write Redis does not

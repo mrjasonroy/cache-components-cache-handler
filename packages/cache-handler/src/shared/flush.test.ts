@@ -14,6 +14,8 @@ import { escapeGlob } from "./scan.js";
 class FakeCluster {
   readonly migrating = new Set<string>();
   readonly stuck = new Set<string>();
+  /** While set, a node pipeline's `exec` never answers. */
+  stallExec = false;
   constructor(readonly masters: FakeRedis[]) {}
   async unlink(key: string): Promise<number> {
     if (this.stuck.has(key)) throw new Error("Too many Cluster redirections. Last error: MOVED");
@@ -35,7 +37,7 @@ class FakeCluster {
               );
               return pipeline;
             },
-            exec: async () => Promise.all(ops),
+            exec: () => (this.stallExec ? new Promise<never>(() => {}) : Promise.all(ops)),
           };
           return pipeline;
         },
@@ -169,6 +171,38 @@ describe("flushCache", () => {
     expect(result).toEqual({ deleted: 2 });
     expect(entryKeys(one)).toEqual([]);
   });
+
+  /** Timers still pending in this process. */
+  const pendingTimers = () =>
+    process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length;
+
+  test.each(["SCAN", "pipeline exec"])(
+    "a Cluster master whose %s never answers fails the flush within commandTimeout",
+    async (stalled) => {
+      const one = new FakeRedis();
+      await seed(one);
+      const cluster = new FakeCluster([one]);
+      if (stalled === "SCAN") vi.spyOn(one, "scan").mockReturnValue(new Promise<never>(() => {}));
+      else cluster.stallExec = true;
+      const timers = pendingTimers();
+
+      const started = performance.now();
+      const flushing = flushCache({
+        client: cluster as unknown as import("ioredis").Cluster,
+        keyPrefix: "app:",
+        buildId: "b1",
+        commandTimeout: 5,
+      });
+      await expect(flushing).rejects.toThrow(
+        /flushCache: the flush failed part-way.*Command timed out/,
+      );
+      expect(performance.now() - started).toBeLessThan(100);
+      expect(pendingTimers()).toBe(timers);
+      // The application's client is left as it was.
+      expect(one.status).toBe("ready");
+      expect(one.commands).not.toContain("quit");
+    },
+  );
 
   test("a Cluster: a key that still fails after redirection makes the result partial", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

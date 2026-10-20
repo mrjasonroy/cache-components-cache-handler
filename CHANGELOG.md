@@ -46,6 +46,11 @@ All notable changes to this project will be documented in this file. This projec
 - `withCache(config, { pages: false })` keeps a `cacheHandler` already in your config instead of throwing. With pages enabled it still throws.
 - `createCacheHandler`'s production warning now points at `withCache` for pages, and is skipped when the package's page handler (`RedisCacheHandler`) exists in the same process (checked on first use).
 - **Sizing:** a page read now sends one `HMGET` of its tag records alongside the entry's `GET`, in the same round trip (2 commands instead of 1; 3 in 2 round trips the first time a process reads an entry it did not write). A revalidation is 1 `EVALSHA` + 1 `ZADD GT`, and the `"use cache"` tag sync reads only the tags changed since the last one; nothing runs `HGETALL`. Every tag record lives in one hash per prefix (100,000 tags take about 23 MB), so tag reads all go to one key: about 2% of a core at 2,000 page reads/s, mattering around 50,000/s. See the README's Sizing section.
+- **`flushCache` on a Cluster can no longer hang.** It scans each master through that master's own client, which the `commandTimeout` proxy over a client you pass in did not cover, so a master that stopped answering left the flush (and the route calling it) pending forever. Each master's commands and pipelines are now bounded by `commandTimeout` too, and a flush that fails part-way throws, saying some keys may already be deleted; run it again. Your client is never changed or disconnected.
+- **A corrupt entry is a miss in every case.** A stored entry whose binary reference was negative, fractional, not a number or outside the entry was decoded into the wrong bytes (part of the entry's header) rather than treated as a miss.
+
+### Security
+- **Redis errors are logged without the command that failed.** ioredis attaches the failed command, arguments included, to a Redis error, so when Redis rejected `AUTH` (a rotated or disabled credential) the logged connection and tag-write errors carried the password that was tried, to your logger and to the console. Every warning and error line now carries errors with only their name, message, `code` and stack, objects without `command`, `password` and similar keys, and URLs without their user information.
 
 ### Deprecated
 

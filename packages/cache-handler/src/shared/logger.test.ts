@@ -4,6 +4,8 @@
  * logger that throws never fails a cache call, and no line carries a password.
  */
 
+import { createRequire } from "node:module";
+import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { FakeRedis } from "../testing/fake-redis.js";
 
@@ -11,6 +13,8 @@ const redis = vi.hoisted(() => ({
   created: [] as FakeRedis[],
   /** Tag writes are refused while set. */
   readonly: false,
+  /** Tag writes throw this while set. */
+  failWith: undefined as Error | undefined,
 }));
 
 // ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
@@ -26,6 +30,7 @@ vi.mock("./node-require.js", async (importOriginal) => {
         vi.spyOn(client, "evalsha").mockImplementation(async (...args) => {
           if (redis.readonly)
             throw new Error("READONLY You can't write against a read only replica.");
+          if (redis.failWith) throw redis.failWith;
           return evalsha(...args);
         });
         redis.created.push(client);
@@ -37,12 +42,13 @@ vi.mock("./node-require.js", async (importOriginal) => {
 
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import { CompositeHandler } from "../handlers/composite.js";
+import { createRedisCacheHandler } from "../handlers/redis.js";
 import { withCache } from "../helpers/with-cache.js";
 import { setCacheLogger } from "../index.js";
 import { resetCacheState } from "../testing/env.js";
 import { getRedisConnection } from "./connection.js";
 import { createErrorReporter } from "./error-reporter.js";
-import type { CacheLogger } from "./logger.js";
+import { type CacheLogger, redactForLog } from "./logger.js";
 import { createDebugLog, getCacheRuntime } from "./runtime.js";
 
 const PASSWORD = "s3cr3t-pw";
@@ -96,6 +102,25 @@ function text(line: Line): string {
   })}`;
 }
 
+/**
+ * The error ioredis 5.8 emits when Redis rejects AUTH: a `ReplyError` from `redis-errors` to which
+ * `DataHandler.returnError` attached the command, with its arguments (DataHandler.js:40).
+ */
+function authError(): Error {
+  const fromIoredis = createRequire(createRequire(import.meta.url).resolve("ioredis"));
+  const { ReplyError } = fromIoredis("redis-errors") as { ReplyError: new (m: string) => Error };
+  const error = new ReplyError("WRONGPASS invalid username-password pair or user is disabled.");
+  Object.assign(error, { command: { name: "auth", args: ["app-user", PASSWORD] } });
+  return error;
+}
+
+/** Everything a call hands over, as `console` would print it, hidden properties included. */
+function inspected(args: unknown[]): string {
+  return args
+    .map((arg) => inspect(arg, { depth: Number.POSITIVE_INFINITY, showHidden: true }))
+    .join(" ");
+}
+
 const consoleMethods = ["error", "warn", "info", "debug", "log"] as const;
 
 function spyConsole() {
@@ -113,6 +138,7 @@ describe("the cache logger", () => {
 
   afterEach(async () => {
     redis.readonly = false;
+    redis.failWith = undefined;
     vi.unstubAllEnvs();
     await resetCacheState();
     vi.restoreAllMocks();
@@ -210,6 +236,30 @@ describe("the cache logger", () => {
     expect(process.lines).toEqual([]);
   });
 
+  test("a page handler that opens the runtime logs its connection and tag errors to its logger", async () => {
+    spyConsole();
+    const own = recorder();
+    const process = recorder();
+    setCacheLogger(process.logger);
+    const Handler = createRedisCacheHandler({ url, keyPrefix: "app:", logger: own.logger });
+    const handler = new Handler();
+    await handler.get("/a", { kind: "APP_PAGE" } as never);
+    redis.created[0]?.goDown();
+    redis.created[0]?.comeUp();
+    redis.readonly = true;
+    await handler.revalidateTag("products");
+
+    const levels = own.lines.map((line) => `${line.level} ${line.message}`);
+    expect(levels).toContainEqual(expect.stringMatching(/^warn \[RedisCache\]: Redis unavailable/));
+    expect(levels).toContainEqual(
+      expect.stringMatching(/^error \[RedisCache\]: connection failed/),
+    );
+    expect(levels).toContainEqual(
+      expect.stringMatching(/^error \[RedisCache\]: updateTags failed/),
+    );
+    expect(process.lines).toEqual([]);
+  });
+
   test("a logger without info or debug drops those lines", () => {
     const console = spyConsole();
     setCacheLogger({ error: () => {}, warn: () => {} });
@@ -266,6 +316,49 @@ describe("the cache logger", () => {
     expect(lines.map((line) => line.message)).toEqual([
       "[RedisCache]: get failed (further get errors suppressed for 60s)",
     ]);
+  });
+
+  test.each(["logger", "console"])(
+    "a rejected AUTH never puts the password in a line, to the %s",
+    async (destination) => {
+      const consoleCalls = spyConsole();
+      const { logger, lines } = recorder();
+      if (destination === "logger") setCacheLogger(logger);
+
+      const handler = createRemoteCacheHandler({ url, keyPrefix: "app:", buildId: "b1" });
+      await handler.get("k", []);
+      const client = redis.created[0];
+      if (!client) throw new Error("no client");
+      client.goDown(authError());
+      client.comeUp();
+      redis.failWith = authError();
+      await handler.updateTags(["products"]);
+
+      const written = [
+        ...lines.map((line) => inspected([line.message, line.meta])),
+        ...Object.values(consoleCalls).flatMap((spy) =>
+          spy.mock.calls.map((call: unknown[]) => inspected(call)),
+        ),
+      ];
+      expect(written.join("\n")).toContain("WRONGPASS");
+      for (const line of written) expect(line).not.toContain(PASSWORD);
+    },
+  );
+
+  test("a redacted error keeps its name, message, code and stack, and nothing else", () => {
+    const error = authError();
+    Object.assign(error, { code: "WRONGPASS", cause: authError() });
+    const safe = redactForLog({ error, args: ["k", 1], url, nested: { password: PASSWORD } });
+
+    expect(safe.error).toBeInstanceOf(Error);
+    expect(safe.error.name).toBe("ReplyError");
+    expect(safe.error.message).toBe(error.message);
+    expect(safe.error.stack).toBe(error.stack);
+    expect((safe.error as { code?: string }).code).toBe("WRONGPASS");
+    expect(Object.keys(safe.error)).toEqual(["code"]);
+    expect(safe.args).toEqual(["k", 1]);
+    expect(safe.url).toBe("redis://[redacted]@logger-test:6379");
+    expect(inspected([safe])).not.toContain(PASSWORD);
   });
 
   test("no line carries the password of the Redis URL or options", async () => {

@@ -7,7 +7,10 @@
  * console exactly as before there was a logger. A logger that throws never fails a cache call:
  * the line goes to the console instead.
  *
- * Nothing logged carries a Redis URL or the connection options: they can hold a password.
+ * Nothing logged carries a Redis URL or the connection options: they can hold a password. Every
+ * line also goes through {@link redactForLog} on its way out, because errors from Redis can carry
+ * credentials of their own: ioredis attaches the failed command, arguments included, to a reply
+ * error, so a rejected `AUTH` carries the password it tried.
  */
 
 /**
@@ -92,17 +95,91 @@ export function writeLog(
     const method = logger[level];
     if (!method) return;
     try {
-      method.call(logger, message, meta);
+      method.call(logger, redactText(message), redactForLog(meta));
       return;
     } catch (error) {
       const state = getState();
       if (!state.reportedThrow) {
         state.reportedThrow = true;
-        console.error("[RedisCache]: the cache logger threw; its lines go to the console", error);
+        console.error(
+          "[RedisCache]: the cache logger threw; its lines go to the console",
+          redactForLog(error),
+        );
       }
     }
   }
-  console[level](...consoleArgs);
+  console[level](...consoleArgs.map((arg) => redactForLog(arg)));
+}
+
+/**
+ * Properties that can hold credentials, or the Redis command that carried them (ioredis's
+ * `error.command`, with its `args`); never logged.
+ */
+const SECRET_KEYS = new Set([
+  "command",
+  "options",
+  "password",
+  "pass",
+  "username",
+  "user",
+  "auth",
+  "credentials",
+  "token",
+  "redisOptions",
+]);
+
+/** The user information of a URL (`redis://user:password@`). */
+const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]*@/gi;
+
+const REDACTED = "[redacted]";
+
+function redactText(text: string): string {
+  return text.replace(URL_USERINFO, `$1${REDACTED}@`);
+}
+
+/**
+ * `value` safe to log: an error as a new `Error` with only its name, message, `code`, stack and
+ * cause; plain objects and arrays copied without {@link SECRET_KEYS}; URLs in strings without
+ * their user information. Anything else (a `Buffer`, a class instance) is passed as it is.
+ */
+export function redactForLog<T>(value: T): T {
+  return redact(value, 0, new WeakSet()) as T;
+}
+
+/** {@link redactForLog} below `depth`; `ancestors` are the objects being copied around it. */
+function redact(value: unknown, depth: number, ancestors: WeakSet<object>): unknown {
+  if (typeof value === "string") return redactText(value);
+  if (value === null || typeof value !== "object") return value;
+  if (ancestors.has(value) || depth > 8) return "[omitted]";
+  ancestors.add(value);
+  try {
+    return redactObject(value, depth, ancestors);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function redactObject(value: object, depth: number, seen: WeakSet<object>): unknown {
+  if (value instanceof Error) {
+    const cause = value.cause === undefined ? {} : { cause: redact(value.cause, depth + 1, seen) };
+    const safe = new Error(redactText(value.message), cause);
+    // As on any error: not enumerable, so the copy prints like the original.
+    Object.defineProperty(safe, "name", { value: value.name, configurable: true, writable: true });
+    safe.stack = value.stack === undefined ? undefined : redactText(value.stack);
+    const { code } = value as { code?: unknown };
+    if (typeof code === "string" || typeof code === "number") {
+      Object.assign(safe, { code });
+    }
+    return safe;
+  }
+  if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1, seen));
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return value;
+  const copy: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = SECRET_KEYS.has(key) ? REDACTED : redact(item, depth + 1, seen);
+  }
+  return copy;
 }
 
 /**

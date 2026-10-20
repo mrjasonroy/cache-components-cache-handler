@@ -195,18 +195,48 @@ function parseHeader<T>(header: string, bytes: Buffer, blobStart: number): T {
   return JSON.parse(header, (_key, value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return value;
     const object = value as Record<string, unknown>;
-    const blob = object[BLOB_MARKER];
-    if (Array.isArray(blob) && blob.length === 2) {
-      const [start, length] = blob as [number, number];
-      if (blobStart + start + length > bytes.length) throw new Error("Truncated cache entry");
-      return bytes.subarray(blobStart + start, blobStart + start + length);
-    }
-    const entries = object[MAP_MARKER];
-    if (Array.isArray(entries)) {
+    // A marker object is the marker alone, in the shape the encoder writes; anything else is a
+    // corrupt entry (thrown, so a miss).
+    if (BLOB_MARKER in object) return blobAt(object, bytes, blobStart);
+    if (MAP_MARKER in object) {
+      const entries = object[MAP_MARKER];
+      if (
+        Object.keys(object).length !== 1 ||
+        !Array.isArray(entries) ||
+        !entries.every((entry) => Array.isArray(entry) && entry.length === 2)
+      ) {
+        throw new Error("Corrupt cache entry: bad map");
+      }
       return new Map(entries as [unknown, unknown][]);
     }
     return value;
   }) as T;
+}
+
+/**
+ * The bytes a `{ "__nch_b": [start, length] }` reference names: whole, non-negative numbers that
+ * stay inside the blob section, or a throw.
+ */
+function blobAt(object: Record<string, unknown>, bytes: Buffer, blobStart: number): Buffer {
+  const reference = object[BLOB_MARKER];
+  const blobLength = bytes.length - blobStart;
+  if (Object.keys(object).length !== 1 || !Array.isArray(reference) || reference.length !== 2) {
+    throw new Error("Corrupt cache entry: bad blob reference");
+  }
+  const [start, length] = reference as unknown[];
+  if (
+    !Number.isSafeInteger(start) ||
+    !Number.isSafeInteger(length) ||
+    (start as number) < 0 ||
+    (length as number) < 0 ||
+    (start as number) + (length as number) > blobLength
+  ) {
+    throw new Error("Corrupt cache entry: bad blob reference");
+  }
+  return bytes.subarray(
+    blobStart + (start as number),
+    blobStart + (start as number) + (length as number),
+  );
 }
 
 type Zlib = typeof import("node:zlib");

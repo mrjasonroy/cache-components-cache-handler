@@ -69,6 +69,8 @@ interface CacheOptions {
   maxConsecutiveTimeouts?: number;
   /** @default CACHE_DEBUG is `1` or `true` */
   debug?: boolean;
+  /** Where this handler's warnings, errors and debug lines go. @default setCacheLogger's, else the console */
+  logger?: CacheLogger;
 }
 ```
 
@@ -147,7 +149,7 @@ export default createLocalCacheHandler({ client });
 ## `flushCache(options?)`
 
 ```ts
-function flushCache(options?: FlushCacheOptions): Promise<{ deleted: number }>;
+function flushCache(options?: FlushCacheOptions): Promise<FlushCacheResult>;
 
 interface FlushCacheOptions extends CacheOptions {
   /** "build": <prefix><buildId>:*. "all": every key under the prefix. @default "build" */
@@ -155,12 +157,23 @@ interface FlushCacheOptions extends CacheOptions {
   /** @default the app's BUILD_ID */
   buildId?: string;
 }
+
+interface FlushCacheResult {
+  /** Redis keys deleted; without Redis, in-process entries dropped. */
+  deleted: number;
+  /** Set when some matching keys could not be deleted (a Cluster slot migration). Run it again. */
+  partial?: true;
+  /** How many matching keys could not be deleted; set with partial. */
+  failed?: number;
+}
 ```
 
 Deletes with SCAN + UNLINK on every master of a Cluster, and empties this process's memory stores.
 `deleted` is the number of Redis keys deleted, or, without Redis, the number of memory entries
 dropped. It throws, deleting nothing, if Redis is configured but unavailable, or for
-`scope: "all"` with an empty `keyPrefix`. After the delete it writes a tag record for the flush
+`scope: "all"` with an empty `keyPrefix`. It also throws if a Redis node stops answering
+(`commandTimeout`, also on each Cluster master) or refuses part-way: some keys may already be
+deleted, so run it again. After the delete it writes a tag record for the flush
 (`__cch_flush__`, or `__cch_flush__:<buildId>` for `scope: "build"`) that prerendered build output
 is checked against, so build output older than the flush is not served again. See
 [Flushing the cache](../README.md#flushing-the-cache).

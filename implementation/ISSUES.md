@@ -225,3 +225,24 @@ is dropped silently.
   not change anything. It stays documented as the 16.5 form, beside `url`/`client`.
 - **No `CACHE_DEBUG` line when the clock offset was never measured** (architecture review L6).
   DEC-3, ISSUE-4 and the README describe the fail-closed case; the debug line is not added.
+
+## ISSUE-7: Credentials in logged errors, a Cluster flush that could hang, corrupt blob references
+
+**Status:** Resolved (16.6.0, final review M1, M2, L1, L2) · **Severity:** Medium · **Area:** `shared/logger.ts`, `shared/connection.ts`, `shared/flush.ts`, `shared/codec.ts`, `handlers/redis.ts`
+
+- **M1, credentials in logged errors.** ioredis 5.8 attaches `command: { name, args }` to a reply
+  error (`DataHandler.returnError`), so a rejected `AUTH` reached the logger and the console with
+  the password it tried. `writeLog` now passes every message, meta and console argument through
+  `redactForLog`: errors become a new `Error` with only name, message, `code`, stack and cause;
+  plain objects lose `command`, `password`, `options` and similar keys; URLs lose their user
+  information. Reproduce: emit that error shape on the client (`logger.test.ts`, "a rejected AUTH").
+- **M2, a Cluster flush could hang.** `flushCache` scans `nodes("master")`, whose clients and
+  pipelines were outside the `commandTimeout` proxy over an application client. The proxy now
+  bounds what `nodes()` returns and a pipeline's `exec`; a flush that fails part-way throws, saying
+  some keys may already be deleted. Reproduce: a master whose SCAN or pipeline never answers
+  (`flush.test.ts`).
+- **L1, a page handler's `logger` reached only its debug lines.** `toRuntimeOptions` now forwards it,
+  so the runtime it opens logs connection and tag errors there too.
+- **L2, corrupt blob references.** A `__nch_b` reference must be two safe non-negative integers
+  inside the blob section, and a marker object must be the marker alone; anything else is a miss.
+  Before, `[-1, 1]` decoded into a byte of the header.

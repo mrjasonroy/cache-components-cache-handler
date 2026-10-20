@@ -105,6 +105,50 @@ describe("entry codec", () => {
     expect(decodeEntry(encoded.subarray(0, 5))).toBeUndefined();
   });
 
+  test("a malformed blob or map reference is a miss, never bytes of the header", () => {
+    /** A v2 entry with `header` and a blob section of `blobs` bytes. */
+    const entry = (header: unknown, blobs = 0) => {
+      const json = Buffer.from(JSON.stringify(header));
+      const preamble = Buffer.alloc(PREAMBLE_LENGTH);
+      preamble.write("NCH", 0, "latin1");
+      preamble.writeUInt8(FORMAT_VERSION, 3);
+      preamble.writeUInt32BE(json.length, 4);
+      return Buffer.concat([preamble, json, Buffer.alloc(blobs, 7)]);
+    };
+    expect(decodeEntry<{ value: Buffer }>(entry({ value: { __nch_b: [1, 2] } }, 4))?.value).toEqual(
+      Buffer.from([7, 7]),
+    );
+
+    for (const ref of [
+      [-1, 1],
+      [0, -1],
+      [-4, 4],
+      [0.5, 1],
+      [0, 1.5],
+      ["0", 1],
+      [0, "1"],
+      [null, 1],
+      [0, 5],
+      [4, 1],
+      [Number.MAX_SAFE_INTEGER + 2, 1],
+      [0],
+      [0, 1, 2],
+      "0,1",
+      { start: 0 },
+    ]) {
+      expect(
+        decodeEntry(entry({ value: { __nch_b: ref } }, 4)),
+        JSON.stringify(ref),
+      ).toBeUndefined();
+    }
+    // The exact case from the review: `[-1, 1]` with no blob section read the header's last byte.
+    expect(decodeEntry(entry({ value: { __nch_b: [-1, 1] } }))).toBeUndefined();
+    expect(decodeEntry(entry({ value: { __nch_b: [0, 1], other: 1 } }, 4))).toBeUndefined();
+    for (const map of ["x", [1], [[1, 2, 3]], { a: 1 }]) {
+      expect(decodeEntry(entry({ value: { __nch_m: map } })), JSON.stringify(map)).toBeUndefined();
+    }
+  });
+
   test("rejects JSON input, as 16.5.0 stored it", () => {
     const legacy = JSON.stringify({
       value: Buffer.from("old").toString("base64"),
