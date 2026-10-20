@@ -92,10 +92,12 @@ to the cleanup script's stderr, so a runtime 500 can also show up next to the fa
 The workflow is `.github/workflows/next-deploy-tests.yml`. It runs in two cases:
 
 - **On a PR** that touches `tests/next-deploy/**`, the workflow file, or
-  `packages/cache-handler/src/**`.
+  `packages/cache-handler/src/**` or `packages/cache-handler/package.json`.
 - **By hand:** Actions → *Next.js deploy tests* → *Run workflow*. It takes these inputs:
   - `nextjsRef`: a vercel/next.js tag. It must be a published release, because the test apps
-    install `next@<that version>` from npm.
+    install `next@<that version>` from npm. Empty (the default, and every PR run) means the
+    package's `next` dev dependency, the version its unit tests run against. The Next update
+    workflows bump that, so the harness follows each Next release.
   - `suite_filter`: an extended regex over the lines in `suites.txt`.
   - `use_cache`: passed to `withCache` as `useCache` in the `branch` variant.
   - `instances`: `2` or `1`.
