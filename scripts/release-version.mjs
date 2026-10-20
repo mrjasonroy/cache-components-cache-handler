@@ -71,9 +71,12 @@ export function usedVersions(time) {
  *
  * The target is Next's version, moved up to the next patch npm has never seen (Next 16.5.0
  * gives 16.5.2 when 16.5.0 and 16.5.1 are burned). It is never lower than, or equal to, the
- * current version: a lower version would move npm `latest` back.
+ * current version: a lower version would move npm `latest` back. While the package is on a
+ * pre-release (an RC on staging), it returns `null`: the loop must not publish that untested code
+ * to `latest` by itself, so a person graduates the RC.
  */
 export function pickTarget(next, current, used) {
+  if (parseVersion(current).pre.length) return null;
   if (compareVersions(next, current) <= 0) return null;
   const { major, minor, patch, pre } = parseVersion(next);
   if (pre.length && used.has(next)) {

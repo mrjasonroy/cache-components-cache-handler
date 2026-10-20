@@ -27,7 +27,7 @@ test("compareVersions orders releases and pre-releases", () => {
 
 test("Next 16.5.0 skips the burned 16.5.0 and 16.5.1", () => {
   assert.equal(pickTarget("16.5.0", "16.4.3", burned), "16.5.2");
-  assert.equal(pickTarget("16.5.0", "16.4.3-rc.0", burned), "16.5.2");
+  assert.equal(pickTarget("16.5.0", "16.4.3-rc.0", burned), null);
 });
 
 test("Next patches below or equal to the package do not bump it (never lower)", () => {
@@ -39,7 +39,7 @@ test("Next patches below or equal to the package do not bump it (never lower)", 
 
 test("an unused Next version is taken as is", () => {
   assert.equal(pickTarget("16.5.3", "16.5.2", burned), "16.5.3");
-  assert.equal(pickTarget("16.4.3", "16.4.3-rc.0", burned), "16.4.3");
+  assert.equal(pickTarget("16.4.3", "16.4.3-rc.0", burned), null);
   assert.equal(pickTarget("17.0.0", "16.5.2", burned), "17.0.0");
 });
 

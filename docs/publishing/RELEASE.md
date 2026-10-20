@@ -16,6 +16,9 @@ The package's major.minor follows Next.js; the patch number is ours.
   after it is unpublished, and `npm view @mrjasonroy/cache-components-cache-handler time --json`
   still lists it. The loop moves up to the next free patch; manual bumps fail if they pick one.
 - **Never lower.** The package version only goes up, so npm `latest` never moves back.
+- **An RC is graduated by hand.** While the package is on a pre-release (e.g. `16.4.3-rc.0` on
+  staging), the loop bumps nothing, so it can never publish that untested code to `latest` by
+  itself. Bump to the final version once the RC has been proven.
 - **Peer dependency**: `"next": "^16.0.0"`.
 
 ### Examples
