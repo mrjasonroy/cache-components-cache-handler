@@ -25,11 +25,12 @@ import { dataKey } from "../shared/keys.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
+  type CacheRuntime,
   FALLBACK_TTL_SECONDS,
   MEMORY_ONLY_TAG,
   createDebugLog,
-  getCacheRuntime,
   isRedisReady,
+  liveCacheRuntime,
 } from "../shared/runtime.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { missHandler } from "./fallback.js";
@@ -51,6 +52,13 @@ export interface RemoteCacheHandlerOptions extends CacheOptions {
    * @default the app's BUILD_ID, read lazily on first use
    */
   buildId?: string;
+
+  /**
+   * Seconds to keep an entry whose `expire` is infinite (a `cacheLife` without `expire`). An entry
+   * with a finite `expire` is kept until it expires. Both are capped at 365 days.
+   * @default 86400 (24 hours)
+   */
+  defaultTTL?: number;
 }
 
 /**
@@ -81,22 +89,24 @@ export function createRemoteCacheHandler(
   options: RemoteCacheHandlerOptions = {},
 ): DataCacheHandler {
   if (isEdgeRuntime()) return missHandler;
-  const runtime = getCacheRuntime(options);
-  const { connection, tags, stores } = runtime;
+  // Read on every call: after `closeCache()` it is a new runtime, on a new connection.
+  const currentRuntime = liveCacheRuntime(options);
   const memoryFallback = options.memoryFallback ?? true;
   const log = createDebugLog("[RemoteCache]:", options.debug);
   const pendingSets = createPendingSets();
   const keyOf = (cacheKey: string) =>
-    dataKey(runtime.keyPrefix, options.buildId ?? getBuildId(), cacheKey);
+    dataKey(currentRuntime().keyPrefix, options.buildId ?? getBuildId(), cacheKey);
 
-  function fromMemory(store: typeof stores.data, cacheKey: string) {
-    const found = store.get(cacheKey) as InMemoryEntry | undefined;
-    return found ? toDataCacheEntry(found.stored, tags, found.until) : undefined;
+  function fromMemory(runtime: CacheRuntime, cacheKey: string) {
+    const found = runtime.stores.dataFallback.get(cacheKey) as InMemoryEntry | undefined;
+    return found ? toDataCacheEntry(found.stored, runtime.tags, found.until) : undefined;
   }
 
   return {
     async get(cacheKey, softTags) {
       await pendingSets.wait(cacheKey);
+      const runtime = currentRuntime();
+      const { connection, tags, stores } = runtime;
       const inMemory = stores.data.get(cacheKey) as InMemoryEntry | undefined;
 
       if (!connection) {
@@ -110,7 +120,7 @@ export function createRemoteCacheHandler(
       if (!(await isRedisReady(runtime))) {
         log?.("get", cacheKey, "Redis down");
         if (inMemory) return toDataCacheEntry(inMemory.stored, tags, inMemory.until);
-        return memoryFallback ? fromMemory(stores.dataFallback, cacheKey) : undefined;
+        return memoryFallback ? fromMemory(runtime, cacheKey) : undefined;
       }
 
       // The entry's tag records (and the soft tags', for `getExpiration`) come from Redis with the
@@ -145,7 +155,9 @@ export function createRemoteCacheHandler(
       await pendingSets.track(cacheKey, async () => {
         const stored = await readPendingEntry(pendingEntry);
         if (!stored) return;
-        const ttl = storedEntryTTL(stored);
+        const runtime = currentRuntime();
+        const { connection, stores } = runtime;
+        const ttl = storedEntryTTL(stored, options.defaultTTL);
         // Already expired (e.g. `expire: 0`); Redis rejects `EX 0`.
         if (ttl <= 0) return;
         const now = nowMs();
@@ -186,18 +198,18 @@ export function createRemoteCacheHandler(
     },
 
     async refreshTags() {
-      await tags.sync(REFRESH_TAGS_INTERVAL_MS);
+      await currentRuntime().tags.sync(REFRESH_TAGS_INTERVAL_MS);
     },
 
     async getExpiration(tagList) {
       // Next compares it with an entry's `timestamp`, on its own clock.
-      const expiration = tags.getExpiration(tagList);
+      const expiration = currentRuntime().tags.getExpiration(tagList);
       return expiration > 0 ? toNextClock(expiration) : expiration;
     },
 
     async updateTags(tagList, durations) {
       log?.("updateTags", tagList, durations);
-      await tags.update(tagList, durations);
+      await currentRuntime().tags.update(tagList, durations);
     },
   };
 }

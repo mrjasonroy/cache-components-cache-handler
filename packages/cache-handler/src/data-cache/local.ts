@@ -23,7 +23,7 @@
 import { nowMs, toNextClock } from "../shared/clock.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
-import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
+import { type CacheOptions, createDebugLog, liveCacheRuntime } from "../shared/runtime.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { missHandler } from "./fallback.js";
 import {
@@ -59,14 +59,15 @@ function keepUntil(stored: StoredDataEntry): number {
  */
 export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}): DataCacheHandler {
   if (isEdgeRuntime()) return missHandler;
-  const runtime = getCacheRuntime(options);
-  const { tags, stores } = runtime;
+  // Read on every call: after `closeCache()` it is a new runtime, on a new connection.
+  const currentRuntime = liveCacheRuntime(options);
   const log = createDebugLog("[LocalCache]:", options.debug);
   const pendingSets = createPendingSets();
 
   return {
     async get(cacheKey) {
       await pendingSets.wait(cacheKey);
+      const { tags, stores } = currentRuntime();
       // Until a sync has completed since Redis (re)connected, local state may lack another
       // instance's invalidation of this value.
       if (!tags.isSynced()) {
@@ -85,24 +86,24 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
         if (!stored) return;
         const until = keepUntil(stored);
         if (until <= nowMs()) return;
-        stores.local.set(cacheKey, stored, stored.value.byteLength, until);
+        currentRuntime().stores.local.set(cacheKey, stored, stored.value.byteLength, until);
         log?.("set", cacheKey, { bytes: stored.value.byteLength });
       });
     },
 
     async refreshTags() {
-      await tags.sync(REFRESH_TAGS_INTERVAL_MS);
+      await currentRuntime().tags.sync(REFRESH_TAGS_INTERVAL_MS);
     },
 
     async getExpiration(tagList) {
       // Next compares it with an entry's `timestamp`, on its own clock.
-      const expiration = tags.getExpiration(tagList);
+      const expiration = currentRuntime().tags.getExpiration(tagList);
       return expiration > 0 ? toNextClock(expiration) : expiration;
     },
 
     async updateTags(tagList, durations) {
       log?.("updateTags", tagList, durations);
-      await tags.update(tagList, durations);
+      await currentRuntime().tags.update(tagList, durations);
     },
   };
 }

@@ -175,5 +175,6 @@ Not done: `unref()` on the package's own clients. ioredis has no `unref` option,
 socket would let a script exit while a command it awaits is still in flight (an awaited promise
 does not keep Node alive), silently dropping a flush or a revalidation write. In a Next server the
 HTTP server keeps the process alive anyway, so it would change nothing there. A test that creates
-handlers still holds their shared client, as any handler-owned connection does; closing it would
-need a public dispose API, which is not added.
+handlers still holds their shared client, as any handler-owned connection does: it calls
+`closeCache()` at the end (added in 16.6 with Jason's approval, DEC-6), which closes it. Its exit is
+tested the same way, in the same child processes (`src/shared/flush-exit.test.ts`).

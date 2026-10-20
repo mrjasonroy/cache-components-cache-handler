@@ -265,6 +265,26 @@ included, and any other app's keys that share the `nextjs:` prefix. On a Cluster
 in a slot migration is retried through the Cluster client; if any still fail, `flushCache` logs a
 warning and returns `{ deleted, partial: true, failed }` instead of throwing, so run it again.
 
+## Closing the cache
+
+A Next server never needs this. A test run, script or CLI that used the handlers or `flushCache`
+calls `closeCache()` at the end, so Node can exit instead of waiting on an open Redis connection:
+
+```ts
+// a Vitest `setupFiles` file or a Jest `setupFilesAfterEnv` file
+import { afterAll } from "vitest"; // Jest: the global afterAll
+import { closeCache } from "@mrjasonroy/cache-components-cache-handler";
+
+afterAll(() => closeCache());
+```
+
+`closeCache()` closes every Redis connection the package opened in this process (one per
+connection settings, shared by all handlers), empties its in-memory stores and drops its tag
+state. It is safe to call more than once, and concurrently. A `client` you passed in is never
+closed; close it yourself. Handlers created before it keep working: on their next call they
+reconnect, all onto one new connection. The deprecated `createCacheHandler` is the exception: it
+keeps its closed connection and serves from memory, so create it again after `closeCache()`.
+
 ## Custom handlers
 
 Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster,
@@ -346,15 +366,20 @@ All three factories take `CacheOptions`:
 | `keyPrefix` | `CACHE_KEY_PREFIX` / `nextjs:` | Prefix for every key. |
 | `memoryFallback` | `true` | Serve from memory (each entry at most 60 s) while Redis is down. `false` → miss instead. |
 | `commandTimeout` | `1000` | Per-command timeout in ms. Also bounds the package's commands on a `client` you pass in. |
+| `connectTimeout` | `2000` | Ms to wait for a connection the package opens. Not used with `client`. |
+| `socketTimeout` | `2000` | Ms a pending command may go without a reply before a connection the package opens is dropped and reopened. Not used with `client`. |
+| `maxConsecutiveTimeouts` | `3` | Command timeouts in a row that drop a connection the package opens or, for a `client` you pass in, send the handlers to memory for 2 s at a time. |
 | `debug` | `CACHE_DEBUG` | Log hits, misses and state changes. |
 
+Handlers given the same connection settings share one connection and one tag state. Give every
+handler file the same `url`, timeouts and `maxConsecutiveTimeouts`: different settings open a
+second connection to the same server, and the package logs a warning when that happens.
+
 `createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
-`BUILD_ID`), the build that scopes entry keys. `createRedisCacheHandler` also takes `defaultTTL`,
-in seconds, for entries with neither `revalidate` nor `expire` (default and maximum 365 days).
-`createCacheHandler` and `createRedisCacheHandler` also take `connectTimeout` (ms, default 2000;
-10000 for the ElastiCache host form) and `socketTimeout` (ms, default 2000), which apply only to
-a connection the package opens, and `maxConsecutiveTimeouts` (default 3), the timeouts in a row
-that drop a connection or, for a `client` you pass in, send the handlers to memory.
+`BUILD_ID`), the build that scopes entry keys. Both also take `defaultTTL`, in seconds:
+`createRedisCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
+and maximum 365 days), and `createRemoteCacheHandler` keeps an entry whose `expire` is infinite
+that long (default 24 hours, maximum 365 days).
 
 `CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
 
@@ -368,9 +393,10 @@ that drop a connection or, for a `client` you pass in, send the handlers to memo
 | `createRemoteCacheHandler(options?)` | function → `DataCacheHandler` | Redis data handler plus memory fallback, for `"use cache: remote"`. |
 | `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
 | `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](#flushing-the-cache). |
+| `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](#closing-the-cache). |
 | `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
-| `createCacheHandler({ type })` | function → `DataCacheHandler` | The 16.5 data handler factory, still supported ([legacy setup](#legacy-setup-deprecated)). |
-| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | The 16.5 building blocks behind `createCacheHandler`. |
+| `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the 16.5 data handler factory ([legacy setup](#legacy-setup-deprecated)). |
+| `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the 16.5 building blocks behind `createCacheHandler`. |
 | `CacheOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
 
 The [deprecated exports](#deprecated) are still exported.
@@ -386,8 +412,8 @@ The [deprecated exports](#deprecated) are still exported.
 
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
 is read from the build output that `next start` and a standalone `server.js` use, and it is
-`development` under `next dev`. Every entry key has a TTL. Remote entries expire at `expire`; page
-entries as described under [Pages and route handlers](#pages-and-route-handlers). The two tag keys
+`development` under `next dev`. Every entry key has a TTL. A remote entry is kept until its `expire`, or
+for `defaultTTL` (24 hours) when `expire` is infinite, at most 365 days; page entries as described under [Pages and route handlers](#pages-and-route-handlers). The two tag keys
 are shared by every build and have no TTL: they are kept until `flushCache({ scope: "all" })`.
 Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy (`volatile-lru`), never
 `allkeys-*`: an evicted tag hash brings every invalidated entry back.
@@ -492,10 +518,15 @@ and stores it.
 
 ## Deprecated
 
-Kept until the Next 17 line, with JSDoc pointing at the replacement:
+Kept until the Next 17 line, with JSDoc pointing at the replacement. They keep working in 16.x;
+on the Next 17 line they are removed or become a thin shim over the replacement.
 
 | Deprecated | Use instead | Why |
 |---|---|---|
+| `createCacheHandler` | `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler` in a [custom handler](#custom-handlers) | The 16.5 data stack: `"use cache"` only, its own key layout, and no page handler. |
+| `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
+| `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
+| `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
 | `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. They keep working. |
 | `CompositeHandler`, `createCompositeHandler` | built in | The memory fallback is now inside every handler. |
 | `MemoryCacheHandler`, `createMemoryCacheHandler` | `withCache` without `REDIS_URL` | Memory only is the no-URL mode. |

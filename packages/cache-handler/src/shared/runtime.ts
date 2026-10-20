@@ -11,6 +11,7 @@ import {
   type RedisClientLike,
   type RedisConnection,
   type RedisConnectionOptions,
+  closeAllRedisConnections,
   findRedisConnection,
   getClientConnection,
   getRedisConnection,
@@ -23,7 +24,7 @@ import {
   shouldUseRedis,
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
-import { MemoryStore } from "./memory-store.js";
+import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
 import { TagStore } from "./tag-store.js";
 
 /**
@@ -76,6 +77,26 @@ export interface CacheOptions {
   commandTimeout?: number;
 
   /**
+   * Milliseconds to wait for the connection to open. Not used with `client`.
+   * @default 2000
+   */
+  connectTimeout?: number;
+
+  /**
+   * Milliseconds a pending command may go without a reply before the connection is dropped and
+   * reopened. Not used with `client`.
+   * @default 2000
+   */
+  socketTimeout?: number;
+
+  /**
+   * Consecutive command timeouts after which an owned connection is dropped and reopened, or a
+   * passed `client` is treated as down for 2 s.
+   * @default 3
+   */
+  maxConsecutiveTimeouts?: number;
+
+  /**
    * Log hits, misses and state changes. Never logs the URL.
    * @default `CACHE_DEBUG` is `1` or `true`
    */
@@ -89,12 +110,6 @@ export interface CacheOptions {
 export interface RuntimeOptions extends CacheOptions {
   /** ioredis options object, from 16.5's `redis: RedisOptions`. */
   redisOptions?: RedisOptions;
-  /** Connect timeout in ms (16.5 handler options only). */
-  connectTimeout?: number;
-  /** Drop the connection when a pending command gets no reply for this many ms. */
-  socketTimeout?: number;
-  /** Drop the connection, or mark a passed client not ready, after this many timeouts in a row. */
-  maxConsecutiveTimeouts?: number;
 }
 
 /**
@@ -129,13 +144,25 @@ export interface CacheRuntime {
   readonly stores: RuntimeStores;
   /** Rate-limited error log. */
   readonly reportError: ErrorReporter;
+  /**
+   * True once {@link closeCache} has dropped this runtime: its connection is closed and its
+   * stores are gone. A handler then asks {@link getCacheRuntime} again ({@link liveCacheRuntime}).
+   */
+  readonly closed: boolean;
+}
+
+/** A runtime as this module holds it: it can be marked closed and let go of its listeners. */
+interface OwnedRuntime extends CacheRuntime {
+  closed: boolean;
+  /** Stop following the connection and leave the memory store registry. */
+  dispose(): void;
 }
 
 const REGISTRY_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/runtimes");
 const CONNECTION_IDS_KEY = Symbol.for("@mrjasonroy/cache-components-cache-handler/connection-ids");
 
-function getRegistry(): Map<string, CacheRuntime> {
-  const store = globalThis as unknown as Record<symbol, Map<string, CacheRuntime> | undefined>;
+function getRegistry(): Map<string, OwnedRuntime> {
+  const store = globalThis as unknown as Record<symbol, Map<string, OwnedRuntime> | undefined>;
   let registry = store[REGISTRY_KEY];
   if (!registry) {
     registry = new Map();
@@ -235,6 +262,21 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
 }
 
 /**
+ * The current runtime for these options: the one {@link getCacheRuntime} gave, until
+ * {@link closeCache} closes it, and then a new one, on a new connection. Handlers that live
+ * longer than a request (the `cacheHandlers` singletons, a page handler kept by a test) read
+ * their runtime through this, so they reconnect on next use after a close instead of keeping a
+ * closed connection.
+ */
+export function liveCacheRuntime(options: RuntimeOptions = {}): () => CacheRuntime {
+  let runtime = getCacheRuntime(options);
+  return () => {
+    if (runtime.closed) runtime = getCacheRuntime(options);
+    return runtime;
+  };
+}
+
+/**
  * A runtime for one operation outside the handlers (`flushCache`). The shared runtime when its
  * connection is already open (a handler opened it) or is not the package's own (memory only, an
  * application client); otherwise a runtime on a connection of its own, which `release` closes and
@@ -256,13 +298,13 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
     runtime,
     shared: false,
     async release() {
-      for (const store of Object.values(runtime.stores)) store.unregister();
+      runtime.dispose();
       await connection.close();
     },
   };
 }
 
-function createRuntime(connection: RedisConnection | undefined, keyPrefix: string): CacheRuntime {
+function createRuntime(connection: RedisConnection | undefined, keyPrefix: string): OwnedRuntime {
   const stores: RuntimeStores = {
     page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
     pageFallback: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
@@ -272,18 +314,60 @@ function createRuntime(connection: RedisConnection | undefined, keyPrefix: strin
     entryTags: new MemoryStore({ maxEntries: 10_000, maxBytes: 8 * 1024 * 1024 }),
   };
   // Outage entries are never read once Redis is back; dropping them frees the memory.
-  connection?.onReady(() => {
+  const stopListening = connection?.onReady(() => {
     stores.pageFallback.clear();
     stores.dataFallback.clear();
   });
+  const tags = new TagStore(connection, keyPrefix);
 
   return {
     connection,
     keyPrefix,
-    tags: new TagStore(connection, keyPrefix),
+    tags,
     stores,
     reportError: createErrorReporter("[RedisCache]:"),
+    closed: false,
+    dispose() {
+      stopListening?.();
+      tags.dispose();
+      for (const store of Object.values(stores)) store.unregister();
+    },
   };
+}
+
+let closing: Promise<void> | undefined;
+
+/**
+ * Close every Redis connection this package opened in this process, empty its in-process memory
+ * stores and drop its tag state, so that a test runner, script or custom server can exit. A
+ * client the application passed in (`client`) is never closed or disconnected. Safe to call more
+ * than once; concurrent calls share one close.
+ *
+ * Handlers are not broken by it: a handler created before the call opens a new connection on its
+ * next use, and every handler of a connection and key prefix shares the new one, as before.
+ *
+ * @example
+ * ```ts
+ * // jest / vitest
+ * import { closeCache } from "@mrjasonroy/cache-components-cache-handler";
+ * afterAll(() => closeCache());
+ * ```
+ */
+export function closeCache(): Promise<void> {
+  closing ??= (async () => {
+    const registry = getRegistry();
+    const runtimes = [...registry.values()];
+    registry.clear();
+    clearAllMemoryStores();
+    for (const runtime of runtimes) {
+      runtime.closed = true;
+      runtime.dispose();
+    }
+    await closeAllRedisConnections();
+  })().finally(() => {
+    closing = undefined;
+  });
+  return closing;
 }
 
 /**

@@ -61,6 +61,12 @@ interface CacheOptions {
    * through a proxy; 3 timeouts in a row → memory for 2 s. @default 1000
    */
   commandTimeout?: number;
+  /** Ms to wait for a connection the package opens. Not used with client. @default 2000 */
+  connectTimeout?: number;
+  /** Ms a pending command may wait for a reply before an owned connection is reopened. @default 2000 */
+  socketTimeout?: number;
+  /** Timeouts in a row that reopen an owned connection, or send a passed client to memory for 2 s. @default 3 */
+  maxConsecutiveTimeouts?: number;
   /** @default CACHE_DEBUG is `1` or `true` */
   debug?: boolean;
 }
@@ -68,7 +74,8 @@ interface CacheOptions {
 
 Handlers in one process with the same connection and `keyPrefix` share one connection, one tag
 store and one set of memory stores. `CACHE_REDIS=off` and `next build` force memory regardless of
-these options.
+these options. Different timeouts for the same server open a second connection, and the package
+logs a warning when that happens, so give every handler the same settings.
 
 ## Page handler
 
@@ -104,14 +111,11 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 |---|---|---|
 | `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
-| `connectTimeout` | `2000` (`10000` for the ElastiCache host form) | Connect timeout in ms for the connection the package opens. |
-| `socketTimeout` | `2000` | Drop the connection the package opens when a pending command gets no reply for this many ms. |
-| `maxConsecutiveTimeouts` | `3` | Timeouts in a row that drop the package's connection, or send the handlers to memory for 2 s with a `client` you pass in. |
 | `redis` | — | The 16.5 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 
-The constructor has the same shape as in 16.5, so subclasses keep working. `close()` closes the
-process's shared connection, so call it only at shutdown. It never closes a client you passed in.
+The constructor has the same shape as in 16.5, so subclasses keep working. `close()` is deprecated:
+it is the same as [`closeCache()`](#closecache).
 
 ## Data handlers
 
@@ -122,7 +126,8 @@ Both return a Next `DataCacheHandler` (`get`, `set`, `refreshTags`, `getExpirati
 
 For `"use cache: remote"`, and for `"use cache"` with `useCache: "redis"`. Entries are stored in
 Redis under `<prefix><buildId>:data:<key>` until their `expire`, with the memory fallback during
-an outage. Takes `CacheOptions` plus `buildId`.
+an outage. Takes `CacheOptions` plus `buildId` and `defaultTTL`: the seconds to keep an entry whose
+`expire` is infinite (default `86400`, 24 hours). Every entry is kept at most 365 days.
 
 ### `createLocalCacheHandler(options?)`
 
@@ -159,6 +164,25 @@ dropped. It throws, deleting nothing, if Redis is configured but unavailable, or
 is checked against, so build output older than the flush is not served again. See
 [Flushing the cache](../README.md#flushing-the-cache).
 
+## `closeCache()`
+
+```ts
+function closeCache(): Promise<void>;
+```
+
+For test runs, scripts and CLIs, so Node can exit; a Next server never needs it. Closes every
+Redis connection the package opened in this process, empties its memory stores and drops its tag
+state. Safe to call more than once, and concurrently. A `client` you passed in is never closed.
+Handlers created before it reconnect on their next call, onto one new connection; the deprecated
+`createCacheHandler` does not, and serves from memory until it is created again.
+
+```ts
+import { afterAll } from "vitest";
+import { closeCache } from "@mrjasonroy/cache-components-cache-handler";
+
+afterAll(() => closeCache());
+```
+
 ## `MEMORY_ONLY_TAG`
 
 `"cache:memory-only"`. An entry tagged with it (`cacheTag(MEMORY_ONLY_TAG)`), and a page that
@@ -166,7 +190,8 @@ carries it, is kept in process memory and never written to Redis.
 
 ## 16.5 data cache API
 
-Still supported. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
+Deprecated in 16.6: it keeps working in 16.x and is removed, or becomes a shim, on the Next 17
+line. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
 `nextjs:tags:`) and covers `"use cache"` only, not pages.
 
 ### `createCacheHandler(options)`

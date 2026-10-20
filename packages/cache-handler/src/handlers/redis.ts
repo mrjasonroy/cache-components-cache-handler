@@ -48,9 +48,10 @@ import {
   FALLBACK_TTL_SECONDS,
   MEMORY_ONLY_TAG,
   type RuntimeOptions,
+  closeCache,
   createDebugLog,
-  getCacheRuntime,
   isRedisReady,
+  liveCacheRuntime,
 } from "../shared/runtime.js";
 import { readBuildTime, readRoutePeriods, writeBuildStamp } from "./build-info.js";
 import { readBuildOutput } from "./build-output.js";
@@ -99,27 +100,6 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
    * @default the app's BUILD_ID, read from `serverDistDir` or the environment on first use
    */
   buildId?: string;
-
-  /**
-   * Milliseconds to wait for the connection to open. 16.5 path; `withCache` reads only the
-   * environment.
-   * @default 2000
-   */
-  connectTimeout?: number;
-
-  /**
-   * Milliseconds a pending command may go without a reply before the connection is dropped.
-   * 16.5 path; `withCache` reads only the environment.
-   * @default 2000
-   */
-  socketTimeout?: number;
-
-  /**
-   * Consecutive command timeouts after which an owned connection is dropped and reopened. 16.5
-   * path; `withCache` reads only the environment.
-   * @default 3
-   */
-  maxConsecutiveTimeouts?: number;
 }
 
 interface StoredPageEntry {
@@ -265,7 +245,7 @@ function staleAfterSeconds(
 export class RedisCacheHandler {
   public readonly name = "redis";
 
-  protected readonly runtime: CacheRuntime;
+  private readonly currentRuntime: () => CacheRuntime;
   private readonly options: RedisCacheHandlerOptions;
   private readonly memoryFallback: boolean;
   private readonly log: ((...args: unknown[]) => void) | undefined;
@@ -276,9 +256,14 @@ export class RedisCacheHandler {
     if (options.serverDistDir && isBuildPhase()) writeBuildStamp(options.serverDistDir);
     markPageHandlerCreated();
     this.options = options;
-    this.runtime = getCacheRuntime(toRuntimeOptions(options));
+    this.currentRuntime = liveCacheRuntime(toRuntimeOptions(options));
     this.memoryFallback = options.memoryFallback ?? true;
     this.log = createDebugLog("[PageCache]:", options.debug);
+  }
+
+  /** The shared runtime; a new one, on a new connection, after `closeCache()`. */
+  protected get runtime(): CacheRuntime {
+    return this.currentRuntime();
   }
 
   private redisKey(cacheKey: string): string {
@@ -576,11 +561,13 @@ export class RedisCacheHandler {
   }
 
   /**
-   * Close the connection if this package opened it. The connection is shared by every handler in
-   * the process; call this only at shutdown. A client you passed in is never closed.
+   * Close the cache: the same as {@link closeCache}, which closes every connection the package
+   * opened in this process (they are shared by every handler), empties its memory stores and
+   * drops its tag state. A client you passed in is never closed. Handlers reconnect on next use.
+   * @deprecated Call `closeCache()`; it is the same and does not need a handler.
    */
   async close(): Promise<void> {
-    await this.runtime.connection?.close();
+    await closeCache();
   }
 }
 

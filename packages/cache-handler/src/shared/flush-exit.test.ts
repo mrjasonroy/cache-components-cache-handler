@@ -23,6 +23,7 @@ const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // Inside the package, so the compiled code resolves `ioredis` from its node_modules.
 const outDir = join(packageDir, "node_modules", ".cache", "flush-exit-test");
 const script = join(outDir, "flush-script.mjs");
+const closeScript = join(outDir, "close-script.mjs");
 const redisUrl = process.env.CACHE_TEST_REDIS_URL;
 
 /** Exit allowance: the connect timeout (2 s) and initial wait (0.5 s), with room to spare. */
@@ -37,9 +38,9 @@ async function closedPort(): Promise<number> {
   return port;
 }
 
-/** Run `flushCache({ url })` in a child process; whether it exited by itself, and its output. */
-function runFlush(url: string): { exited: boolean; output: string } {
-  const result = spawnSync(process.execPath, [script, url], {
+/** Run `file` with `url` in a child process; whether it exited by itself, and its output. */
+function run(file: string, url: string): { exited: boolean; output: string } {
+  const result = spawnSync(process.execPath, [file, url], {
     timeout: EXIT_WITHIN_MS,
     encoding: "utf8",
     env: { PATH: process.env.PATH ?? "", NODE_ENV: "production" },
@@ -78,6 +79,17 @@ describe("flushCache lets a plain Node process exit", () => {
         "}",
       ].join("\n"),
     );
+    // A handler opens the shared connection; closeCache() must let the process go.
+    writeFileSync(
+      closeScript,
+      [
+        'import { closeCache, createRemoteCacheHandler } from "./index.js";',
+        'const handler = createRemoteCacheHandler({ url: process.argv[2], keyPrefix: "flush-exit-test:" });',
+        'await handler.get("k", []);',
+        "await closeCache();",
+        'console.log("closed");',
+      ].join("\n"),
+    );
   }, 120_000);
 
   afterAll(() => {
@@ -85,14 +97,29 @@ describe("flushCache lets a plain Node process exit", () => {
   });
 
   test("Redis unreachable: the flush fails and the process exits", async () => {
-    const { exited, output } = runFlush(`redis://127.0.0.1:${await closedPort()}`);
+    const { exited, output } = run(script, `redis://127.0.0.1:${await closedPort()}`);
     expect(exited, output).toBe(true);
     expect(output).toContain("failed flushCache: Redis is unavailable");
   });
 
   test.skipIf(!redisUrl)("Redis reachable: the flush succeeds and the process exits", () => {
-    const { exited, output } = runFlush(redisUrl as string);
+    const { exited, output } = run(script, redisUrl as string);
     expect(exited, output).toBe(true);
     expect(output).toContain('flushed {"deleted":');
   });
+
+  test("a handler's connection, Redis unreachable: closeCache() lets the process exit", async () => {
+    const { exited, output } = run(closeScript, `redis://127.0.0.1:${await closedPort()}`);
+    expect(exited, output).toBe(true);
+    expect(output).toContain("closed");
+  });
+
+  test.skipIf(!redisUrl)(
+    "a handler's connection, Redis reachable: closeCache() lets the process exit",
+    () => {
+      const { exited, output } = run(closeScript, redisUrl as string);
+      expect(exited, output).toBe(true);
+      expect(output).toContain("closed");
+    },
+  );
 });

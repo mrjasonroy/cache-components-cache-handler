@@ -1,5 +1,32 @@
 # Decisions
 
+## DEC-6: Public API from the architecture review: `closeCache`, tuning on `CacheOptions`, the 16.5 data stack deprecated, remote `defaultTTL`
+
+**Status:** approved by Jason on 2026-10-20 (architecture review H1, M1, M3, M4).
+
+- **H1, `closeCache(): Promise<void>`**, exported from the package root next to `flushCache`. It
+  closes every Redis connection the package opened, empties the memory stores and drops the
+  runtimes (tag stores). Idempotent: concurrent calls share one close, and a later call finds
+  nothing open. A `client` the application passed in is never closed. Handlers reconnect lazily:
+  the remote, local and page handlers resolve their runtime on every call
+  (`liveCacheRuntime`), and a runtime that `closeCache` marked `closed` is looked up again in the
+  registry, which opens one new connection and one tag store shared by every handler with the same
+  settings. The registry key stays `<connection id>|<keyPrefix>`: the ids are global (DEC-5), and
+  `closeCache` empties the registry, so a stale id is never reused. `RedisCacheHandler#close()`
+  is deprecated and calls `closeCache()`.
+  Not covered: the deprecated `createCacheHandler` captures its connection when it is created, so
+  after `closeCache` it serves from its memory fallback until it is created again. Reworking the
+  16.5 stack to re-resolve was judged not worth it for a deprecated API.
+- **M1:** `connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts` move from the internal
+  `RuntimeOptions` to `CacheOptions`, so every factory and `flushCache` take them. Supersedes the
+  "16.5 path only" scope in DEC-4. The split-connection warning from the review's first batch
+  stays: different tuning for one server still opens a second connection.
+- **M3:** `createCacheHandler`, `createRedisDataCacheHandler`, `createMemoryDataCacheHandler` and
+  `createIoredisAdapter` are `@deprecated`, each pointing at its replacement. No behaviour change.
+  They keep working in 16.x and are removed, or become a shim, on the Next 17 line.
+- **M4:** `RemoteCacheHandlerOptions.defaultTTL` (seconds) sets how long an entry with an infinite
+  `expire` is kept. The default stays 24 hours, and the 365-day cap applies.
+
 ## DEC-5: State on `globalThis` or in the module (architecture review L5, M2)
 
 Next can load the package into more than one module graph in one process (the server bundle,
@@ -70,8 +97,8 @@ Wired into `"use cache: remote"` (`data-cache/remote.ts`) and the page handler
 only: `createCacheHandler` options, and `RedisCacheHandler` / `createRedisCacheHandler` options
 including the `redis: RedisOptions` form, through `RuntimeOptions` → `resolveConnection` →
 `shared/connection.ts`. With a `client`, only `maxConsecutiveTimeouts` applies (the client's own
-options are never changed). `withCache` stays environment-only: the options are not on
-`CacheOptions` and there is no environment variable for them.
+options are never changed). `withCache` stays environment-only: there is no environment variable for them.
+Superseded in part by DEC-6: the options are now on `CacheOptions`, so every factory takes them.
 
 Connections are shared per distinct option set, tuning included. A page handler given
 `connectTimeout: 5000` next to a data handler left on the defaults therefore opens two clients to

@@ -14,7 +14,8 @@ import type { DataCacheEntry } from "./types.js";
 export const INFINITE_CACHE = 0xfffffffe;
 
 /**
- * Lifetime in seconds of an entry without a finite `expire`.
+ * Lifetime in seconds of an entry without a finite `expire`, unless the remote handler's
+ * `defaultTTL` says otherwise.
  */
 export const DEFAULT_DATA_TTL_SECONDS = 24 * 60 * 60;
 
@@ -55,11 +56,15 @@ export async function readPendingEntry(
 }
 
 /**
- * Seconds the entry may still be kept: until `timestamp + expire` (24 h for an infinite expire),
- * capped at the longest entry age so a tag record always outlives it.
+ * Seconds the entry may still be kept: until `timestamp + expire` (`defaultTTL` for an infinite
+ * expire), capped at the longest entry age so a tag record always outlives it.
  */
-export function storedEntryTTL(entry: StoredDataEntry, now: number = nowMs()): number {
-  const expire = entry.expire >= INFINITE_CACHE ? DEFAULT_DATA_TTL_SECONDS : entry.expire;
+export function storedEntryTTL(
+  entry: StoredDataEntry,
+  defaultTTL: number = DEFAULT_DATA_TTL_SECONDS,
+  now: number = nowMs(),
+): number {
+  const expire = entry.expire >= INFINITE_CACHE ? defaultTTL : entry.expire;
   const lifetime = Math.min(expire, MAX_ENTRY_AGE_SECONDS);
   return Math.ceil((entry.timestamp + lifetime * 1000 - now) / 1000);
 }

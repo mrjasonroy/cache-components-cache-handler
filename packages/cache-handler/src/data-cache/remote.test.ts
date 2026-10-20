@@ -104,6 +104,28 @@ describe("createRemoteCacheHandler", () => {
     expect(await fake.exists("nextjs:b1:data:gone")).toBe(0);
   });
 
+  test("defaultTTL sets how long an infinite expire is kept, capped at the longest entry age", async () => {
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({
+      client: asClient(fake),
+      buildId: "b1",
+      defaultTTL: 600,
+    });
+    await handler.set("k", entry("x", { expire: INFINITE_CACHE }));
+    expect(fake.ttlOf(KEY)).toBe(600);
+    // A finite expire is the entry's own; defaultTTL does not change it.
+    await handler.set("finite", entry("x", { expire: 300 }));
+    expect(fake.ttlOf("nextjs:b1:data:finite")).toBe(300);
+
+    const capped = createRemoteCacheHandler({
+      client: asClient(fake),
+      buildId: "b1",
+      defaultTTL: 10 * MAX_ENTRY_AGE_SECONDS,
+    });
+    await capped.set("long", entry("x", { expire: INFINITE_CACHE }));
+    expect(fake.ttlOf("nextjs:b1:data:long")).toBe(MAX_ENTRY_AGE_SECONDS);
+  });
+
   test("a failed render is not stored", async () => {
     const fake = new FakeRedis();
     const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });

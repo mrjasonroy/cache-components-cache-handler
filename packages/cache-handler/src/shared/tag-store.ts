@@ -147,6 +147,7 @@ export class TagStore {
   /** Batches sent to Redis and not yet answered. */
   private readonly sending = new Set<Promise<void>>();
   private lastUpdate: { key: string; done: Promise<void> } | undefined;
+  private readonly stopListening: (() => void) | undefined;
 
   constructor(
     private readonly connection: RedisConnection | undefined,
@@ -154,7 +155,7 @@ export class TagStore {
     options: { errorLogIntervalMs?: number } = {},
   ) {
     this.reportError = createErrorReporter("[RedisCache]:", options.errorLogIntervalMs);
-    connection?.onReady(() => {
+    this.stopListening = connection?.onReady(() => {
       this.connectedSince += 1;
       this.synced = false;
       this.lastSyncAt = 0;
@@ -240,6 +241,11 @@ export class TagStore {
       if (this.lastUpdate === lastUpdate) this.lastUpdate = undefined;
     });
     return done;
+  }
+
+  /** Stop following the connection's reconnects, for a store being dropped. */
+  dispose(): void {
+    this.stopListening?.();
   }
 
   /** Whether some update has not reached Redis yet. */

@@ -41,7 +41,7 @@ export {
   type FlushCacheResult,
   flushCache,
 } from "./shared/flush.js";
-export { type CacheOptions, MEMORY_ONLY_TAG } from "./shared/runtime.js";
+export { type CacheOptions, closeCache, MEMORY_ONLY_TAG } from "./shared/runtime.js";
 
 // =============================================================================
 // Deprecated Next 14-era ISR handlers and helpers (kept until the Next 17 line)
@@ -73,17 +73,16 @@ export type {
 export { IMPLICIT_TAG_PREFIX } from "./types.js";
 
 // =============================================================================
-// Data cache handlers ("use cache")
+// Deprecated 16.5 data cache stack (kept until the Next 17 line): use withCache, or
+// createRemoteCacheHandler / createLocalCacheHandler
 // =============================================================================
 
-// Zero-config factory (recommended)
 export {
   type CacheHandlerOptions as DataCacheHandlerOptions,
   type CacheHandlerType,
   createCacheHandler,
 } from "./data-cache/factory.js";
 
-// Advanced: direct handler creation
 export {
   createMemoryDataCacheHandler,
   type MemoryDataCacheHandlerOptions,

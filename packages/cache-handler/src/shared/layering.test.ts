@@ -18,7 +18,9 @@ function relativeImports(file: string): string[] {
 
 function sources(dir: string): string[] {
   return readdirSync(join(src, dir))
-    .filter((name) => name.endsWith(".ts") && !name.endsWith(".test.ts"))
+    .filter(
+      (name) => name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".test-d.ts"),
+    )
     .map((name) => join(src, dir, name));
 }
 
