@@ -420,7 +420,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(await memory.get("/m", ctx)).toBeNull();
     });
 
-    test("FETCH uses data.revalidate; 16.5 ctx.revalidate still works", () => {
+    test("FETCH uses data.revalidate; 16.4.2 ctx.revalidate still works", () => {
       expect(getEntryLifetime({ kind: "FETCH", revalidate: 10 }, { fetchCache: true })).toBe(15);
       expect(getEntryLifetime(page("x"), { revalidate: 20 })).toBe(30);
     });
@@ -550,7 +550,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     });
   });
 
-  describe("16.5.1 constructor options", () => {
+  describe("16.4.2 constructor options", () => {
     test("redis client, keyPrefix, tagPrefix (ignored), defaultTTL and debug still work", async () => {
       const fake = new FakeRedis();
       const debug = vi.spyOn(console, "debug").mockImplementation(() => {});

@@ -106,6 +106,6 @@ The full table is in the README under [Environment variables](../README.md#envir
 A local Redis for this is one command away: `pnpm docker:up` in this repo, or
 `docker run -d -p 6379:6379 redis:7-alpine`.
 
-## Upgrading from 16.5.x
+## Upgrading from 16.4.2
 
-See [Migrating](../README.md#migrating) in the README.
+16.5.0 and 16.5.1 were withdrawn; upgrade from 16.4.2 to 16.4.3. See [Migrating](../README.md#migrating) in the README.

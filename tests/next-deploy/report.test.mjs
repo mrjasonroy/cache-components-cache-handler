@@ -53,7 +53,7 @@ function gate(baseline, branch) {
   try {
     mkdirSync(join(dir, "results"));
     writeVariant(dir, "baseline", baseline);
-    writeVariant(dir, "pkg-16.5.1", baseline);
+    writeVariant(dir, "pkg-16.4.2", baseline);
     writeVariant(dir, "branch", branch);
     writeFileSync(join(dir, "known.txt"), "");
     const report = spawnSync(

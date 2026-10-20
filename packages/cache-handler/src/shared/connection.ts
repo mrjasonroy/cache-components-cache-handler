@@ -383,7 +383,7 @@ function buildClient(options: RedisConnectionOptions): Redis {
     return new RedisClient({ ...clientOptions, host: options.host, port: options.port ?? 6379 });
   }
   if (!options.url && options.redisOptions) {
-    // An ioredis options object (e.g. 16.5's `new RedisCacheHandler({ redis: { host, port } })`).
+    // An ioredis options object (e.g. 16.4.2's `new RedisCacheHandler({ redis: { host, port } })`).
     return new RedisClient(clientOptions);
   }
   return new RedisClient(options.url ?? "redis://localhost:6379", clientOptions);

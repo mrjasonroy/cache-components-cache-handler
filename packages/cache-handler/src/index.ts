@@ -74,7 +74,7 @@ export type {
 export { IMPLICIT_TAG_PREFIX } from "./types.js";
 
 // =============================================================================
-// Deprecated 16.5 data cache stack (kept until the Next 17 line): use withCache, or
+// Deprecated legacy data cache stack (kept until the Next 17 line): use withCache, or
 // createRemoteCacheHandler / createLocalCacheHandler
 // =============================================================================
 

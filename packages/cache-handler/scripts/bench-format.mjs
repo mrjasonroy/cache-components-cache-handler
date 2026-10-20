@@ -1,4 +1,4 @@
-// Compares the 16.5.0 storage formats with format v2 on the same entries: bytes stored per
+// Compares the 16.4.2 storage formats with format v2 on the same entries: bytes stored per
 // entry and set / get+decode time against a real Redis.
 //
 //   pnpm --filter @mrjasonroy/cache-components-cache-handler build
@@ -20,7 +20,7 @@ function rscText(bytes) {
   return Buffer.from(row.repeat(Math.ceil(bytes / Buffer.byteLength(row)))).subarray(0, bytes);
 }
 
-// 16.5.0 "use cache" format: JSON with the value in base64.
+// 16.4.2 "use cache" format (still `createCacheHandler`'s): JSON with the value in base64.
 const v1Data = {
   encode: (e) => JSON.stringify({ ...e, value: e.value.toString("base64") }),
   decode: (s) => {
@@ -104,12 +104,12 @@ for (const [name, entry, v1] of cases) {
   const neu = await measure(v2, entry, `${prefix}v2`);
   rows.push({
     entry: name,
-    "16.5 bytes": old.bytes,
+    "old bytes": old.bytes,
     "v2 bytes": neu.bytes,
-    "v2/16.5": (neu.bytes / old.bytes).toFixed(2),
-    "16.5 set ms": old.set.toFixed(3),
+    "v2/old": (neu.bytes / old.bytes).toFixed(2),
+    "old set ms": old.set.toFixed(3),
     "v2 set ms": neu.set.toFixed(3),
-    "16.5 get ms": old.get.toFixed(3),
+    "old get ms": old.get.toFixed(3),
     "v2 get ms": neu.get.toFixed(3),
   });
 }

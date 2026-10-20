@@ -238,7 +238,7 @@ function areTagsStale(tags: string[], timestamp: Timestamp): boolean {
  * }
  * ```
  *
- * @deprecated The 16.5 data cache stack. Use `withCache(nextConfig)` (its default `"use cache"`
+ * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)` (its default `"use cache"`
  *   handler keeps values in memory), or `createLocalCacheHandler` in a custom handler file.
  *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
  */

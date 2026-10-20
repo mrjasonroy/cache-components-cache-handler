@@ -1,5 +1,12 @@
 # Decisions
 
+> **Version numbers.** 16.5.0 and 16.5.1 were published by mistake, ahead of Next.js, and
+> withdrawn; their changes and the release these records call 16.6.0 ship together as 16.4.3. Where
+> a record below names "16.5" as the version users upgrade from, read 16.4.2: its key layout,
+> `createCacheHandler` storage and `RedisCacheHandler` constructor are the same. "The 16.5 stack"
+> or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
+> form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
+
 ## DEC-7: A logger hook: `setCacheLogger` and a `logger` option (architecture review L4)
 
 Approved by Jason on 2026-10-20. His app logs through its own logger, and the package wrote 23
@@ -148,7 +155,7 @@ quality 4); connection tuning superseded by DEC-6 · **Date:** 2026-10-19
 
 Entries of 16 KB and more (encoded v2 size) are stored Brotli-compressed, on by default. This
 started as a PM default; Jason decided on 2026-10-20 to ship it on by default with this threshold
-and quality (Opus final review L2: the 16.6.0 CHANGELOG entry no longer calls it provisional).
+and quality (Opus final review L2: the 16.4.3 CHANGELOG entry, then numbered 16.6.0, no longer calls it provisional).
 `CACHE_COMPRESSION=off` (also `0`, `false`, `no`) turns it off, resolved in `shared/env.ts` like
 `CACHE_DEBUG`. There is no `withCache` option and no new public API.
 
@@ -163,8 +170,9 @@ and quality (Opus final review L2: the 16.6.0 CHANGELOG entry no longer calls it
   does not match the stated one (`maxOutputLength` caps the inflation), or a payload that is not a
   v2 entry is a miss, never a throw.
 - An entry is written as v2 when compressing would not shrink it (already-compressed bytes).
-- 16.5 and earlier 16.6.0 readers see version 3 and miss; entries are build-scoped, so mixed
-  fleets rarely share keys.
+- 16.4.2 does not read these keys at all (its layout is different). A v2-only build of this
+  release (never published) sees version 3 and misses; entries are build-scoped, so mixed fleets
+  rarely share keys.
 
 Numbers (drafts/gn16-18-large-values.md; generated listing pages, Node 26, Redis 7 in Docker):
 
@@ -287,16 +295,16 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
 Tags follow Next's Distributed Tag Coordination. Every tag record for a prefix lives in one hash,
 `<prefix>tags`: the field is the tag, the value is `"<stale>,<expired>"` in ms. Beside it,
 `<prefix>tag-index` is a sorted set holding each tag once, scored by its last update. Neither
-key starts with `<prefix>tags:`, the namespace where 16.5's `RedisCacheHandler` and
+key starts with `<prefix>tags:`, the namespace where 16.4.2's `RedisCacheHandler` and
 `createCacheHandler` keep `nextjs:tags:<tag>` keys of other types; a tag named `index` would
 otherwise collide.
 
-The 16.5 page and data handlers' tag keys are neither read nor written, so during a rolling deploy
-from 16.5 a revalidation handled by a 16.5 instance does not reach 16.6 instances (and the
-reverse), and an entry they cached can stay stale for up to its `expire` (Opus final review M1).
-This is documented as an upgrade step (recreate deploy, or one `revalidatePath("/", "layout")`
-from 16.6 once the last 16.5 instance is gone; `flushCache` empties only the caller's memory)
-rather than handled with a compatibility shim: reading 16.5's per-tag keys would cost a `GET` per
+The old (16.4.2, and withdrawn 16.5.x) page and data handlers' tag keys are neither read nor
+written, so during a rolling deploy from 16.4.2 a revalidation handled by a 16.4.2 instance does
+not reach 16.4.3 instances (and the reverse), and an entry they cached can stay stale for up to its
+`expire` (Opus final review M1). This is documented as an upgrade step (recreate deploy, or one
+`revalidatePath("/", "layout")` from 16.4.3 once the last 16.4.2 instance is gone; `flushCache` empties only the caller's memory)
+rather than handled with a compatibility shim: reading the old per-tag keys would cost a `GET` per
 tag on every read forever after, to cover a window of minutes that happens once.
 
 - `updateTags` is 1 EVALSHA + 1 `ZADD GT`, however many tags it carries (EVAL instead when the
@@ -346,7 +354,7 @@ tag on every read forever after, to cover a window of minutes that happens once.
 
 **No pruning: tag records live until a flush.** A record matters while an entry created before
 its `stale` or `expired` time can still be stored: `check` expires an entry created before
-`expired`, including one cached after the revalidation (16.5.1 semantics, Next's own). With
+`expired`, including one cached after the revalidation (the semantics `createCacheHandler` has had since the withdrawn 16.5.1, and Next's own). With
 `revalidateTag(tag, "max")` (`expire` = 365 days) a record is still needed 365 days after the
 revalidation plus the longest entry age, and with a larger custom `expire` longer still. An
 earlier round pruned at 366 and then 731 days, which needed a clamp on `expired`, a margin for
@@ -463,7 +471,7 @@ not let an invalidated entry through:
   deadline passes, including entries rendered after the revalidation. That is Next 16.4.2's own
   `areTagsExpired` (`expired > timestamp && expired <= now`), used by its default `"use cache"`
   handler and by `FileSystemCache`. We match it on purpose, so a deploy behaves the same with or
-  without this package. The legacy 16.5 data cache's event-time rule (ISSUE-1) is not carried over.
+  without this package. The legacy `createCacheHandler` data cache's event-time rule (ISSUE-1) is not carried over.
 
 **Prerendered build output is served through Next's own `FileSystemCache`.** `next build` writes
 prerendered pages and route handler responses (`APP_PAGE`, `APP_ROUTE`, `PAGES`) to
@@ -562,6 +570,8 @@ layout.
 
 ## DEC-2: Restore the ISR `cacheHandler` exports; fix them rather than remove them (16.5.1)
 
+16.5.1 was later withdrawn from npm; this content ships in 16.4.3.
+
 **Status:** Accepted · **Date:** 2026-10-19 · Supersedes DEC-1's removal
 
 DEC-1 removed the ISR handlers in 16.5.0, a minor version. The package version tracks Next.js, so
@@ -575,6 +585,8 @@ not deprecated. The Next 16 contract gaps DEC-1 lists remain and are tracked as 
 
 
 ## DEC-1: Drop the legacy ISR `cacheHandler`; the package is "use cache"-only (16.5.0)
+
+16.5.0 was later withdrawn from npm; 16.4.3 ships DEC-2's restored exports instead.
 
 **Status:** Superseded by DEC-2 · **Date:** 2026-10-18 · **Breaking:** yes
 

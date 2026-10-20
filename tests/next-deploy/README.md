@@ -11,7 +11,7 @@ Every suite in `suites.txt` runs in three variants:
 | Variant | What `e2e-deploy.sh` does |
 |---|---|
 | `baseline` | Runs plain `pnpm build` (the fixture's `next build`), then one `next start`. No custom handlers. |
-| `pkg-16.5.1` | Installs the **published** `@mrjasonroy/cache-components-cache-handler@16.5.1` from npm and wires it the 16.5.1 way: `createCacheConfig` plus a generated `data-cache-handler.mjs` that exports `createCacheHandler({ type: "redis" })`. |
+| `pkg-16.4.2` | Installs the **published** `@mrjasonroy/cache-components-cache-handler@16.4.2` from npm and wires it the 16.4.2 way: `cacheHandlers.default` / `remote` pointing at a generated `data-cache-handler.mjs` that exports `createCacheHandler({ type: "redis" })`, and `cacheMaxMemorySize: 0`. (It was `pkg-16.5.1` until 16.5.0 and 16.5.1 were withdrawn from npm.) |
 | `branch` | Installs this branch's package (built and packed once per run) and wraps the config in `withCache`. |
 
 Both handler variants then build and run `NEXT_DEPLOY_INSTANCES` (default 2) `next start`
@@ -29,7 +29,7 @@ variants, and the Notes column says `1 instance (fixture handler is per-process)
 **`branch` skips itself until `withCache` exists.** If `packages/cache-handler/src/index.ts`
 does not mention `withCache`, the `prepare-branch` job records a reason. The `branch` shards then
 write a "skipped" result without running anything. That way the first runs still produce the
-`baseline` and `pkg-16.5.1` numbers while the source is being rewritten.
+`baseline` and `pkg-16.4.2` numbers while the source is being rewritten.
 
 ## The gate
 
@@ -47,7 +47,7 @@ The job fails only when `branch` ran and either:
 - **Incomplete results:** a `baseline` or `branch` shard did not finish, or a suite has no result
   on one of them (a suite path in `suites.txt` that matched no files).
 
-`pkg-16.5.1` is informational. A skipped `branch` never fails the job.
+`pkg-16.4.2` is informational. A skipped `branch` never fails the job.
 
 ### Known failures
 
@@ -77,7 +77,8 @@ artifact. It holds:
 
 - **`<ref>.json`** (for example `v16.4.2.json`): per-suite status and test counts (passed,
   failed, skipped, total) for each variant, per-variant totals, and the run URL and commit.
-  `results/baseline-v16.4.2.json` in this directory is a committed copy of it from a known run.
+  `results/baseline-v16.4.2.json` in this directory is a committed copy of it from a known run
+  (made before the published variant moved from 16.5.1 to 16.4.2, so it still says `pkg-16.5.1`).
 - **`<ref>.md`:** the same data as a table. It is also written to the job summary.
 
 Test counts come from the run-tests.js log (`count-results.mjs`). With
@@ -134,7 +135,7 @@ Redis is a `services:` container in the `suites` job.
 | `e2e-deploy.sh` | `NEXT_TEST_DEPLOY_SCRIPT_PATH`. It injects the variant's handlers, runs `pnpm install` and the build, starts the instances and the proxy, and prints only the URL on stdout. |
 | `e2e-logs.sh` | `NEXT_TEST_DEPLOY_LOGS_SCRIPT_PATH`. It replays the build and server logs, which hold the `BUILD_ID:` lines the harness parses. |
 | `e2e-cleanup.sh` | `NEXT_TEST_CLEANUP_SCRIPT_PATH`. It saves the tails of the server and proxy logs, then kills the servers and the proxy. |
-| `inject-handlers.mjs` | Adds the packages to the app's `package.json` and replaces `next.config.*` with a wrapper for `branch` or `pkg-16.5.1`. |
+| `inject-handlers.mjs` | Adds the packages to the app's `package.json` and replaces `next.config.*` with a wrapper for `branch` or `pkg-16.4.2`. |
 | `proxy.mjs` | The round-robin HTTP proxy. Each response carries an `x-next-deploy-instance` header. |
 | `report.mjs` | Aggregates the shards into `<ref>.json` and `<ref>.md`, and applies the gate. |
 
@@ -178,7 +179,7 @@ These are ours. The workflow sets them:
 
 | Variable | Meaning |
 |---|---|
-| `NEXT_DEPLOY_VARIANT` | `baseline`, `pkg-16.5.1` or `branch`. |
+| `NEXT_DEPLOY_VARIANT` | `baseline`, `pkg-16.4.2` or `branch`. |
 | `NEXT_DEPLOY_SKIP_REASON` | When set, `run-suites.sh` records the whole variant as skipped. |
 | `CACHE_HANDLER_TARBALL` | The output of `pnpm pack` for this branch. `branch` only. |
 | `NEXT_DEPLOY_REDIS_URL` | The job's Redis. Each deployment gets its own `CACHE_KEY_PREFIX`, because two run at once. |
@@ -202,7 +203,7 @@ docker run -d --name next-deploy-redis -p 6379:6379 redis:7-alpine
 export NEXT_REPO_DIR="$PWD/../next.js" RESULTS_DIR=/tmp/next-deploy-results
 export NEXT_DEPLOY_REDIS_URL=redis://127.0.0.1:6379 SUITE_FILTER='use-cache-swr'
 tests/next-deploy/run-suites.sh baseline 1 1
-tests/next-deploy/run-suites.sh pkg-16.5.1 1 1
+tests/next-deploy/run-suites.sh pkg-16.4.2 1 1
 # branch: pnpm --filter @mrjasonroy/cache-components-cache-handler build, then pack it and
 # export CACHE_HANDLER_TARBALL=<the .tgz>
 NEXT_DEPLOY_SKIP_REASON="not built locally" tests/next-deploy/run-suites.sh branch 1 1
@@ -213,7 +214,7 @@ NEXT_REF=v16.4.2 node tests/next-deploy/report.mjs "$RESULTS_DIR" \
 ## Triage
 
 - **A suite regresses on `branch`:** read its log in the `next-deploy-branch-<shard>` artifact,
-  under `logs/branch-<suite>-shard<n>.log`. Compare it with `pkg-16.5.1`. If 16.5.1 fails the
+  under `logs/branch-<suite>-shard<n>.log`. Compare it with `pkg-16.4.2`. If 16.4.2 fails the
   same way, the cause is likely the multi-instance setup rather than the rewrite. A manual run
   with `instances: 1` tells the two apart. Fix the handler, or add the suite to
   `known-failures.txt` with the reason.

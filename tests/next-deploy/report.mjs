@@ -14,7 +14,7 @@
 //     known-failures.txt, or
 //   - `baseline` or `branch` results are incomplete (a shard never finished, or a suite has no
 //     result: its path matched no files), since a missing result can hide a regression.
-// `pkg-16.5.1` is informational. A skipped `branch` (no withCache yet) never fails the job.
+// `pkg-16.4.2` is informational. A skipped `branch` (no withCache yet) never fails the job.
 //
 // known-failures.txt lines are `<suite> [<constraint>] <reason>`. The optional constraint limits
 // the entry to some Next.js versions, compared with NEXT_REF: `<16.5.0-canary.10` applies only
@@ -44,7 +44,7 @@ if (!resultsDir || !knownFailuresFile || !shards || !outDir) {
 }
 
 const ref = process.env.NEXT_REF ?? "unknown";
-const VARIANTS = ["baseline", "pkg-16.5.1", "branch"];
+const VARIANTS = ["baseline", "pkg-16.4.2", "branch"];
 // Variants that wire handlers in; their Notes go in the table.
 const HANDLER_VARIANTS = VARIANTS.filter((variant) => variant !== "baseline");
 // Worst part wins; "skipped" only when every part was skipped (the deploy manifest drops files).
@@ -374,7 +374,7 @@ const lines = [
     ? `**${regressions.length} regression(s)** of \`branch\` vs \`baseline\`${blockingIncomplete.length ? `, ${blockingIncomplete.length} incomplete` : ""}.`
     : "`branch` was not run, so there is no regression gate.",
   "",
-  "Cells are `status passed/total`. `pkg-16.5.1` is informational.",
+  "Cells are `status passed/total`. `pkg-16.4.2` is informational.",
   "",
   `| Suite | ${VARIANTS.join(" | ")} | Verdict | Notes |`,
   `|---|${VARIANTS.map(() => "---|").join("")}---|---|`,

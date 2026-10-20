@@ -17,7 +17,7 @@ on:
           - graduate
           - specific
       specific_version:
-        description: 'Specific version (e.g., 16.1.0 or 16.0.0-alpha.0) - only used if "specific" is selected'
+        description: 'Specific version (e.g., 16.4.3 or 16.4.3-rc.0) - only used if "specific" is selected. Its major.minor must not be ahead of Next.js latest, and it must never have been on npm.'
         required: false
 
 permissions:
@@ -84,6 +84,11 @@ jobs:
           else
             echo "dist_tag=latest" >> $GITHUB_OUTPUT
           fi
+
+      # npm refuses any version it has ever seen, unpublished ones included, and the package's
+      # major.minor must not run ahead of Next's latest stable (docs/publishing/RELEASE.md).
+      - name: Check the version policy
+        run: node scripts/release-version.mjs check --unused
 
       - name: Update lockfile
         run: pnpm install

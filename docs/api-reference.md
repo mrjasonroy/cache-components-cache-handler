@@ -1,7 +1,7 @@
 # API Reference
 
 Everything the package exports. Start with [`withCache`](#withcachenextconfig-options); the rest is
-for custom handler files, operations and the 16.5 API. Behaviour (outages, tag coordination, key
+for custom handler files, operations and the legacy data cache API. Behaviour (outages, tag coordination, key
 layout) is described in the [README](../README.md).
 
 ## `withCache(nextConfig, options?)`
@@ -116,10 +116,10 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 |---|---|---|
 | `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
-| `redis` | — | The 16.5 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
+| `redis` | — | The 16.4.2 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 
-The constructor has the same shape as in 16.5, so subclasses keep working. `close()` is deprecated:
+The constructor has the same shape as in 16.4.2, so subclasses keep working. `close()` is deprecated:
 it is the same as [`closeCache()`](#closecache).
 
 ## Data handlers
@@ -230,9 +230,9 @@ a message is not. A logger that throws never fails a cache call: the line goes t
 `"cache:memory-only"`. An entry tagged with it (`cacheTag(MEMORY_ONLY_TAG)`), and a page that
 carries it, is kept in process memory and never written to Redis.
 
-## 16.5 data cache API
+## Legacy data cache API
 
-Deprecated in 16.6: it keeps working in 16.x and is removed, or becomes a shim, on the Next 17
+The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.x and is removed, or becomes a shim, on the Next 17
 line. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
 `nextjs:tags:`) and covers `"use cache"` only, not pages.
 

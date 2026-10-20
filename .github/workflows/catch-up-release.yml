@@ -1,8 +1,9 @@
 name: Catch-up Release
 
 # This workflow is for catching up to the latest Next.js version when you've fallen behind.
-# It will update the package to match the latest Next.js major.minor version, run tests,
-# and automatically publish if tests pass.
+# It updates the apps to the latest Next.js and the package to the matching version (the next
+# patch npm has never seen; see docs/publishing/RELEASE.md), runs tests, and opens an
+# auto-merging PR whose merge tags and publishes the release.
 
 on:
   workflow_dispatch:
@@ -56,7 +57,9 @@ jobs:
         run: |
           CURRENT_PKG_VERSION=$(node -p "require('./packages/cache-handler/package.json').version")
           LATEST_NEXTJS=$(npm view next version)
-          NEW_PKG_VERSION="$LATEST_NEXTJS"
+          # Next's version, moved up past any version npm has ever seen (unpublished ones
+          # included), and never lower than the current one; empty when no bump is needed.
+          NEW_PKG_VERSION=$(node scripts/release-version.mjs target "$LATEST_NEXTJS")
 
           echo "current_pkg_version=$CURRENT_PKG_VERSION" >> $GITHUB_OUTPUT
           echo "latest_nextjs=$LATEST_NEXTJS" >> $GITHUB_OUTPUT
@@ -64,15 +67,11 @@ jobs:
 
           echo "📦 Current package version: $CURRENT_PKG_VERSION"
           echo "🔄 Latest Next.js version: $LATEST_NEXTJS"
-          echo "🎯 Target package version: $NEW_PKG_VERSION"
+          echo "🎯 Target package version: ${NEW_PKG_VERSION:-none}"
 
-          if [ "$CURRENT_PKG_VERSION" = "$NEW_PKG_VERSION" ]; then
+          if [ -z "$NEW_PKG_VERSION" ]; then
             echo "needs_update=false" >> $GITHUB_OUTPUT
-            echo "Already up to date!"
-          elif node -e 'const p=v=>{const[m,pre]=v.split("-");return[...m.split(".").map(Number),pre?0:1]};const[a,b]=process.argv.slice(1).map(p);for(let i=0;i<4;i++){if(a[i]!==b[i])process.exit(a[i]>b[i]?0:1)}process.exit(1)' "$CURRENT_PKG_VERSION" "$NEW_PKG_VERSION"; then
-            # Never lower the package version: publishing a lower version would move npm `latest` back.
-            echo "needs_update=false" >> $GITHUB_OUTPUT
-            echo "Package $CURRENT_PKG_VERSION is ahead of Next $NEW_PKG_VERSION; nothing to do"
+            echo "Package $CURRENT_PKG_VERSION is not behind Next $LATEST_NEXTJS; nothing to do"
           else
             echo "needs_update=true" >> $GITHUB_OUTPUT
           fi
@@ -101,6 +100,8 @@ jobs:
           cd packages/cache-handler
           npm version ${{ steps.versions.outputs.new_pkg_version }} --no-git-tag-version --allow-same-version
           cd ../..
+          # Never let the package's major.minor run ahead of Next's latest stable.
+          node scripts/release-version.mjs check
 
       - name: Install updated dependencies
         if: steps.versions.outputs.needs_update == 'true'

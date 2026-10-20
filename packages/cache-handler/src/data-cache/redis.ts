@@ -200,7 +200,7 @@ function bufferToStream(buffer: Buffer): ReadableStream<Uint8Array> {
  * }
  * ```
  *
- * @deprecated The 16.5 data cache stack. Use `withCache(nextConfig)`, or
+ * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)`, or
  *   `createRemoteCacheHandler({ client })` with an ioredis client in a custom handler file.
  *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
  */

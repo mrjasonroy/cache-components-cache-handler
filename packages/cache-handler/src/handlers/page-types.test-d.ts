@@ -1,6 +1,6 @@
 /**
  * Type test, checked by vitest's typecheck (`*.test-d.ts`): the page handler context, declared on
- * its own since 16.6, still takes everything the Next 14 `CacheHandlerOptions` did.
+ * its own since 16.4.3, still takes everything the Next 14 `CacheHandlerOptions` did.
  */
 
 import { describe, expectTypeOf, test } from "vitest";

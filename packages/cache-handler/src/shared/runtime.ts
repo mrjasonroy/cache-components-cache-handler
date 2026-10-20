@@ -120,11 +120,11 @@ export interface CacheOptions {
 }
 
 /**
- * Internal extension of {@link CacheOptions} for the 16.5 `RedisCacheHandler` options.
+ * Internal extension of {@link CacheOptions} for the 16.4.2 `RedisCacheHandler` options.
  * @internal
  */
 export interface RuntimeOptions extends CacheOptions {
-  /** ioredis options object, from 16.5's `redis: RedisOptions`. */
+  /** ioredis options object, from 16.4.2's `redis: RedisOptions`. */
   redisOptions?: RedisOptions;
 }
 

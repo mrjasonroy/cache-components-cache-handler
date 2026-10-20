@@ -32,9 +32,9 @@ For bug fixes, features, or breaking changes:
    - Go to: https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/version-bump.yml
    - Click "Run workflow"
    - Select version bump type:
-     - **patch**: Bug fixes (16.0.0 → 16.0.1)
-     - **minor**: New features (16.0.0 → 16.1.0)
-     - **major**: Breaking changes (16.0.0 → 17.0.0)
+     - **patch**: Bug fixes and features (16.4.2 → 16.4.3)
+     - **minor** / **major**: only to follow a Next.js release that is already out; the
+       workflow fails if the major.minor would be ahead of Next's latest stable
    - Click "Run workflow"
 
 2. **Wait for Automation**:
@@ -131,13 +131,9 @@ When Next.js releases a new version (e.g., 16.1.0):
 
 ## Version Strategy
 
-We align our versions with Next.js:
-
-- **Package version**: `16.0.0` = Next.js `16.0.x`
-- **Peer dependency**: `"next": "~16.0.0"` (allows 16.0.x)
-- **Patch bumps**: Bug fixes between Next.js releases
-- **Minor bumps**: Features between Next.js releases
-- **Major bumps**: Follow Next.js major versions
+The package's major.minor follows Next.js and never runs ahead of it; the patch number is ours,
+and a version npm has ever seen (unpublished ones included) is never reused. See
+[RELEASE.md](./RELEASE.md#version-strategy).
 
 ## Multiple Maintainers
 
@@ -219,7 +215,7 @@ git push origin v16.0.1
 | Task | Action |
 |------|--------|
 | Bug fix release | Run version-bump workflow → select "patch" |
-| Feature release | Run version-bump workflow → select "minor" |
+| Feature release | Run version-bump workflow → select "patch" |
 | Next.js update | Run version-bump workflow → select "specific" → enter version |
 | Publish to npm | Create GitHub Release (publishes automatically) |
 | Check published | https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler |

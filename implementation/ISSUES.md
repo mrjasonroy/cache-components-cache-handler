@@ -1,5 +1,12 @@
 # Known Issues
 
+> **Version numbers.** 16.5.0 and 16.5.1 were published by mistake, ahead of Next.js, and
+> withdrawn; their changes and the release these records call 16.6.0 ship together as 16.4.3. Where
+> a record below names "16.5" as the version users upgrade from, read 16.4.2: its key layout,
+> `createCacheHandler` storage and `RedisCacheHandler` constructor are the same. "The 16.5 stack"
+> or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
+> form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
+
 ## ISSUE-1: `revalidateTag(tag, "max")` permanently blocks re-caching for that tag
 
 **Status:** ✅ Resolved · **Severity:** High · **Area:** `data-cache/redis.ts` (tag invalidation)
@@ -79,7 +86,7 @@ A skipped test documenting the expected behavior lives in
 `packages/cache-handler/src/data-cache/redis.test.ts`
 (`re-caches a tag after revalidateTag with a future expire`).
 
-## ISSUE-2: Known limits of shared tag coordination and `flushCache` (16.6.0)
+## ISSUE-2: Known limits of shared tag coordination and `flushCache` (16.4.3)
 
 **Status:** Open (by design) · **Severity:** Low · **Area:** `shared/tag-store.ts`, `shared/flush.ts`
 
@@ -157,7 +164,7 @@ Documented in the README's tag coordination limits.
 
 ## ISSUE-5: `flushCache` kept a plain Node process alive
 
-**Status:** Fixed (16.6.0) · **Severity:** Medium · **Area:** `shared/flush.ts`, `shared/runtime.ts`
+**Status:** Fixed (16.4.3) · **Severity:** Medium · **Area:** `shared/flush.ts`, `shared/runtime.ts`
 
 Found in a site's Jest suite: `flushCache()` opened the package's shared Redis client, nothing
 closed it, and the process never exited. Once teardown removed the Redis container, ioredis
@@ -180,10 +187,10 @@ socket would let a script exit while a command it awaits is still in flight (an 
 does not keep Node alive), silently dropping a flush or a revalidation write. In a Next server the
 HTTP server keeps the process alive anyway, so it would change nothing there. A test that creates
 handlers still holds their shared client, as any handler-owned connection does: it calls
-`closeCache()` at the end (added in 16.6 with Jason's approval, DEC-6), which closes it. Its exit is
+`closeCache()` at the end (added in 16.4.3 with Jason's approval, DEC-6), which closes it. Its exit is
 tested the same way, in the same child processes (`src/shared/flush-exit.test.ts`).
 
-## ISSUE-6: Review findings deferred or declined for 16.6.0
+## ISSUE-6: Review findings deferred or declined for 16.4.3
 
 **Status:** Open (deliberate) · **Severity:** Low · **Area:** several
 
@@ -193,10 +200,11 @@ is dropped silently.
 - **A revalidation with durations expires entries rendered after it** (Codex review 4, M2).
   Declined: it is what Next's own `areTagsExpired` does; the package is stricter only for
   immediate revalidations. Semantics in DEC-3.
-- **A rolling deploy from 16.5.x splits tag invalidation** (Opus final review, M1). No tag-key shim:
-  16.6 neither reads nor writes the 16.5 tag keys, so a revalidation on a 16.5 instance does not
-  reach 16.6 instances while both serve. The README and CHANGELOG give the deploy step instead
-  (recreate, or revalidate once from 16.6). A shim would keep the old key layout alive in 16.x.
+- **A rolling deploy from 16.4.2 splits tag invalidation** (Opus final review, M1; raised against
+  16.5.x, whose tag keys are the same as 16.4.2's). No tag-key shim: 16.4.3 neither reads nor
+  writes the old tag keys, so a revalidation on a 16.4.2 instance does not reach 16.4.3 instances
+  while both serve. The README and CHANGELOG give the deploy step instead (recreate, or
+  revalidate once from 16.4.3). A shim would keep the old key layout alive in 16.x.
 - **`createCacheHandler` does not reconnect after `closeCache()`** (DEC-6). Declined: making the
   16.5 stack re-resolve its connection was not worth it for a deprecated API. Its deprecation note
   says to create it again.
@@ -228,7 +236,7 @@ is dropped silently.
 
 ## ISSUE-7: Credentials in logged errors, a Cluster flush that could hang, corrupt blob references
 
-**Status:** Resolved (16.6.0, final review M1, M2, L1, L2) · **Severity:** Medium · **Area:** `shared/logger.ts`, `shared/connection.ts`, `shared/flush.ts`, `shared/codec.ts`, `handlers/redis.ts`
+**Status:** Resolved (16.4.3, final review M1, M2, L1, L2) · **Severity:** Medium · **Area:** `shared/logger.ts`, `shared/connection.ts`, `shared/flush.ts`, `shared/codec.ts`, `handlers/redis.ts`
 
 - **M1, credentials in logged errors.** ioredis 5.8 attaches `command: { name, args }` to a reply
   error (`DataHandler.returnError`), so a rejected `AUTH` reached the logger and the console with

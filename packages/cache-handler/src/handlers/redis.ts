@@ -79,7 +79,7 @@ export const EXPIRE_FACTOR = 1.5;
  */
 export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, CacheOptions {
   /**
-   * 16.5 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
+   * 16.4.2 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
    */
   redis?: Redis | Cluster | string | RedisOptions;
 
@@ -131,7 +131,7 @@ function isRedisClient(value: unknown): value is Redis | Cluster {
 }
 
 /**
- * Map the constructor options (16.6 and 16.5 forms) to runtime options.
+ * Map the constructor options (16.4.3 and 16.4.2 forms) to runtime options.
  */
 function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
   const { redis } = options;
@@ -151,7 +151,7 @@ function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
 }
 
 /**
- * Tags of an entry: `ctx.tags` for `fetch` entries (and 16.5 callers), the `x-next-cache-tags`
+ * Tags of an entry: `ctx.tags` for `fetch` entries (and 16.4.2 callers), the `x-next-cache-tags`
  * header for App Router pages, route handlers and Pages Router pages (the kinds Next's own
  * `FileSystemCache` checks header tags for).
  */
@@ -165,7 +165,7 @@ export function getEntryTags(data: PageCacheValue, ctx?: PageCacheSetContext): s
 
 /**
  * The entry's revalidate period: `data.revalidate` for `fetch` entries, else
- * `ctx.cacheControl.revalidate` (or the 16.5 `ctx.revalidate`).
+ * `ctx.cacheControl.revalidate` (or the 16.4.2 `ctx.revalidate`).
  */
 function getRevalidate(
   data: PageCacheValue,
@@ -233,7 +233,7 @@ function staleAfterSeconds(
  * Redis-backed page handler for Next 16's singular `cacheHandler`. `withCache` points
  * `cacheHandler` at a module whose default export is this class.
  *
- * The constructor keeps its 16.5 shape, so existing subclasses work:
+ * The constructor keeps its 16.4.2 shape, so existing subclasses work:
  * `new RedisCacheHandler({ ...ctx, redis, keyPrefix, tagPrefix, defaultTTL, debug })`.
  * Without options it reads the environment (`REDIS_URL`, `CACHE_KEY_PREFIX`, ...).
  *
@@ -545,7 +545,7 @@ export class RedisCacheHandler {
   ): Promise<void> {
     if (this.edge) return;
     const list = Array.isArray(tags) ? tags : [tags];
-    // A profile name (16.5 callers) cannot be resolved here; treat it as an immediate expiry.
+    // A profile name (16.4.2 callers) cannot be resolved here; treat it as an immediate expiry.
     const resolved = typeof durations === "object" ? durations : undefined;
     this.log?.("revalidateTag", list, resolved);
     await this.runtime.tags.update(list, resolved);

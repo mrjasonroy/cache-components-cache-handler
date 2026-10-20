@@ -3,7 +3,7 @@ name: Next.js deploy tests
 # Runs Next.js's own caching e2e suites (vercel/next.js run-tests.js, NEXT_TEST_MODE=deploy,
 # with tests/next-deploy/e2e-deploy.sh as the deploy script) in three variants:
 #   baseline    plain `next build && next start`, no custom handlers
-#   pkg-16.5.1  the published @mrjasonroy/cache-components-cache-handler@16.5.1, wired the 16.5.1
+#   pkg-16.4.2  the published @mrjasonroy/cache-components-cache-handler@16.4.2, wired the 16.4.2
 #               way, 2 `next start` instances on one Redis behind a round-robin proxy
 #   branch      this branch's package wired with withCache, same 2 instances; skipped (not failed)
 #               while packages/cache-handler/src does not export withCache yet
@@ -35,7 +35,7 @@ on:
         options: [memory, redis]
         default: memory
       instances:
-        description: "next start instances behind the proxy (pkg-16.5.1 and branch)"
+        description: "next start instances behind the proxy (pkg-16.4.2 and branch)"
         type: choice
         options: ["2", "1"]
         default: "2"
@@ -180,7 +180,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [baseline, pkg-16.5.1, branch]
+        variant: [baseline, pkg-16.4.2, branch]
         shard: [1, 2, 3, 4]
 
     # The handler variants share it; each deployment gets its own CACHE_KEY_PREFIX. The baseline

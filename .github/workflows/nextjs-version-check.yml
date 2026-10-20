@@ -91,6 +91,13 @@ jobs:
           LATEST_VERSION=$(npm view next version)
           echo "Latest Next.js version: $LATEST_VERSION"
 
+          # The package version to release: Next's version, moved up past any version npm has
+          # ever seen (unpublished ones included), and never lower than the current one.
+          # Empty when the package needs no bump (docs/publishing/RELEASE.md).
+          PKG_TARGET=$(node scripts/release-version.mjs target "$LATEST_VERSION")
+          echo "Package target version: ${PKG_TARGET:-none (no bump)}"
+          echo "pkg_target=$PKG_TARGET" >> $GITHUB_OUTPUT
+
           # Extract major.minor from versions
           CURRENT_MAJOR_MINOR=$(echo $CURRENT_PKG_VERSION | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
           LATEST_MAJOR_MINOR=$(echo $LATEST_VERSION | sed -E 's/^([0-9]+\.[0-9]+).*/\1/')
@@ -177,19 +184,19 @@ jobs:
           pnpm add -D --save-exact next@${{ steps.check_version.outputs.latest_version }}
           cd ../..
 
-          # Bump package version to match Next.js version, but never lower it: the
-          # package can ship its own release ahead of Next (e.g. 16.5.0 while Next
-          # is on 16.4.x), and publishing a lower version would move npm `latest` back.
-          NEW_PKG_VERSION="${{ steps.check_version.outputs.latest_version }}"
-          CURRENT_PKG_VERSION="${{ steps.check_version.outputs.current_pkg_version }}"
-          if ! node -e 'const p=v=>{const[m,pre]=v.split("-");return[...m.split(".").map(Number),pre?0:1]};const[a,b]=process.argv.slice(1).map(p);for(let i=0;i<4;i++){if(a[i]!==b[i])process.exit(a[i]>b[i]?0:1)}process.exit(1)' "$CURRENT_PKG_VERSION" "$NEW_PKG_VERSION"; then
+          # Bump the package to the target picked above (scripts/release-version.mjs).
+          PKG_TARGET="${{ steps.check_version.outputs.pkg_target }}"
+          if [ -n "$PKG_TARGET" ]; then
             cd packages/cache-handler
-            npm version $NEW_PKG_VERSION --no-git-tag-version --allow-same-version
+            npm version "$PKG_TARGET" --no-git-tag-version --allow-same-version
             cd ../..
-            echo "Bumped package version to $NEW_PKG_VERSION"
+            echo "Bumped package version to $PKG_TARGET"
           else
-            echo "Package is already at $CURRENT_PKG_VERSION (ahead of Next $NEW_PKG_VERSION); not bumping"
+            echo "Package stays at ${{ steps.check_version.outputs.current_pkg_version }} (not behind Next ${{ steps.check_version.outputs.latest_version }}); not bumping"
           fi
+
+          # Never let the package's major.minor run ahead of Next's latest stable.
+          node scripts/release-version.mjs check
 
       - name: Install updated dependencies
         if: steps.check_version.outputs.needs_update == 'true' && steps.branch_check.outputs.branch_exists != 'true'
@@ -247,7 +254,7 @@ jobs:
           git commit -m "chore: update to Next.js ${{ steps.check_version.outputs.latest_version }}
 
           - Updated Next.js to ${{ steps.check_version.outputs.latest_version }}
-          - Bumped package version to ${{ steps.check_version.outputs.latest_version }}
+          - Package version: ${{ steps.check_version.outputs.pkg_target || 'unchanged' }}
           - Memory tests: ${{ steps.test_memory.outcome }}
           - Redis tests: ${{ steps.test_redis.outcome }}
 
@@ -279,7 +286,7 @@ jobs:
           PR_BODY=$(cat <<EOF
           ## Next.js ${{ steps.check_version.outputs.latest_version }} Release
 
-          📦 Package version will be bumped to **${{ steps.check_version.outputs.latest_version }}**
+          📦 Package version: **${{ steps.check_version.outputs.pkg_target || 'unchanged' }}** (Next's version, skipping any version npm has already seen; never lowered)
 
           ### Changes
           - ⬆️ Updated Next.js from ${{ steps.check_version.outputs.current_nextjs }} to ${{ steps.check_version.outputs.latest_version }}

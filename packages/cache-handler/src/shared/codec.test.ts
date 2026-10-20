@@ -164,7 +164,7 @@ describe("entry codec", () => {
     }
   });
 
-  test("rejects JSON input, as 16.5.0 stored it", () => {
+  test("rejects JSON input, as 16.4.2 stored it", () => {
     const legacy = JSON.stringify({
       value: Buffer.from("old").toString("base64"),
       tags: [],

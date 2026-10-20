@@ -4,20 +4,32 @@ This document outlines the complete process for releasing new versions of the ca
 
 ## Version Strategy
 
-We align our package versions with Next.js major.minor versions:
+The package's major.minor follows Next.js; the patch number is ours.
 
-- **Package version**: `16.0.0` aligns with Next.js `16.0.x`
-- **Peer dependency**: `"next": "~16.0.0"` pins to Next.js 16.0.x
-- **Patch versions**: Use for bug fixes and features between Next.js releases
-- **Next.js updates**: Bump package major.minor when Next.js updates
+- **Major.minor** is never ahead of Next's latest stable release (`npm view next version`). CI
+  fails a PR that sets it ahead, and the tag workflow refuses to tag one
+  (`scripts/release-version.mjs check`).
+- **Next releases are mirrored.** When Next publishes a new stable version, the daily loop bumps
+  the package to that version, patches included, unless the package is already at or past it.
+- **Our own releases** (fixes, features) are patch bumps within the current major.minor.
+- **A version npm has ever seen is never reused.** npm refuses a number that was published, even
+  after it is unpublished, and `npm view @mrjasonroy/cache-components-cache-handler time --json`
+  still lists it. The loop moves up to the next free patch; manual bumps fail if they pick one.
+- **Never lower.** The package version only goes up, so npm `latest` never moves back.
+- **An RC is graduated by hand.** While the package is on a pre-release (e.g. `16.4.3-rc.0` on
+  staging), the loop bumps nothing, so it can never publish that untested code to `latest` by
+  itself. Bump to the final version once the RC has been proven.
+- **Peer dependency**: `"next": "^16.0.0"`.
 
 ### Examples
 
-- Next.js `16.0.1` released → No package update needed (peer dep covers it)
-- Bug fix in cache handler → Bump to `16.0.1`
-- New feature in cache handler → Bump to `16.0.2`
-- Next.js `16.1.0` released → Bump package to `16.1.0`, update peer dep to `~16.1.0`
-- Next.js `17.0.0` released → Bump package to `17.0.0`, update peer dep to `~17.0.0`
+- Package `16.4.2`, our fix → `16.4.3` (or `16.4.3-rc.0` first).
+- Package `16.4.3`, Next `16.4.4` released → the loop bumps the package to `16.4.4`.
+- Package `16.4.4`, Next `16.5.0` released → `16.5.2`: `16.5.0` and `16.5.1` were published by
+  mistake in October 2026 and withdrawn, so they are burned. Next `16.5.1` and `16.5.2` then need no
+  bump; Next `16.5.3` → `16.5.3`.
+- Package `16.4.3`, our feature → `16.4.4`, never `16.5.0` while Next's latest is 16.4.x.
+- Next.js `17.0.0` released → package `17.0.0` (if unused).
 
 ## Automated Workflows
 
@@ -26,8 +38,11 @@ We align our package versions with Next.js major.minor versions:
 The `nextjs-version-check.yml` workflow runs daily to check for new Next.js releases:
 
 - **Trigger**: Daily at 00:00 UTC + manual
-- **Action**: Detects new Next.js major.minor versions
-- **Result**: Creates PR with updated versions and test results
+- **Action**: Detects any new Next.js stable version (major, minor or patch) and picks the package
+  version with `scripts/release-version.mjs target` (Next's version, skipping burned numbers,
+  never lower)
+- **Result**: Creates an auto-merging PR with updated versions and test results; its merge tags
+  and publishes the release
 - **Location**: `.github/workflows/nextjs-version-check.yml`
 
 ### Next.js Canary Testing (Daily)
@@ -82,7 +97,8 @@ Before releasing, ensure GitHub Actions CI is passing:
 
 ### 3. Version Updates
 
-Update package versions to match Next.js:
+Update package versions to match Next.js. `node scripts/release-version.mjs target <next-version>`
+prints the number to use (empty when no bump is needed), skipping versions npm has already seen:
 
 ```bash
 # For Next.js 16.1.0 release, update to 16.1.0
@@ -338,8 +354,7 @@ npm version patch --no-git-tag-version
 **If you catch it within 72 hours**:
 ```bash
 npm unpublish @mrjasonroy/cache-components-cache-handler@16.1.0
-# Fix the issue
-# Republish the same version
+# Fix the issue, then release the next free patch: npm never accepts 16.1.0 again
 ```
 
 **If it's been > 72 hours**:
@@ -360,15 +375,16 @@ npm unpublish @mrjasonroy/cache-components-cache-handler@16.1.0
 npm unpublish @mrjasonroy/cache-components-cache-handler-redis@16.1.0
 ```
 
-Then fix and republish:
+Then fix and release the next patch (an unpublished version number can never be reused):
 
 ```bash
 # Fix the issue
 pnpm build
 pnpm test
 
-# Republish
+# Release the next patch
 cd packages/cache-handler
+npm version patch --no-git-tag-version
 npm publish --access public
 
 cd ../cache-handler-redis
@@ -385,7 +401,7 @@ npm deprecate @mrjasonroy/cache-components-cache-handler@16.1.0 "Critical bug - 
 
 ## Release Frequency
 
-- **Next.js major.minor releases**: Update and release within 1-2 days
+- **Next.js releases**: The daily loop mirrors each stable release (see Version Strategy)
 - **Bug fixes**: Release as patch versions as needed
 - **Features**: Release as patch versions (e.g., 16.0.1, 16.0.2) between Next.js releases
 - **Automated PRs**: Review and merge automated Next.js update PRs from the version check workflow

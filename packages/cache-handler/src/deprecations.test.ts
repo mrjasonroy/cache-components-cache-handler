@@ -1,6 +1,6 @@
 /**
- * The 16.5 data cache stack, the Next 14 handlers' types and `RedisCacheHandler.close()` are
- * deprecated in 16.6: each keeps
+ * The legacy data cache stack, the Next 14 handlers' types and `RedisCacheHandler.close()` are
+ * deprecated in 16.4.3: each keeps
  * working in 16.x, and its JSDoc says so and names the replacement, so editors strike it through.
  */
 
