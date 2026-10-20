@@ -35,7 +35,8 @@ Returns `nextConfig` plus:
 | `cacheHandlers.default` | `handlers.default`; else the remote handler with `useCache: "redis"`; else the built-in local handler. |
 | `cacheMaxMemorySize` | `0`, unless `nextConfig` sets it: then that value is kept, with a warning if it is not `0`. Omitted with `pages: false`. |
 
-Throws if `nextConfig` already sets `cacheHandler` or `cacheHandlers`. A config function is wrapped
+Throws if `nextConfig` already sets `cacheHandlers`, or `cacheHandler` unless `pages: false`
+(then yours is kept). A config function is wrapped
 in an async one that applies the same settings to its result.
 
 The built-in handlers read the [environment](../README.md#environment-variables) at runtime.
@@ -60,7 +61,7 @@ interface CacheOptions {
    * through a proxy; 3 timeouts in a row → memory for 2 s. @default 1000
    */
   commandTimeout?: number;
-  /** @default CACHE_DEBUG === "1" */
+  /** @default CACHE_DEBUG is `1` or `true` */
   debug?: boolean;
 }
 ```
@@ -103,6 +104,9 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 |---|---|---|
 | `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
+| `connectTimeout` | `2000` (`10000` for the ElastiCache host form) | Connect timeout in ms for the connection the package opens. |
+| `socketTimeout` | `2000` | Drop the connection the package opens when a pending command gets no reply for this many ms. |
+| `maxConsecutiveTimeouts` | `3` | Timeouts in a row that drop the package's connection, or send the handlers to memory for 2 s with a `client` you pass in. |
 | `redis` | — | The 16.5 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 

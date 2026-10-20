@@ -29,8 +29,8 @@ export default withCache({
 
 That one call sets `cacheHandler` (pages, route handlers, cached `fetch`), `cacheHandlers.default`
 (`"use cache"`), `cacheHandlers.remote` (`"use cache: remote"`) and `cacheMaxMemorySize: 0`. Don't
-set any of those yourself: `withCache` throws if the config already has `cacheHandler` or
-`cacheHandlers`. The README's [What goes where](../README.md#what-goes-where) table says what each
+set any of those yourself: `withCache` throws if the config already has `cacheHandlers`, or
+`cacheHandler` unless you pass `pages: false`. The README's [What goes where](../README.md#what-goes-where) table says what each
 one does.
 
 The handler files ship inside the package, so there are no handler files to write. For your own
@@ -73,9 +73,9 @@ see [Redis Cluster](./redis.md#redis-cluster).
 | Variable | Default | Meaning |
 |---|---|---|
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
-| `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
-| `CACHE_DEBUG` | unset | `1` logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
-| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. |
+| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. |
+| `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
+| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
 
 The full table is in the README under [Environment variables](../README.md#environment-variables).
 

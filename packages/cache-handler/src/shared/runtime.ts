@@ -74,7 +74,7 @@ export interface CacheOptions {
 
   /**
    * Log hits, misses and state changes. Never logs the URL.
-   * @default process.env.CACHE_DEBUG === "1"
+   * @default `CACHE_DEBUG` is `1` or `true`
    */
   debug?: boolean;
 }

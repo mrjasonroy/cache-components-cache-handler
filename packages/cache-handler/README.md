@@ -57,7 +57,11 @@ What you get without configuring anything:
 - **Fast failure.** A command times out after 1 s. A connection that times out 3 times in a row
   is dropped and redialled. At startup a handler waits at most 500 ms for the first connection.
 - **A compact binary format.** Entries are stored as raw bytes rather than base64 JSON: about 25%
-  less Redis memory and network, and a page shell `get` about 40% faster.
+  less Redis memory and network, and a page shell `get` about 40% faster. Entries of 16 KB and
+  more are also Brotli-compressed, usually 5 to 15 times smaller (`CACHE_COMPRESSION`).
+- **Prerendered pages survive a restart.** On a miss, prerendered pages and route handlers are
+  served from the build output in `.next` until their revalidate window runs out
+  ([details](#pages-and-route-handlers)).
 
 ## Configuration
 
@@ -69,11 +73,12 @@ at. Runtime settings come from the [environment](#environment-variables).
 | Option | Default | What it does |
 |---|---|---|
 | `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
-| `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. `false` leaves both unset. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. |
+| `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. `false` leaves `cacheHandler` and `cacheMaxMemorySize` as your config has them. |
 | `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](#custom-handlers). Relative paths resolve against `process.cwd()`. |
 
-`withCache` throws if the config already sets `cacheHandler` or `cacheHandlers`, because two
-configs fighting over the cache is always a bug. Use `handlers` instead.
+`withCache` throws if the config already sets `cacheHandlers`, or `cacheHandler` unless
+`pages: false`, because two configs fighting over the cache is always a bug. Use `handlers`
+instead.
 
 `nextConfig` can also be a config function, `(phase, { defaultConfig }) => config`, sync or
 async. `withCache` then returns an async function that applies the same settings to its result.
@@ -100,14 +105,14 @@ from the environment, the same under `next start`, standalone and Docker.
 | `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch. |
-| `CACHE_DEBUG` | unset | `1` logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
-| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. |
+| `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
+| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
 
 There are no tuning variables for timeouts or TTLs: the defaults above are the product. If you
 need different ones, write a [custom handler file](#custom-handlers).
 
-Redis is used whenever a URL or endpoint is set, except during `next build` and with
-`CACHE_REDIS=off`. If a dev `.env` file carries `REDIS_URL`, either remove it there or set
+Redis is used whenever a URL or endpoint is set, except during `next build`, on the edge runtime
+and with `CACHE_REDIS=off`. If a dev `.env` file carries `REDIS_URL`, either remove it there or set
 `CACHE_REDIS=off`.
 
 ## Distributed tag coordination for `"use cache"`
@@ -184,11 +189,14 @@ The page handler implements Next 16's singular `cacheHandler` contract:
   tag or path revalidated since the build wins, and so does a `flushCache`), then writes them to
   Redis unless an entry is already there. A route with a revalidate period is served from the
   build output only within `1.5 × revalidate` (capped at `expire`) of the build, as long as a
-  render of it would be kept; after that a miss renders it. While Redis is down they are not
-  served, because their tags cannot be checked. The build time is not the files' mtime: the page
-  handler writes `cache-handler-build.json` into `.next/server` during `next build`, so ship that
-  file with the build. Without it the build output is served only for `revalidate: false` routes
-  none of whose tags was ever revalidated.
+  render of it would be kept; after that a miss renders it. A dynamic route's prerendered fallback
+  shell (partial prerendering) is served the same way, with the route's `fallbackRevalidate` and
+  `fallbackExpire`. The build output is read from disk, so this holds after a restart or on a
+  fresh instance too. While Redis is down it is not served, because its tags cannot be checked.
+  The build time is not the files' mtime: the page handler writes `cache-handler-build.json` into
+  `.next/server` when static generation starts, so ship that file with the build. Without it the
+  build output is served only for `revalidate: false` routes none of whose tags was ever
+  revalidated.
 - **Edge middleware.** Next bundles this handler into the middleware too. On the edge runtime it
   imports without touching Node built-ins and does nothing: every read is a miss.
 - Cached `fetch` entries share the `page:` key namespace.
@@ -319,7 +327,8 @@ again. Your other uses of the client are unaffected, so set its own `commandTime
 `retryStrategy`) for those.
 
 All commands share one connection, so a large value on a slow link delays the commands queued
-behind it. At 1000 ms, a 5 MB page needs about 40 Mbit/s; on a slower link (cross-region, or an
+behind it. At 1000 ms, a 5 MB entry needs about 40 Mbit/s (compression usually makes a page
+entry much smaller than the page); on a slower link (cross-region, or an
 ElastiCache node out of network burst credits) raise `commandTimeout`, or 3 timeouts in a row
 send the handlers to memory.
 
@@ -332,11 +341,15 @@ All three factories take `CacheOptions`:
 | `keyPrefix` | `CACHE_KEY_PREFIX` / `nextjs:` | Prefix for every key. |
 | `memoryFallback` | `true` | Serve from memory (each entry at most 60 s) while Redis is down. `false` → miss instead. |
 | `commandTimeout` | `1000` | Per-command timeout in ms. Also bounds the package's commands on a `client` you pass in. |
-| `debug` | `CACHE_DEBUG=1` | Log hits, misses and state changes. |
+| `debug` | `CACHE_DEBUG` | Log hits, misses and state changes. |
 
 `createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
 `BUILD_ID`), the build that scopes entry keys. `createRedisCacheHandler` also takes `defaultTTL`,
 in seconds, for entries with neither `revalidate` nor `expire` (default and maximum 365 days).
+`createCacheHandler` and `createRedisCacheHandler` also take `connectTimeout` (ms, default 2000;
+10000 for the ElastiCache host form) and `socketTimeout` (ms, default 2000), which apply only to
+a connection the package opens, and `maxConsecutiveTimeouts` (default 3), the timeouts in a row
+that drop a connection or, for a `client` you pass in, send the handlers to memory.
 
 `CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
 
@@ -390,6 +403,11 @@ Redis command volume, not latency, is what grows with traffic:
 The tag read shares the entry's round trip, so page latency is unchanged; size Redis for the
 command rate. Nothing runs `HGETALL`: an `HMGET` costs in proportion to the tags it reads, not to
 the size of the hash. 100,000 tags take about 23 MB.
+
+**Memory and network.** Entries of 16 KB and more are stored Brotli-compressed (quality 4, off the
+event loop), usually 5 to 15 times smaller: a ~200 KB page entry takes about 14 KB in Redis. Size
+Redis memory for the compressed entries; `CACHE_DEBUG` logs both sizes for page and remote entries
+(`bytes`, `encodedBytes`).
 
 **Hot key.** One shard serves the tag hash, on a Cluster too. At 2,000 page reads/s that is about
 2% of one core; it starts to matter around 50,000 page reads/s, or with hundreds of tags per page.

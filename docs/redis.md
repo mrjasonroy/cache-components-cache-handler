@@ -16,6 +16,7 @@ Redis, and what operators see in it.
 | `REDIS_URL` / `VALKEY_URL` | `redis://` or `rediss://` (TLS) URL. Takes precedence over the ElastiCache form. |
 | `REDIS_PASSWORD` | Password when the URL has none. |
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | Host form. Port `6379`, TLS on unless `ELASTICACHE_TLS=false`. |
+| `CACHE_REDIS` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. |
 
 URL examples:
 
@@ -135,7 +136,7 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 `<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). Every entry key has a TTL; the two tag
 keys have none. Run Redis with `maxmemory-policy noeviction` or a `volatile-*` policy
 (`volatile-lru`), never `allkeys-lru`: an evicted tag hash brings every invalidated entry back. Entries are binary and not human-readable.
-`CACHE_DEBUG=1` on the app logs what is read and written, with each value's size: `bytes` (the value; the encoded entry for pages) and, for `"use cache: remote"`, `encodedBytes` (as stored in Redis).
+`CACHE_DEBUG=1` (or `true`) on the app logs what is read and written, with each value's size: `bytes` (the value; the uncompressed entry for pages) and, for pages and `"use cache: remote"`, `encodedBytes` (as stored in Redis).
 
 ### Entry format and compression
 
@@ -146,6 +147,8 @@ bytes of every Buffer in the value (no base64); bytes repeated within an entry, 
 length (uint32, big-endian) · the compressed bytes.
 
 Entries of 16 KB and more are written as version 3, unless compressing would not shrink them.
+Entries over 64 MB are always written as version 2, and a version 3 entry stating a length over
+64 MB is a miss, so a corrupt entry cannot make a read inflate hundreds of megabytes.
 `CACHE_COMPRESSION=off` writes version 2 only. Readers read both versions whatever the setting,
 and an entry they cannot read (16.5's JSON, a future version or codec, a corrupt or truncated
 entry) is a miss.
