@@ -33,8 +33,13 @@ export const COMPRESSION_THRESHOLD_BYTES = 16 * 1024;
 const CODEC_BROTLI = 1;
 const BROTLI_QUALITY = 4;
 const COMPRESSED_PREAMBLE_LENGTH = MAGIC.length + 1 + 1 + 4;
-// Redis's largest string; a stored length above it is corrupt.
-const MAX_ENTRY_BYTES = 512 * 1024 * 1024;
+/**
+ * The largest entry stored compressed, in uncompressed bytes, and the size of the page memory store
+ * (`runtime.ts`), which no larger entry fits in. A v3 entry stating more is a miss, so a corrupt or
+ * hostile one cannot make a read inflate up to Redis's 512 MB string limit; a larger entry is
+ * stored as v2, which is read at the size Redis holds.
+ */
+export const MAX_STORED_ENTRY_BYTES = 64 * 1024 * 1024;
 
 const BLOB_MARKER = "__nch_b";
 const MAP_MARKER = "__nch_m";
@@ -221,14 +226,21 @@ type Zlib = typeof import("node:zlib");
 /**
  * Encode `value` as it is stored in Redis: the {@link encodeEntry} v2 bytes, compressed with Brotli
  * (quality 4, off the event loop) into a v3 entry when they are 16 KB or more. Stays v2 with
- * `CACHE_COMPRESSION=off`, and when compressing would not make the entry smaller.
+ * `CACHE_COMPRESSION=off`, above {@link MAX_STORED_ENTRY_BYTES}, and when compressing would not
+ * make the entry smaller.
  */
 export async function encodeStored(
   value: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<Buffer> {
   const entry = encodeEntry(value);
-  if (entry.length < COMPRESSION_THRESHOLD_BYTES || !isCompressionEnabled(env)) return entry;
+  if (
+    entry.length < COMPRESSION_THRESHOLD_BYTES ||
+    entry.length > MAX_STORED_ENTRY_BYTES ||
+    !isCompressionEnabled(env)
+  ) {
+    return entry;
+  }
 
   const zlib = nodeBuiltin<Zlib>("node:zlib");
   const compressed = await new Promise<Buffer>((resolve, reject) => {
@@ -268,7 +280,7 @@ export async function decodeStored<T = unknown>(
   if (bytes.length <= COMPRESSED_PREAMBLE_LENGTH) return undefined;
   if (bytes.readUInt8(MAGIC.length + 1) !== CODEC_BROTLI) return undefined;
   const length = bytes.readUInt32BE(MAGIC.length + 2);
-  if (length < PREAMBLE_LENGTH || length > MAX_ENTRY_BYTES) return undefined;
+  if (length < PREAMBLE_LENGTH || length > MAX_STORED_ENTRY_BYTES) return undefined;
 
   const zlib = nodeBuiltin<Zlib>("node:zlib");
   const entry = await new Promise<Buffer | undefined>((resolve) => {

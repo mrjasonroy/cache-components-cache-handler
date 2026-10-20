@@ -133,8 +133,10 @@ export class FakeRedis extends EventEmitter {
     return 1;
   }
 
-  async hset(key: string, fields: Record<string, string>): Promise<number> {
+  async hset(key: string, ...args: [Record<string, string>] | [string, string]): Promise<number> {
     this.run("hset");
+    // ioredis takes the fields as an object or as one field and value.
+    const fields = typeof args[0] === "string" ? { [args[0]]: args[1] as string } : args[0];
     // As Redis: `HSET key` with no field is an error.
     if (Object.keys(fields).length === 0) {
       throw new Error("ERR wrong number of arguments for 'hset' command");

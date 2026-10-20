@@ -2,7 +2,7 @@
  * A `"use cache"` entry with its value read into bytes, as the remote and local handlers keep it.
  */
 
-import { nowMs } from "../shared/clock.js";
+import { fromNextClock, nowMs, toNextClock } from "../shared/clock.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { bufferToStream, streamToBuffer } from "../shared/runtime.js";
 import type { TagStore } from "../shared/tag-store.js";
@@ -44,7 +44,8 @@ export async function readPendingEntry(
       value,
       tags: entry.tags,
       stale: entry.stale,
-      timestamp: entry.timestamp,
+      // Next stamps it on its performance clock; stored as wall time (../shared/clock.ts).
+      timestamp: fromNextClock(entry.timestamp),
       expire: entry.expire,
       revalidate: entry.revalidate,
     };
@@ -81,7 +82,7 @@ export function toDataCacheEntry(
     value: bufferToStream(stored.value),
     tags: stored.tags,
     stale: stored.stale,
-    timestamp: stored.timestamp,
+    timestamp: toNextClock(stored.timestamp),
     expire: stored.expire,
     revalidate: state === "stale" ? -1 : stored.revalidate,
   };

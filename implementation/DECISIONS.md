@@ -90,14 +90,35 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
   the handlers inside the prerender's async context (`use-cache/use-cache-wrapper.js`
   `saveToCacheHandler`), so a handler reading `Date.now()` aborted it, silently: a route handler
   with two sequential `"use cache"` calls was built as dynamic (ISSUE-4). Next's own handlers read
-  `performance.timeOrigin + performance.now()` (`lib/cache-handlers/default.js`), and so does
-  `nowMs()`, rounded to whole ms because the times are stored in Redis as integers. Caveat: tag
-  times shared across instances are on this clock too. It is the clock Next stamps
-  `entry.timestamp` with, so tag/entry comparisons are consistent, but it can drift from wall time
-  in a long-running process (the clock-skew limit in ISSUE-2 covers the difference between
-  instances). A static test (`shared/clock.test.ts`) fails on any `Date` read outside
-  `clock.ts`, tests and `testing/`. Tests fake the time with `vi.setSystemTime`: the Vitest setup
-  points `nowMs()` at `Date.now()` (`testing/clock-setup.ts`).
+  `performance.timeOrigin + performance.now()` (`lib/cache-handlers/default.js`), but only ever
+  compare times within one process. Ours are compared across instances through Redis (tag
+  records, flush barriers, stored entries), and the performance clock is monotonic: it drifts
+  from wall time (NTP slewing, a suspended VM, days of uptime), so two pods could disagree by
+  seconds about whether a revalidation came after an entry. So `nowMs()` stays wall time without
+  reading `Date` in a prerender: it is the performance clock plus `offset = Date.now() −
+  performance clock`, re-measured on every call where reading `Date` is safe and reused where it
+  is not. Safe means no work unit, or one for which Next's `io()` does nothing, read from Next's
+  `workUnitAsyncStorage` (the shared `.external` module, loaded lazily with `require`, so the
+  edge-safe import graph is unchanged; on the edge runtime `Date` is never read). Design (b),
+  re-anchoring, was chosen over (a), the performance clock only where a prerender can reach,
+  because every handler call can be reached from a prerender, so (a) would leave every stored
+  time on the drifting clock. A pod that never gets a safe call keeps its last offset (0 before
+  any: the performance clock, as before). Rounded to whole ms, stored in Redis as integers.
+- **Next's own timestamps are converted at the boundary.** Next stamps a `"use cache"` entry's
+  `timestamp` with its performance clock, compares `getExpiration`'s result with it, and ages
+  page entries by comparing `lastModified` with that clock. The handlers convert with
+  `fromNextClock` on the way in (`stored-entry.ts` `readPendingEntry`, the Redis data cache's
+  serialize and TTL) and `toNextClock` on the way out (returned entries, `getExpiration`, the
+  page and ISR memory handlers' `lastModified`), so every stored time is wall time and each pod
+  converts with its own offset. Without the conversion a comparison between a writer's
+  `entry.timestamp` and another pod's tag record was off by the writer's drift; with it only
+  wall-clock skew between pods remains, which the clock-skew limit in ISSUE-2 covers.
+  `createMemoryDataCacheHandler` is in-process only and stays on Next's clock (`nextClockMs()`).
+- A static test (`shared/clock.test.ts`) fails on any `Date` read outside `clock.ts`, tests and
+  `testing/`. `data-cache/cross-pod-clock.test.ts` runs two instances (separate module graphs,
+  shared Redis) whose performance clocks are 5 s off wall time in opposite directions. Tests fake
+  the time with `vi.setSystemTime`: the Vitest setup points every clock at `Date.now()`
+  (`testing/clock-setup.ts`).
 - `NEXT_PHASE=phase-production-build` is set before the build workers start (`build/index.js`),
   so the build phase never connects to Redis.
 - `BUILD_ID` sits next to `serverDistDir`; a standalone `server.js` sets
@@ -301,7 +322,10 @@ without `-p` moves it forward past revalidations made before the deploy, and rep
 set it to 1970. During `next build` (`NEXT_PHASE=phase-production-build`) the page handler writes
 `<distDir>/server/cache-handler-build.json` = `{ buildTime, buildId }` the first time it is
 constructed once `BUILD_ID` exists; Next cleans `distDir` before compiling and writes `BUILD_ID`
-before static generation, so the stamp predates every prerender of that build. A stamp naming
+before static generation, so the stamp predates every prerender of that build. The earlier
+construction, while collecting page data, writes `{ buildTime }` without the ID; that time is
+replaced, not kept, when the ID is added, because a compile-to-prerender gap longer than
+`1.5 × revalidate` would otherwise ship output already past its window. A stamp naming
 another build is replaced at build time and ignored at runtime. Without a valid stamp the age is
 unknown, so build output is served only for a `revalidate: false` route none of whose tags (or
 flush barriers) has any record, with `lastModified` the read time. Next writes nothing with a

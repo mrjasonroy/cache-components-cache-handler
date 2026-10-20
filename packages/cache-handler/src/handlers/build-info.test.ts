@@ -80,11 +80,12 @@ describe("build stamp", () => {
     expect(stamp()).toEqual({ buildTime: expect.any(Number) });
 
     writeFileSync(join(distDir, "BUILD_ID"), "b1");
+    const generating = Date.now();
     new RedisCacheHandler({ serverDistDir });
     const written = stamp() as { buildTime: number; buildId: string };
     expect(written.buildId).toBe("b1");
-    // The earliest time is kept: it precedes every prerender.
-    expect(written.buildTime).toBeGreaterThanOrEqual(collecting);
+    // Stamped again for static generation: after collecting, before every prerender.
+    expect(written.buildTime).toBeGreaterThanOrEqual(Math.max(collecting, generating));
     expect(written.buildTime).toBeLessThanOrEqual(Date.now());
 
     resetBuildInfoForTests();
@@ -99,7 +100,19 @@ describe("build stamp", () => {
     writeBuildStamp(serverDistDir, 2000);
     writeFileSync(join(distDir, "BUILD_ID"), "new");
     writeBuildStamp(serverDistDir, 3000);
-    expect(stamp()).toEqual({ buildTime: 2000, buildId: "new" });
+    expect(stamp()).toEqual({ buildTime: 3000, buildId: "new" });
+  });
+
+  test("static generation re-stamps the time; later constructions keep it", async () => {
+    // Collecting page data, before BUILD_ID: a long compile-to-prerender gap must not age the
+    // build output before it is rendered.
+    writeBuildStamp(serverDistDir, 1000);
+    await buildId("b1");
+    writeBuildStamp(serverDistDir, 5000);
+    expect(stamp()).toEqual({ buildTime: 5000, buildId: "b1" });
+    // The build's other workers start static generation later: the earliest time is kept.
+    writeBuildStamp(serverDistDir, 6000);
+    expect(stamp()).toEqual({ buildTime: 5000, buildId: "b1" });
   });
 
   test("readBuildTime: the stamp's time when it names this build, else undefined", async () => {

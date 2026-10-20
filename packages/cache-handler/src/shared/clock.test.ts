@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, test } from "vitest";
-import { nowMs, setClockForTests } from "./clock.js";
+import { fromNextClock, nowMs, setClockForTests, toNextClock } from "./clock.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -16,15 +16,30 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("clock", () => {
-  afterEach(() => setClockForTests(() => Date.now()));
+  afterEach(() => {
+    Reflect.deleteProperty(performance, "timeOrigin");
+    setClockForTests(() => Date.now());
+  });
 
-  test("reads the performance clock, in whole milliseconds", () => {
+  test("tracks wall time in whole milliseconds, though the performance clock is 5 s off", () => {
     setClockForTests(undefined);
-    const before = Math.floor(performance.timeOrigin + performance.now());
-    const now = nowMs();
-    expect(Number.isInteger(now)).toBe(true);
-    expect(now).toBeGreaterThanOrEqual(before);
-    expect(now).toBeLessThanOrEqual(Math.ceil(performance.timeOrigin + performance.now()));
+    for (const skew of [5_000, -5_000]) {
+      Object.defineProperty(performance, "timeOrigin", {
+        value: performance.timeOrigin + skew,
+        configurable: true,
+      });
+      const before = Date.now();
+      const now = nowMs();
+      expect(Number.isInteger(now)).toBe(true);
+      expect(now).toBeGreaterThanOrEqual(before - 1);
+      expect(now).toBeLessThanOrEqual(Date.now() + 1);
+      // Next's clock is the skewed one.
+      expect(
+        Math.abs(toNextClock(now) - (performance.timeOrigin + performance.now())),
+      ).toBeLessThan(2);
+      expect(fromNextClock(toNextClock(now))).toBe(now);
+      Reflect.deleteProperty(performance, "timeOrigin");
+    }
   });
 
   // Next aborts a prerender that reads the time through `Date` (see clock.ts).

@@ -133,5 +133,6 @@ Reproduction (unit, `src/data-cache/prerender-clock.test.ts`): load Next's
 page handler (with and without build output) and the ISR memory and composite handlers all
 aborted it; only `createMemoryDataCacheHandler` (already on the performance clock) did not.
 
-Fix: every handler path reads `nowMs()` = `performance.timeOrigin + performance.now()`, as Next's
-own handlers do; `shared/clock.test.ts` keeps `Date` reads out of the source.
+Fix: every handler path reads `nowMs()`, wall time measured on the performance clock and
+re-anchored to `Date` only where reading it cannot abort a prerender, and converts Next's own
+timestamps at the boundary (DEC-3); `shared/clock.test.ts` keeps `Date` reads out of the source.

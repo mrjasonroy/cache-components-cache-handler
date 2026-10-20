@@ -10,8 +10,9 @@
  * compiles, then constructs the handler while collecting page data, writes `BUILD_ID`, and
  * constructs it again for static generation in the same workers (next@16.4.2
  * next/dist/build/index.js: `clean`, `isPageStatic`, `writeBuildId`, `static-generation`). The
- * first construction stamps the time, a later one adds the build ID (see
- * {@link writeBuildStamp}), so the stamp names this build and predates every page it renders.
+ * first construction stamps the time, the first one after `BUILD_ID` adds the build ID (see
+ * {@link writeBuildStamp}) and stamps the time again as static generation starts, so the stamp
+ * names this build and predates every page it renders.
  *
  * **Lifetime.** A route with a revalidate period keeps its build output only as long as a render
  * of it is kept: `1.5 × revalidate`, capped at `expire`, from the build time. After that the
@@ -126,9 +127,12 @@ function writeStamp(file: string, stamp: Partial<BuildStamp>): void {
  *
  * next@16.4.2 constructs it first while collecting page data, before `BUILD_ID` exists: the first
  * of those writes `{ buildTime }` (`wx`, so the build's other workers keep it). Static generation
- * constructs it again once `BUILD_ID` is written, and the build ID is added, keeping that time,
- * which precedes every prerender. A stamp naming another build than the `BUILD_ID` on disk was
- * left by an earlier build (`cleanDistDir: false`) and is replaced.
+ * constructs it again once `BUILD_ID` is written: the first construction there stamps the time
+ * again, with the build ID, and later ones keep it, so the time precedes every prerender but not
+ * by the compile-to-prerender gap (which would age the output past its window before it ships).
+ * Two workers starting at once may each write; the later time wins, a few ms apart. A stamp
+ * naming another build than the `BUILD_ID` on disk was left by an earlier build
+ * (`cleanDistDir: false`) and is replaced.
  */
 export function writeBuildStamp(serverDistDir: string, now: number = nowMs()): void {
   const file = path().join(serverDistDir, BUILD_STAMP_FILE);
@@ -145,8 +149,8 @@ export function writeBuildStamp(serverDistDir: string, now: number = nowMs()): v
     const existing = readJson<Partial<BuildStamp>>(file);
     if (existing?.buildId === buildId && typeof existing?.buildTime === "number") return;
     if (existing?.buildId === undefined && typeof existing?.buildTime === "number") {
-      // This build's stamp, written before BUILD_ID existed.
-      if (buildId) writeStamp(file, { buildTime: existing.buildTime, buildId });
+      // This build's stamp, written before BUILD_ID existed: static generation starts now.
+      if (buildId) writeStamp(file, fresh);
       return;
     }
     writeStamp(file, fresh);

@@ -18,7 +18,7 @@
  */
 
 import { getBuildId } from "../shared/build-id.js";
-import { nowMs } from "../shared/clock.js";
+import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored } from "../shared/codec.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { dataKey } from "../shared/keys.js";
@@ -194,7 +194,9 @@ export function createRemoteCacheHandler(
     },
 
     async getExpiration(tagList) {
-      return tags.getExpiration(tagList);
+      // Next compares it with an entry's `timestamp`, on its own clock.
+      const expiration = tags.getExpiration(tagList);
+      return expiration > 0 ? toNextClock(expiration) : expiration;
     },
 
     async updateTags(tagList, durations) {

@@ -1,7 +1,7 @@
 import { isImplicitTag } from "../helpers/is-implicit-tag.js";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
 import { jsonReplacer } from "../helpers/serialization.js";
-import { nowMs } from "../shared/clock.js";
+import { nowMs, toNextClock } from "../shared/clock.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -103,7 +103,8 @@ export class MemoryCacheHandler implements CacheHandler {
     // Return the cache handler result with value and metadata
     return {
       value: entry.value,
-      lastModified: entry.lastModified,
+      // Stored as wall time; Next ages it on its own clock.
+      lastModified: toNextClock(entry.lastModified),
       age: nowMs() - entry.lastModified,
     };
   }

@@ -20,7 +20,7 @@
  * Without Redis it is a plain memory handler.
  */
 
-import { nowMs } from "../shared/clock.js";
+import { nowMs, toNextClock } from "../shared/clock.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { type CacheOptions, createDebugLog, getCacheRuntime } from "../shared/runtime.js";
@@ -95,7 +95,9 @@ export function createLocalCacheHandler(options: LocalCacheHandlerOptions = {}):
     },
 
     async getExpiration(tagList) {
-      return tags.getExpiration(tagList);
+      // Next compares it with an entry's `timestamp`, on its own clock.
+      const expiration = tags.getExpiration(tagList);
+      return expiration > 0 ? toNextClock(expiration) : expiration;
     },
 
     async updateTags(tagList, durations) {

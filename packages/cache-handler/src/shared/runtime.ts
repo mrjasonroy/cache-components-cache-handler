@@ -7,6 +7,7 @@
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { type ErrorReporter, createErrorReporter } from "../data-cache/error-reporter.js";
+import { MAX_STORED_ENTRY_BYTES } from "./codec.js";
 import {
   type RedisConnection,
   type RedisConnectionOptions,
@@ -204,8 +205,8 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
   if (existing) return existing;
 
   const stores: RuntimeStores = {
-    page: new MemoryStore({ maxBytes: 64 * 1024 * 1024 }),
-    pageFallback: new MemoryStore({ maxBytes: 64 * 1024 * 1024 }),
+    page: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
+    pageFallback: new MemoryStore({ maxBytes: MAX_STORED_ENTRY_BYTES }),
     data: new MemoryStore(),
     dataFallback: new MemoryStore(),
     local: new MemoryStore({ maxEntries: 10_000 }),

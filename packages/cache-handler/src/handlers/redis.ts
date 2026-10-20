@@ -37,7 +37,7 @@
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
-import { nowMs } from "../shared/clock.js";
+import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
 import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
 import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
@@ -483,6 +483,8 @@ export class RedisCacheHandler {
       );
     }
 
+    // Stored as wall time (Redis is shared); Next ages it on its own clock.
+    lastModified = toNextClock(lastModified);
     return entry.cacheControl
       ? { value: entry.value, lastModified, cacheControl: entry.cacheControl }
       : { value: entry.value, lastModified };

@@ -23,7 +23,7 @@
  *   cluster mode work (no cross-slot CROSSSLOT errors).
  */
 
-import { nowMs } from "../shared/clock.js";
+import { fromNextClock, nowMs, toNextClock } from "../shared/clock.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
@@ -238,12 +238,13 @@ export function createRedisDataCacheHandler(
 
   /**
    * Seconds the entry should stay in Redis: the time left until it expires,
-   * measured from its creation timestamp and capped at `tagTTL`.
+   * measured from its creation timestamp and capped at `tagTTL`. `entry` is Next's, so its
+   * `timestamp` is on Next's clock.
    */
   function getEntryTTL(entry: DataCacheEntry): number {
     const expire = entry.expire >= INFINITE_CACHE ? defaultTTL : entry.expire;
     const lifetime = Math.min(expire, tagTTL);
-    return Math.ceil((entry.timestamp + lifetime * 1000 - nowMs()) / 1000);
+    return Math.ceil((fromNextClock(entry.timestamp) + lifetime * 1000 - nowMs()) / 1000);
   }
 
   /**
@@ -256,14 +257,16 @@ export function createRedisDataCacheHandler(
       value: buffer.toString("base64"),
       tags: entry.tags,
       stale: entry.stale,
-      timestamp: entry.timestamp,
+      // Stored as wall time, so instances compare it with tag records on one clock.
+      timestamp: fromNextClock(entry.timestamp),
       expire: entry.expire,
       revalidate: entry.revalidate,
     };
   }
 
   /**
-   * Deserialize cache entry from Redis. Every call builds a new value stream.
+   * Deserialize cache entry from Redis, `timestamp` still wall time. Every call builds a new value
+   * stream.
    */
   function deserializeEntry(data: SerializedCacheEntry): DataCacheEntry {
     const buffer = Buffer.from(data.value, "base64");
@@ -385,7 +388,7 @@ export function createRedisDataCacheHandler(
           revalidate,
         });
 
-        return { ...entry, revalidate };
+        return { ...entry, timestamp: toNextClock(entry.timestamp), revalidate };
       } catch (error) {
         // Degrade to a miss so the page still renders, but make it visible.
         log?.("get", cacheKey, "error", error);
@@ -436,7 +439,8 @@ export function createRedisDataCacheHandler(
 
         log?.("getExpiration", { tags, expiration });
 
-        return expiration;
+        // Next compares it with an entry's `timestamp`, on its own clock.
+        return expiration > 0 ? toNextClock(expiration) : expiration;
       } catch (error) {
         log?.("getExpiration", "error", error);
         reportError("getExpiration", error);

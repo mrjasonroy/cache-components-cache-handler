@@ -7,7 +7,7 @@
  * are considered expired/missing.
  */
 
-import { nowMs } from "../shared/clock.js";
+import { nextClockMs } from "../shared/clock.js";
 import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
 
 export interface MemoryDataCacheHandlerOptions {
@@ -159,7 +159,7 @@ function areTagsExpired(
   timestamp: Timestamp,
   debug?: (message: string, data: unknown) => void,
 ): boolean {
-  const now = nowMs();
+  const now = nextClockMs();
 
   for (const tag of tags) {
     const entry = globalTagsManifest.get(tag);
@@ -275,7 +275,7 @@ export function createMemoryDataCacheHandler(
       }
 
       const entry = privateEntry.entry;
-      const now = nowMs();
+      const now = nextClockMs();
 
       // In-memory caches should expire after revalidate time
       if (now > entry.timestamp + entry.revalidate * 1000) {
@@ -375,7 +375,7 @@ export function createMemoryDataCacheHandler(
     },
 
     async updateTags(tags, durations) {
-      const now = nowMs();
+      const now = nextClockMs();
       debug?.("updateTags", { tags, timestamp: now, durations });
 
       for (const tag of tags) {

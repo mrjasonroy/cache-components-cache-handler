@@ -103,6 +103,28 @@ describe("handlers do not read the time through Date during a prerender", () => 
     expect(await abortsPrerender(async () => Date.now())).toBe(true);
   });
 
+  test("the clock stays on wall time inside a prerender, though the performance clock is 5 s off", async () => {
+    Object.defineProperty(performance, "timeOrigin", {
+      value: performance.timeOrigin + 5_000,
+      configurable: true,
+    });
+    try {
+      // Anchored outside the prerender, where reading Date is safe.
+      nowMs();
+      let inside = 0;
+      const before = Date.now();
+      expect(
+        await abortsPrerender(async () => {
+          inside = nowMs();
+        }),
+      ).toBe(false);
+      expect(inside).toBeGreaterThanOrEqual(before - 2);
+      expect(inside).toBeLessThanOrEqual(Date.now() + 2);
+    } finally {
+      Reflect.deleteProperty(performance, "timeOrigin");
+    }
+  });
+
   describe('"use cache" handlers', () => {
     test("the local handler without Redis", async () => {
       const handler = createLocalCacheHandler();

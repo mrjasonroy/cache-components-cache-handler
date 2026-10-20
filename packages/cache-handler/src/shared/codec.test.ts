@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { brotliCompressSync, brotliDecompressSync } from "node:zlib";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   COMPRESSED_FORMAT_VERSION,
   COMPRESSION_THRESHOLD_BYTES,
@@ -379,6 +379,32 @@ describe("entry codec", () => {
       const payload = brotliCompressSync(Buffer.from("not an entry at all"));
       notV2.writeUInt32BE(19, 5);
       await expect(decodeStored(Buffer.concat([notV2, payload]))).resolves.toBeUndefined();
+    });
+
+    test("a v3 entry stating more than 64 MB is a miss, without decompressing it", async () => {
+      const zlib = process.getBuiltinModule("node:zlib") as typeof import("node:zlib");
+      const decompress = vi.spyOn(zlib, "brotliDecompress");
+      try {
+        const stored = await encodeStored({ value: text(64 * 1024) }, on);
+        const oversized = Buffer.from(stored);
+        oversized.writeUInt32BE(64 * 1024 * 1024 + 1, 5);
+        await expect(decodeStored(oversized)).resolves.toBeUndefined();
+        expect(decompress).not.toHaveBeenCalled();
+      } finally {
+        decompress.mockRestore();
+      }
+    });
+
+    test("an entry over 64 MB is stored as v2, so no stored v3 entry is over the cap", async () => {
+      const zlib = process.getBuiltinModule("node:zlib") as typeof import("node:zlib");
+      const compress = vi.spyOn(zlib, "brotliCompress");
+      try {
+        const stored = await encodeStored({ value: Buffer.alloc(64 * 1024 * 1024) }, on);
+        expect(stored[3]).toBe(FORMAT_VERSION);
+        expect(compress).not.toHaveBeenCalled();
+      } finally {
+        compress.mockRestore();
+      }
     });
 
     test("an unknown codec byte is a miss", async () => {
