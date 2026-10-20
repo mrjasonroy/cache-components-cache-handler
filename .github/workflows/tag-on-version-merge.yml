@@ -45,6 +45,13 @@ jobs:
             echo "exists=false" >> $GITHUB_OUTPUT
           fi
 
+      # Last stop before a tag and a publish: the package's major.minor must not run ahead of
+      # Next's latest stable, and npm refuses any version it has ever seen (unpublished ones
+      # included). See docs/publishing/RELEASE.md.
+      - name: Check the version policy
+        if: steps.tag_check.outputs.exists != 'true'
+        run: node scripts/release-version.mjs check --unused
+
       - name: Create and push tag
         if: steps.tag_check.outputs.exists != 'true'
         run: |

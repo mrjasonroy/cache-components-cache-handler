@@ -36,6 +36,13 @@ jobs:
       - name: Deploy-gate report checks
         run: node --test tests/next-deploy/report.test.mjs
 
+      # The package's major.minor follows Next's (docs/publishing/RELEASE.md): a PR that sets it
+      # ahead of Next's latest stable release cannot merge.
+      - name: Version policy
+        run: |
+          node --test scripts/
+          node scripts/release-version.mjs check
+
   unit-tests:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
