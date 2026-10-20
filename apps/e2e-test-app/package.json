@@ -8,9 +8,9 @@
     "start": "next start",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "test:e2e:redis": "CACHE_HANDLER=redis playwright test",
-    "build:redis": "CACHE_HANDLER=redis next build",
-    "start:redis": "CACHE_HANDLER=redis next start",
+    "test:e2e:redis": "REDIS_URL=${REDIS_URL:-redis://localhost:6379} E2E_REDIS_CONTAINER=${E2E_REDIS_CONTAINER:-nextjs-cache-redis} playwright test",
+    "build:redis": "REDIS_URL=${REDIS_URL:-redis://localhost:6379} next build",
+    "start:redis": "REDIS_URL=${REDIS_URL:-redis://localhost:6379} next start",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -8,7 +8,8 @@
     "start": "next start",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
-    "demo": "pnpm docker:up && sleep 2 && pnpm build && pnpm start"
+    "demo": "pnpm docker:up && sleep 2 && pnpm build && pnpm start:redis",
+    "start:redis": "REDIS_URL=${REDIS_URL:-redis://localhost:6379} CACHE_KEY_PREFIX=example: CACHE_DEBUG=1 next start"
   },
   "dependencies": {
     "@mrjasonroy/cache-components-cache-handler": "workspace:*",

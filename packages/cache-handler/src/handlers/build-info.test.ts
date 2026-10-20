@@ -1,0 +1,243 @@
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { resetCacheState } from "../testing/env.js";
+import {
+  BUILD_STAMP_FILE,
+  readBuildTime,
+  readRoutePeriods,
+  resetBuildInfoForTests,
+  writeBuildStamp,
+} from "./build-info.js";
+import { RedisCacheHandler } from "./redis.js";
+
+let distDir: string;
+let serverDistDir: string;
+
+function stamp(): unknown {
+  return JSON.parse(readFileSync(join(serverDistDir, BUILD_STAMP_FILE), "utf8"));
+}
+
+/** `next build` wrote BUILD_ID; a new process reads it. */
+async function buildId(id: string): Promise<void> {
+  writeFileSync(join(distDir, "BUILD_ID"), id);
+  await resetCacheState();
+  new RedisCacheHandler({ serverDistDir });
+}
+
+describe("build stamp", () => {
+  beforeEach(async () => {
+    await resetCacheState();
+    distDir = mkdtempSync(join(tmpdir(), "cch-info-"));
+    serverDistDir = join(distDir, "server");
+    mkdirSync(serverDistDir);
+  });
+
+  afterEach(async () => {
+    await resetCacheState();
+    rmSync(distDir, { recursive: true, force: true });
+  });
+
+  test("the page handler writes it when constructed during next build", async () => {
+    await buildId("b1");
+    process.env.NEXT_PHASE = "phase-production-build";
+    const before = Date.now();
+    new RedisCacheHandler({ serverDistDir });
+    const written = stamp() as { buildTime: number; buildId: string };
+    expect(written.buildId).toBe("b1");
+    expect(written.buildTime).toBeGreaterThanOrEqual(before);
+  });
+
+  test("not at runtime", async () => {
+    await buildId("b1");
+    new RedisCacheHandler({ serverDistDir });
+    expect(() => stamp()).toThrow(/ENOENT/);
+  });
+
+  test("the first write of a build wins; the build's other workers keep it", async () => {
+    await buildId("b1");
+    writeBuildStamp(serverDistDir, 1000);
+    writeBuildStamp(serverDistDir, 2000);
+    expect(stamp()).toEqual({ buildTime: 1000, buildId: "b1" });
+  });
+
+  test("a stamp left by another build (cleanDistDir: false) is replaced", async () => {
+    await buildId("b1");
+    writeBuildStamp(serverDistDir, 1000);
+    await buildId("b2");
+    writeBuildStamp(serverDistDir, 2000);
+    expect(stamp()).toEqual({ buildTime: 2000, buildId: "b2" });
+  });
+
+  test("a real build: constructed before BUILD_ID exists, then again in the same worker after it", async () => {
+    // next@16.4.2 runs "collecting page data" and static generation in the same workers, and
+    // constructs the handler in both; BUILD_ID is written between them.
+    process.env.NEXT_PHASE = "phase-production-build";
+    const collecting = Date.now();
+    new RedisCacheHandler({ serverDistDir });
+    expect(stamp()).toEqual({ buildTime: expect.any(Number) });
+
+    writeFileSync(join(distDir, "BUILD_ID"), "b1");
+    const generating = Date.now();
+    new RedisCacheHandler({ serverDistDir });
+    const written = stamp() as { buildTime: number; buildId: string };
+    expect(written.buildId).toBe("b1");
+    // Stamped again for static generation: after collecting, before every prerender.
+    expect(written.buildTime).toBeGreaterThanOrEqual(Math.max(collecting, generating));
+    expect(written.buildTime).toBeLessThanOrEqual(Date.now());
+
+    resetBuildInfoForTests();
+    await buildId("b1");
+    expect(readBuildTime(serverDistDir)).toBe(written.buildTime);
+  });
+
+  test("a stamp left by another build is replaced even before this build's BUILD_ID exists", async () => {
+    await buildId("old");
+    writeBuildStamp(serverDistDir, 1000);
+    rmSync(join(distDir, "BUILD_ID"));
+    writeBuildStamp(serverDistDir, 2000);
+    writeFileSync(join(distDir, "BUILD_ID"), "new");
+    writeBuildStamp(serverDistDir, 3000);
+    expect(stamp()).toEqual({ buildTime: 3000, buildId: "new" });
+  });
+
+  test("static generation re-stamps the time; later constructions keep it", async () => {
+    // Collecting page data, before BUILD_ID: a long compile-to-prerender gap must not age the
+    // build output before it is rendered.
+    writeBuildStamp(serverDistDir, 1000);
+    await buildId("b1");
+    writeBuildStamp(serverDistDir, 5000);
+    expect(stamp()).toEqual({ buildTime: 5000, buildId: "b1" });
+    // The build's other workers start static generation later: the earliest time is kept.
+    writeBuildStamp(serverDistDir, 6000);
+    expect(stamp()).toEqual({ buildTime: 5000, buildId: "b1" });
+  });
+
+  test("readBuildTime: the stamp's time when it names this build, else undefined", async () => {
+    await buildId("b1");
+    writeBuildStamp(serverDistDir, 1000);
+    expect(readBuildTime(serverDistDir)).toBe(1000);
+
+    await buildId("b2");
+    expect(readBuildTime(serverDistDir)).toBeUndefined();
+
+    writeFileSync(join(serverDistDir, BUILD_STAMP_FILE), "{not json");
+    resetBuildInfoForTests();
+    expect(readBuildTime(serverDistDir)).toBeUndefined();
+  });
+
+  test("readRoutePeriods: the manifest's periods, by Next's route for the cache key", async () => {
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {
+          "/": { initialRevalidateSeconds: 60, initialExpireSeconds: 300 },
+          "/static": { initialRevalidateSeconds: false },
+        },
+      }),
+    );
+    expect(readRoutePeriods(serverDistDir, "/index")).toEqual({ revalidate: 60, expire: 300 });
+    expect(readRoutePeriods(serverDistDir, "/static")).toEqual({ revalidate: false });
+    expect(readRoutePeriods(serverDistDir, "/other")).toBeUndefined();
+  });
+
+  test("readRoutePeriods: Next 16.4's route cache keys map to the manifest's routes", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    const key = (sourceRoute: string, pathname: string) =>
+      getRouteCacheKey(pathname, { kind: "APP_PAGE", sourceRoute });
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {
+          "/": { initialRevalidateSeconds: 60 },
+          "/index": { initialRevalidateSeconds: 120 },
+          "/index/nested": { initialRevalidateSeconds: 180 },
+          "/routes/io-cached": { initialRevalidateSeconds: false },
+          "/blog/a": { initialRevalidateSeconds: 240 },
+        },
+      }),
+    );
+    expect(readRoutePeriods(serverDistDir, key("/page", "/"))).toEqual({ revalidate: 60 });
+    expect(readRoutePeriods(serverDistDir, key("/index/page", "/index"))).toEqual({
+      revalidate: 120,
+    });
+    expect(readRoutePeriods(serverDistDir, key("/index/nested/page", "/index/nested"))).toEqual({
+      revalidate: 180,
+    });
+    expect(
+      readRoutePeriods(serverDistDir, key("/routes/io-cached/route", "/routes/io-cached")),
+    ).toEqual({ revalidate: false });
+    expect(readRoutePeriods(serverDistDir, key("/blog/[slug]/page", "/blog/a"))).toEqual({
+      revalidate: 240,
+    });
+    expect(readRoutePeriods(serverDistDir, key("/blog/[slug]/page", "/blog/b"))).toBeUndefined();
+  });
+
+  test("readRoutePeriods: a fallback shell's periods come from dynamicRoutes", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    const owner = { kind: "APP_PAGE", sourceRoute: "/params/[a]/[b]/page" };
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: { "/params/one/two": { initialRevalidateSeconds: 30 } },
+        dynamicRoutes: {
+          "/params/[a]/[b]": { fallbackRevalidate: false },
+          "/params/one/[b]": { fallbackRevalidate: 60, fallbackExpire: 600 },
+        },
+      }),
+    );
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/[a]/[b]", owner))).toEqual({
+      revalidate: false,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/[b]", owner))).toEqual({
+      revalidate: 60,
+      expire: 600,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/two", owner))).toEqual({
+      revalidate: 30,
+    });
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/params/one/three", owner))).toBe(
+      undefined,
+    );
+  });
+
+  test("readRoutePeriods: a Pages Router fallback's locale prefix is dropped, as Next does", async () => {
+    const { getRouteCacheKey } = createRequire(import.meta.url)(
+      "next/dist/server/lib/route-cache-key.js",
+    ) as { getRouteCacheKey: (pathname: string, owner: object) => string };
+    writeFileSync(
+      join(distDir, "prerender-manifest.json"),
+      JSON.stringify({
+        routes: {},
+        dynamicRoutes: { "/products/[id]": { fallbackRevalidate: 60, dataRoute: "/x.json" } },
+      }),
+    );
+    // next/dist/build/generate-routes-manifest.js: `i18n: config.i18n`.
+    writeFileSync(
+      join(distDir, "routes-manifest.json"),
+      JSON.stringify({ i18n: { locales: ["en-US", "fr"], defaultLocale: "en-US" } }),
+    );
+    const pages = { kind: "PAGES", sourceRoute: "/products/[id]" };
+    const app = { kind: "APP_PAGE", sourceRoute: "/fr/products/[id]/page" };
+    expect(readRoutePeriods(serverDistDir, getRouteCacheKey("/fr/products/[id]", pages))).toEqual({
+      revalidate: 60,
+    });
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/EN-us/products/[id]", pages)),
+    ).toEqual({ revalidate: 60 });
+    // Only Pages Router keys are locale-prefixed (next/dist/server/lib/incremental-cache/
+    // shared-cache-controls.external.js).
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/fr/products/[id]", app)),
+    ).toBeUndefined();
+    expect(
+      readRoutePeriods(serverDistDir, getRouteCacheKey("/de/products/[id]", pages)),
+    ).toBeUndefined();
+  });
+});

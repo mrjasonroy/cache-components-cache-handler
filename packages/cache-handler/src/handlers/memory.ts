@@ -1,6 +1,7 @@
 import { isImplicitTag } from "../helpers/is-implicit-tag.js";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
 import { jsonReplacer } from "../helpers/serialization.js";
+import { nowMs, toNextClock } from "../shared/clock.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -11,6 +12,11 @@ import type {
   CacheValue,
 } from "../types.js";
 
+/**
+ * Options for the deprecated `MemoryCacheHandler`.
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
+ */
 export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
   /**
    * Maximum number of items to store (LRU eviction when exceeded)
@@ -49,6 +55,8 @@ export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
  *   defaultTTL: 3600 // 1 hour
  * });
  * ```
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
  */
 export class MemoryCacheHandler implements CacheHandler {
   public readonly name = "local-lru";
@@ -100,8 +108,9 @@ export class MemoryCacheHandler implements CacheHandler {
     // Return the cache handler result with value and metadata
     return {
       value: entry.value,
-      lastModified: entry.lastModified,
-      age: Date.now() - entry.lastModified,
+      // Stored as wall time; Next ages it on its own clock.
+      lastModified: toNextClock(entry.lastModified),
+      age: nowMs() - entry.lastModified,
     };
   }
 
@@ -131,7 +140,7 @@ export class MemoryCacheHandler implements CacheHandler {
     const tags = context?.tags ?? [];
 
     const entry: CacheHandlerValue = {
-      lastModified: Date.now(),
+      lastModified: nowMs(),
       lifespan,
       tags,
       value,
@@ -144,7 +153,7 @@ export class MemoryCacheHandler implements CacheHandler {
     // Store revalidation timestamp
     // Note: profile parameter is used by Next.js for cache-life configuration
     // but for memory handler we just invalidate immediately
-    this.revalidatedTags.set(tag, Date.now());
+    this.revalidatedTags.set(tag, nowMs());
 
     // For explicit tags (non-implicit), we can directly delete entries
     if (!isImplicitTag(tag)) {
@@ -200,6 +209,8 @@ export class MemoryCacheHandler implements CacheHandler {
  *   defaultTTL: 3600
  * });
  * ```
+ *
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
  */
 export function createMemoryCacheHandler(options?: MemoryCacheHandlerOptions): MemoryCacheHandler {
   return new MemoryCacheHandler(options);

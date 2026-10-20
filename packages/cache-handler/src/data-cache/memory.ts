@@ -7,6 +7,8 @@
  * are considered expired/missing.
  */
 
+import { nextClockMs } from "../shared/clock.js";
+import { debugWriter } from "../shared/logger.js";
 import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
 
 export interface MemoryDataCacheHandlerOptions {
@@ -158,7 +160,7 @@ function areTagsExpired(
   timestamp: Timestamp,
   debug?: (message: string, data: unknown) => void,
 ): boolean {
-  const now = Math.round(performance.timeOrigin + performance.now());
+  const now = nextClockMs();
 
   for (const tag of tags) {
     const entry = globalTagsManifest.get(tag);
@@ -235,6 +237,10 @@ function areTagsStale(tags: string[], timestamp: Timestamp): boolean {
  *   }
  * }
  * ```
+ *
+ * @deprecated The 16.5 data cache stack. Use `withCache(nextConfig)` (its default `"use cache"`
+ *   handler keeps values in memory), or `createLocalCacheHandler` in a custom handler file.
+ *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
  */
 export function createMemoryDataCacheHandler(
   options: MemoryDataCacheHandlerOptions = {},
@@ -255,7 +261,7 @@ export function createMemoryDataCacheHandler(
   const memoryCache = new LRUCache<PrivateCacheEntry>(maxSize, (entry) => entry.size);
   const pendingSets = new Map<string, Promise<void>>();
 
-  const debug = options.debug ? console.debug.bind(console, "[MemoryDataCache]:") : undefined;
+  const debug = options.debug ? debugWriter("[MemoryDataCache]:") : undefined;
 
   return {
     async get(cacheKey, _softTags) {
@@ -274,7 +280,7 @@ export function createMemoryDataCacheHandler(
       }
 
       const entry = privateEntry.entry;
-      const now = performance.timeOrigin + performance.now();
+      const now = nextClockMs();
 
       // In-memory caches should expire after revalidate time
       if (now > entry.timestamp + entry.revalidate * 1000) {
@@ -374,7 +380,7 @@ export function createMemoryDataCacheHandler(
     },
 
     async updateTags(tags, durations) {
-      const now = Math.round(performance.timeOrigin + performance.now());
+      const now = nextClockMs();
       debug?.("updateTags", { tags, timestamp: now, durations });
 
       for (const tag of tags) {

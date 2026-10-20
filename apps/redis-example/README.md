@@ -16,22 +16,20 @@ Then open [http://localhost:3000](http://localhost:3000)
 
 ## What This Demonstrates
 
-### 1. Cache Population During Build
+### 1. One line of config
 
-When you run `pnpm build`, Next.js pre-renders static pages and **populates the Redis cache**:
-
-```bash
-pnpm build
-# You'll see cache operations in the build output
-```
+`next.config.mjs` is `withCache({ cacheComponents: true }, { useCache: "redis" })`. There are no
+handler files to write. Pages, `"use cache"` and `"use cache: remote"` all go to Redis when
+`REDIS_URL` is set, and stay in memory when it is not.
 
 ### 2. Cache Usage During Serve
 
-When you run `pnpm start`, the app serves cached data from Redis instantly:
+`next build` never connects to Redis. Entries are written the first time each page or cached
+function runs under `next start`, and every instance pointed at the same Redis shares them:
 
 ```bash
-pnpm start
-# Cached data loads immediately (no 1-second delay)
+pnpm start:redis
+# First load pays the 1-second delay; reloads are served from Redis
 ```
 
 ### 3. Cache Invalidation
@@ -49,11 +47,11 @@ If you want to run each step separately:
 # 1. Start Redis
 pnpm docker:up
 
-# 2. Build the app (populates cache)
+# 2. Build the app (no Redis needed)
 pnpm build
 
-# 3. Start the app (serves from cache)
-pnpm start
+# 3. Start the app against Redis (REDIS_URL defaults to redis://localhost:6379)
+pnpm start:redis
 
 # 4. Stop Redis when done
 pnpm docker:down
@@ -65,8 +63,11 @@ pnpm docker:down
 # List all cache keys
 docker exec -it redis-example-redis-1 redis-cli KEYS "example:*"
 
-# View a specific cache entry
-docker exec -it redis-example-redis-1 redis-cli GET "example:cache:..."
+# Entries are <prefix><buildId>:page:* and <prefix><buildId>:data:* strings. Tags live in two
+# keys: <prefix>tags, a hash of every tag record, and <prefix>tag-index, a sorted set of the same
+# tags scored by last update time (ms)
+docker exec -it redis-example-redis-1 redis-cli HGETALL example:tags
+docker exec -it redis-example-redis-1 redis-cli ZRANGE example:tag-index 0 -1 WITHSCORES
 
 # Clear all cache
 docker exec -it redis-example-redis-1 redis-cli FLUSHDB
@@ -74,8 +75,7 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 
 ## Key Files
 
-- `data-cache-handler.mjs` - Redis cache handler configuration
-- `next.config.mjs` - Enables Cache Components and configures handler
+- `next.config.mjs` - Enables Cache Components and wires every cache with `withCache`
 - `docker-compose.yml` - Redis setup
 - `app/page.tsx` - Homepage with cached data
 - `app/products/page.tsx` - Example with tag-based revalidation
@@ -96,14 +96,15 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 │  (use cache)     │
 └────────┬─────────┘
          │
-         ├─ Build time: Pre-renders pages, writes to Redis
+         ├─ Build time: Pre-renders pages in memory, never touches Redis
          │
-         └─ Runtime: Reads from Redis, serves instantly
+         └─ Runtime: Reads and writes Redis, shared by every instance
 
 ┌──────────────────┐
 │   Redis Cache    │
-│ example:cache:*  │
-│ example:tags:*   │
+│ example:<build>:*│
+│ example:tags     │
+│ example:tag-index│
 └──────────────────┘
 ```
 
@@ -112,7 +113,7 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 In production:
 - Use managed Redis (AWS ElastiCache, Upstash, etc.)
 - Set `REDIS_URL` environment variable
-- Configure appropriate TTLs for your use case
+- Set `CACHE_KEY_PREFIX` if several apps share one Redis
 - Monitor Redis memory usage
 - Consider Redis Sentinel or Cluster for high availability
 

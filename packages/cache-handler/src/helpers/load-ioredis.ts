@@ -1,6 +1,4 @@
-import { createRequire } from "node:module";
-
-const nodeRequire = createRequire(import.meta.url);
+import { requireModule } from "../shared/node-require.js";
 
 /**
  * Lazy load ioredis and return the constructor, so importing this package does not
@@ -8,7 +6,7 @@ const nodeRequire = createRequire(import.meta.url);
  */
 export function loadIoredis(type: string): typeof import("ioredis").default {
   try {
-    return nodeRequire("ioredis");
+    return requireModule<typeof import("ioredis").default>("ioredis");
   } catch {
     throw new Error(
       `ioredis is required for ${type} cache handler. Install it with: npm install ioredis`,

@@ -1,3 +1,4 @@
+import { nowMs } from "../shared/clock.js";
 import type { LifespanParameters } from "../types.js";
 
 /**
@@ -7,6 +8,8 @@ import type { LifespanParameters } from "../types.js";
  * @param revalidate - Revalidation period in seconds, or false to disable
  * @param defaultTTL - Default TTL in seconds if revalidate is undefined
  * @returns Lifespan parameters or null if no expiration
+ *
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
  */
 export function calculateLifespan(
   revalidate: number | false | undefined,
@@ -25,7 +28,7 @@ export function calculateLifespan(
     return null;
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const nowSeconds = Math.floor(nowMs() / 1000);
 
   return {
     lastModifiedAt: nowSeconds,
@@ -42,13 +45,15 @@ export function calculateLifespan(
  *
  * @param lifespan - Lifespan parameters (null means never expires)
  * @returns True if expired, false otherwise
+ *
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
  */
 export function isExpired(lifespan: LifespanParameters | null): boolean {
   if (!lifespan) {
     return false;
   }
 
-  const nowSeconds = Math.floor(Date.now() / 1000);
+  const nowSeconds = Math.floor(nowMs() / 1000);
   return nowSeconds >= lifespan.expireAt;
 }
 
@@ -60,5 +65,5 @@ export function redisTtlSecondsFromLifespan(
   lifespan: LifespanParameters | null,
 ): number | undefined {
   if (!lifespan?.expireAt) return undefined;
-  return lifespan.expireAt - Math.floor(Date.now() / 1000);
+  return lifespan.expireAt - Math.floor(nowMs() / 1000);
 }

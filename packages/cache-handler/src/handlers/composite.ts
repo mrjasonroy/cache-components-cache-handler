@@ -1,3 +1,5 @@
+import { nowMs } from "../shared/clock.js";
+import { processLogger, writeLog } from "../shared/logger.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -8,6 +10,11 @@ import type {
   CacheValue,
 } from "../types.js";
 
+/**
+ * Options for the deprecated `CompositeHandler`.
+ *
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
+ */
 export interface CompositeHandlerOptions extends CacheHandlerOptions {
   /**
    * Array of cache handlers to use (ordered by priority)
@@ -46,6 +53,8 @@ export interface CompositeHandlerOptions extends CacheHandlerOptions {
  *   }
  * });
  * ```
+ *
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
  */
 export class CompositeHandler implements CacheHandler {
   public readonly name = "composite";
@@ -72,7 +81,7 @@ export class CompositeHandler implements CacheHandler {
         }
       } catch (error) {
         // Log error but continue to next handler
-        console.error(`Handler ${handler.name} failed:`, error);
+        writeLog(processLogger, "error", `Handler ${handler.name} failed:`, { error: error });
       }
     }
 
@@ -81,7 +90,7 @@ export class CompositeHandler implements CacheHandler {
 
   async set(key: string, value: CacheValue, context?: CacheHandlerContext): Promise<void> {
     // Build the full cache handler value for strategy function
-    const now = Date.now();
+    const now = nowMs();
     const cacheHandlerValue: CacheHandlerValue = {
       lastModified: now,
       lifespan: null, // Simplified - handlers will calculate their own
@@ -104,7 +113,9 @@ export class CompositeHandler implements CacheHandler {
       // Log failures but don't throw (fault tolerance)
       results.forEach((result, index) => {
         if (result.status === "rejected") {
-          console.error(`Handler ${this.handlers[index].name} set failed:`, result.reason);
+          writeLog(processLogger, "error", `Handler ${this.handlers[index].name} set failed:`, {
+            error: result.reason,
+          });
         }
       });
     }
@@ -119,7 +130,12 @@ export class CompositeHandler implements CacheHandler {
     // Log failures but don't throw
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Handler ${this.handlers[index].name} revalidateTag failed:`, result.reason);
+        writeLog(
+          processLogger,
+          "error",
+          `Handler ${this.handlers[index].name} revalidateTag failed:`,
+          { error: result.reason },
+        );
       }
     });
   }
@@ -135,7 +151,9 @@ export class CompositeHandler implements CacheHandler {
     // Log failures but don't throw
     results.forEach((result, index) => {
       if (result.status === "rejected") {
-        console.error(`Handler ${this.handlers[index].name} delete failed:`, result.reason);
+        writeLog(processLogger, "error", `Handler ${this.handlers[index].name} delete failed:`, {
+          error: result.reason,
+        });
       }
     });
   }
@@ -158,6 +176,8 @@ export class CompositeHandler implements CacheHandler {
  *   }
  * });
  * ```
+ *
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
  */
 export function createCompositeHandler(options: CompositeHandlerOptions): CompositeHandler {
   return new CompositeHandler(options);

@@ -90,6 +90,11 @@ jobs:
           pnpm add next@${{ steps.versions.outputs.latest_nextjs }}
           cd ../..
 
+          # The package's unit tests run against the Next it supports (a dev dependency)
+          cd packages/cache-handler
+          pnpm add -D --save-exact next@${{ steps.versions.outputs.latest_nextjs }}
+          cd ../..
+
       - name: Update package version
         if: steps.versions.outputs.needs_update == 'true'
         run: |
@@ -135,13 +140,11 @@ jobs:
         if: steps.versions.outputs.needs_update == 'true'
         id: test_redis
         run: |
-          # Flush Redis (service container is accessible on localhost)
-          redis-cli -h localhost FLUSHALL
-
-          # Build and test with Redis
+          # The Redis service container starts empty, so there is nothing to flush.
+          # (redis-cli is not installed on the runner; calling it exited 127.)
           cd apps/e2e-test-app
-          CACHE_HANDLER=redis pnpm build
-          CACHE_HANDLER=redis pnpm test:e2e
+          REDIS_URL=redis://localhost:6379 pnpm build
+          REDIS_URL=redis://localhost:6379 pnpm test:e2e
 
       - name: Create branch and commit
         if: steps.versions.outputs.needs_update == 'true' && inputs.dry_run != true

@@ -2,99 +2,110 @@
 
 ## Prerequisites
 
-- Node.js 22+
-- Next.js 16+
-- pnpm, npm, or yarn
+- Node.js 22.3+
+- Next.js 16+ with `cacheComponents: true`
+- Redis 7+ (6.2 at the least, with scripting allowed), Valkey or AWS ElastiCache for
+  multi-instance deployments. Nothing is needed for dev or a single instance.
 
-## Basic Installation
+## Install
 
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler
+npm install @mrjasonroy/cache-components-cache-handler ioredis
 ```
 
-## Memory Cache Setup
+`ioredis` is only loaded when Redis is configured, so a memory-only app can leave it out.
 
-For development or single-instance deployments:
+## Configure Next.js
 
-```javascript
-// data-cache-handler.mjs
-import { createMemoryDataCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+```js
+// next.config.mjs
+import { withCache } from "@mrjasonroy/cache-components-cache-handler";
 
-export default createMemoryDataCacheHandler({
-  maxSize: 100 * 1024 * 1024, // 100MB
-  debug: process.env.NODE_ENV === "development",
-});
-```
-
-```javascript
-// next.config.js
-export default {
+export default withCache({
   cacheComponents: true,
-  cacheHandlers: {
-    default: "./data-cache-handler.mjs",
-    remote: "./data-cache-handler.mjs",
-  },
-  cacheMaxMemorySize: 0,
-};
-```
-
-That's it! This handles all `"use cache"` directives in your app.
-
-> This package only provides `cacheHandlers` (plural). Don't set the singular `cacheHandler`
-> option to anything from this package: it was removed in 16.5.0. ISR pages, route handler
-> responses and optimized images use Next's default per-instance cache.
-> **If you run more than one instance, configure your own shared ISR `cacheHandler`** alongside
-> `cacheHandlers`, or those pages won't be shared or revalidated across instances.
-
-## Redis / Valkey Cache Setup
-
-For production or multi-instance deployments:
-
-```bash
-npm install ioredis
-```
-
-```javascript
-// data-cache-handler.mjs
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
-
-export default createCacheHandler({
-  type: process.env.CACHE_BACKEND ?? "redis", // "redis" | "valkey"
-  url: process.env.REDIS_URL ?? process.env.VALKEY_URL ?? "redis://localhost:6379",
-  password: process.env.REDIS_PASSWORD,
-  keyPrefix: "myapp:cache:",
-  tagPrefix: "myapp:tags:",
-  debug: process.env.NODE_ENV === "development",
+  // ...the rest of your config
 });
 ```
 
-### AWS ElastiCache (Redis-mode)
+That one call sets `cacheHandler` (pages, route handlers, cached `fetch`), `cacheHandlers.default`
+(`"use cache"`), `cacheHandlers.remote` (`"use cache: remote"`) and `cacheMaxMemorySize: 0`. Don't
+set any of those yourself: `withCache` throws if the config already has `cacheHandlers`, or
+`cacheHandler` unless you pass `pages: false`. The README's [What goes where](../README.md#what-goes-where) table says what each
+one does.
 
-```javascript
-// data-cache-handler.mjs
-import { createCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+The handler files ship inside the package, so there are no handler files to write. For your own
+client or timeouts, see [Custom handlers](../README.md#custom-handlers).
 
-export default createCacheHandler({
-  type: "elasticache",
-  endpoint: process.env.ELASTICACHE_ENDPOINT,
-  port: Number(process.env.ELASTICACHE_PORT ?? 6379),
-  tls: process.env.ELASTICACHE_TLS !== "false",
-  password: process.env.ELASTICACHE_AUTH_TOKEN ?? process.env.REDIS_PASSWORD,
-  keyPrefix: "prod:cache:",
-  tagPrefix: "prod:tags:",
-});
-```
+## Point it at Redis
 
-> Tip: leave `url` unset for ElastiCache – the factory automatically switches to the `endpoint`/`port` signature when `type: "elasticache"` is used.
+Set the connection in the environment of the running app, not in `next.config`. A standalone
+`server.js` never runs `next.config`, so the environment is the only setting that works the same
+under `next start`, standalone and Docker.
 
-See [Redis Configuration](./redis.md) for advanced setup, Sentinel/Cluster instructions, and Valkey notes.
+### Development and single instance
 
-## Verification
+Leave `REDIS_URL` unset. Everything is cached in each process's memory.
 
-Start your Next.js app:
+### Redis or Valkey
 
 ```bash
-npm run dev
+REDIS_URL=redis://cache.internal:6379
+# with a password and TLS:
+REDIS_URL=rediss://:password@cache.internal:6380
 ```
 
-You should see cache operations in the console if `debug: true`.
+`VALKEY_URL` works too, and `REDIS_PASSWORD` supplies a password when the URL has none.
+
+### AWS ElastiCache
+
+```bash
+ELASTICACHE_ENDPOINT=master.my-cache.abc123.use1.cache.amazonaws.com
+ELASTICACHE_AUTH_TOKEN=...
+# ELASTICACHE_PORT=6379   (default)
+# ELASTICACHE_TLS=false   (TLS is on by default)
+```
+
+A URL takes precedence over the endpoint when both are set. For cluster-mode-enabled ElastiCache,
+see [Redis Cluster](./redis.md#redis-cluster).
+
+### Other settings
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
+| `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. |
+| `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
+| `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
+
+The full table is in the README under [Environment variables](../README.md#environment-variables).
+
+`next build` never connects to Redis, whatever the environment says. If a dev `.env` file carries
+`REDIS_URL`, the dev server will use Redis; remove it there or set `CACHE_REDIS=off`.
+
+## Verify
+
+1. Build and start with Redis configured and debug logging on:
+
+   ```bash
+   next build
+   REDIS_URL=redis://localhost:6379 CACHE_DEBUG=1 next start
+   ```
+
+2. Load a page twice. The log shows `[PageCache]: set ... redis`, then `[PageCache]: get ... hit`.
+3. Look at the keys:
+
+   ```bash
+   redis-cli --scan --pattern 'nextjs:*' | head
+   ```
+
+   Pages sit under `nextjs:<buildId>:page:`, `"use cache: remote"` entries under
+   `nextjs:<buildId>:data:`, and tag records in the `nextjs:tags` hash, indexed by
+   `nextjs:tag-index` (both appear after the first revalidation). Plain `"use cache"` values stay
+   in memory unless you pass `{ useCache: "redis" }`.
+
+A local Redis for this is one command away: `pnpm docker:up` in this repo, or
+`docker run -d -p 6379:6379 redis:7-alpine`.
+
+## Upgrading from 16.5.x
+
+See [Migrating](../README.md#migrating) in the README.

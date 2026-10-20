@@ -18,12 +18,15 @@
  * - A `get` waits for an in-flight `set` of the same key in this process, so
  *   concurrent requests don't each render the same entry.
  * - Errors never throw out of the handler (a cache outage degrades to misses),
- *   but they are always logged with `console.error`, rate-limited per operation.
+ *   but they are always logged, to the cache logger's `error` (see `setCacheLogger`) or else
+ *   `console.error`, rate-limited per operation.
  * - Only single-key commands are issued, so Redis Cluster and ElastiCache in
  *   cluster mode work (no cross-slot CROSSSLOT errors).
  */
 
-import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
+import { fromNextClock, nowMs, toNextClock } from "../shared/clock.js";
+import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "../shared/error-reporter.js";
+import { debugWriter, processLogger, writeLog } from "../shared/logger.js";
 import type { DataCacheEntry, DataCacheHandler } from "./types.js";
 
 /**
@@ -84,7 +87,7 @@ export interface RedisDataCacheHandlerOptions {
 
   /**
    * Minimum time in milliseconds between two logged errors of the same operation.
-   * Errors are always logged with `console.error`; this only stops an outage
+   * Errors are always logged (the cache logger's `error`, or `console.error`); this only stops an outage
    * from producing one log line per request.
    * @default 60000
    */
@@ -196,6 +199,10 @@ function bufferToStream(buffer: Buffer): ReadableStream<Uint8Array> {
  *   }
  * }
  * ```
+ *
+ * @deprecated The 16.5 data cache stack. Use `withCache(nextConfig)`, or
+ *   `createRemoteCacheHandler({ client })` with an ioredis client in a custom handler file.
+ *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
  */
 export function createRedisDataCacheHandler(
   options: RedisDataCacheHandlerOptions,
@@ -210,7 +217,7 @@ export function createRedisDataCacheHandler(
     debug = false,
   } = options;
 
-  const log = debug ? console.debug.bind(console, "[RedisDataCache]:") : undefined;
+  const log = debug ? debugWriter("[RedisDataCache]:") : undefined;
   const reportError = createErrorReporter("[RedisDataCache]:", errorLogIntervalMs);
 
   /**
@@ -237,12 +244,13 @@ export function createRedisDataCacheHandler(
 
   /**
    * Seconds the entry should stay in Redis: the time left until it expires,
-   * measured from its creation timestamp and capped at `tagTTL`.
+   * measured from its creation timestamp and capped at `tagTTL`. `entry` is Next's, so its
+   * `timestamp` is on Next's clock.
    */
   function getEntryTTL(entry: DataCacheEntry): number {
     const expire = entry.expire >= INFINITE_CACHE ? defaultTTL : entry.expire;
     const lifetime = Math.min(expire, tagTTL);
-    return Math.ceil((entry.timestamp + lifetime * 1000 - Date.now()) / 1000);
+    return Math.ceil((fromNextClock(entry.timestamp) + lifetime * 1000 - nowMs()) / 1000);
   }
 
   /**
@@ -255,14 +263,16 @@ export function createRedisDataCacheHandler(
       value: buffer.toString("base64"),
       tags: entry.tags,
       stale: entry.stale,
-      timestamp: entry.timestamp,
+      // Stored as wall time, so instances compare it with tag records on one clock.
+      timestamp: fromNextClock(entry.timestamp),
       expire: entry.expire,
       revalidate: entry.revalidate,
     };
   }
 
   /**
-   * Deserialize cache entry from Redis. Every call builds a new value stream.
+   * Deserialize cache entry from Redis, `timestamp` still wall time. Every call builds a new value
+   * stream.
    */
   function deserializeEntry(data: SerializedCacheEntry): DataCacheEntry {
     const buffer = Buffer.from(data.value, "base64");
@@ -331,7 +341,7 @@ export function createRedisDataCacheHandler(
         // it first; this guards against clock skew between instances. Past
         // `revalidate` (but before `expire`) the entry is returned as-is and
         // Next's wrapper serves it while regenerating in the background.
-        if (Date.now() > entry.timestamp + entry.expire * 1000) {
+        if (nowMs() > entry.timestamp + entry.expire * 1000) {
           log?.("get", cacheKey, "expired");
           return undefined;
         }
@@ -357,7 +367,7 @@ export function createRedisDataCacheHandler(
 
           if (revalidatedAt && revalidatedAt > entry.timestamp) {
             // Like Next's areTagsExpired: an expiry that predates the entry doesn't apply to it.
-            if (expireAt && expireAt > entry.timestamp && Date.now() >= expireAt) {
+            if (expireAt && expireAt > entry.timestamp && nowMs() >= expireAt) {
               expiredTag = tag;
               break;
             }
@@ -384,7 +394,7 @@ export function createRedisDataCacheHandler(
           revalidate,
         });
 
-        return { ...entry, revalidate };
+        return { ...entry, timestamp: toNextClock(entry.timestamp), revalidate };
       } catch (error) {
         // Degrade to a miss so the page still renders, but make it visible.
         log?.("get", cacheKey, "error", error);
@@ -435,7 +445,8 @@ export function createRedisDataCacheHandler(
 
         log?.("getExpiration", { tags, expiration });
 
-        return expiration;
+        // Next compares it with an entry's `timestamp`, on its own clock.
+        return expiration > 0 ? toNextClock(expiration) : expiration;
       } catch (error) {
         log?.("getExpiration", "error", error);
         reportError("getExpiration", error);
@@ -444,13 +455,16 @@ export function createRedisDataCacheHandler(
     },
 
     async updateTags(tags, durations) {
-      const now = Date.now();
+      const now = nowMs();
       const expire = redis.expire?.bind(redis);
 
       if (!expire && !warnedMissingExpire) {
         warnedMissingExpire = true;
-        console.warn(
+        writeLog(
+          processLogger,
+          "warn",
           "[RedisDataCache]: the Redis client has no expire() method, so tag revalidation records will never expire.",
+          undefined,
         );
       }
 

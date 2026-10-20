@@ -1,0 +1,46 @@
+# Next.js deploy-mode suites run with and without withCache (see README.md).
+# One suite per line: a directory or a single *.test.ts file, relative to the vercel/next.js
+# checkout. Paths verified at v16.4.2. Lines starting with # are ignored.
+# test/deploy-tests-manifest.json (NEXT_EXTERNAL_TESTS_FILTERS) still drops the files and cases
+# Next itself excludes in deploy mode, e.g. app-static/app-static-custom-handler.test.ts.
+
+# "use cache"
+test/e2e/app-dir/use-cache
+test/e2e/app-dir/use-cache-close-over-function
+test/e2e/app-dir/use-cache-default-profile-expire-zero
+test/e2e/app-dir/use-cache-draft-mode-isolation
+test/e2e/app-dir/use-cache-hanging
+test/e2e/app-dir/use-cache-infinity-profile
+test/e2e/app-dir/use-cache-metadata-route-handler
+test/e2e/app-dir/use-cache-private
+test/e2e/app-dir/use-cache-route-handler-only
+test/e2e/app-dir/use-cache-search-params
+test/e2e/app-dir/use-cache-segment-configs
+test/e2e/app-dir/use-cache-swr
+test/e2e/app-dir/use-cache-unknown-cache-kind
+test/e2e/app-dir/use-cache-with-server-function-props
+# Sets its own cacheHandlers, so the deploy script leaves it unwrapped (reported as a note).
+test/e2e/app-dir/use-cache-custom-handler
+
+# Cache Components
+test/e2e/app-dir/cache-components
+test/e2e/app-dir/cache-components-request-apis
+test/e2e/app-dir/cache-components-segment-configs
+
+# revalidateTag / revalidatePath
+test/e2e/app-dir/revalidatetag-rsc
+test/e2e/app-dir/revalidate-path-with-rewrites
+test/e2e/app-dir/actions-revalidate-remount
+
+# ISR
+test/e2e/app-dir/app-static
+
+# PPR
+test/e2e/app-dir/ppr
+test/e2e/app-dir/ppr-full
+test/e2e/app-dir/ppr-metadata-blocking
+test/e2e/app-dir/ppr-unstable-cache
+
+# Cache keys and tags with non-ASCII characters
+test/e2e/app-dir/non-ascii-cache-item-name
+test/e2e/app-dir/non-ascii-cache-tags

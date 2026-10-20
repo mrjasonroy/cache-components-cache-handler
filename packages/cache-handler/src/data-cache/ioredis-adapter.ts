@@ -44,6 +44,10 @@ export interface IoredisLike {
  *   redis: createIoredisAdapter(client),
  * });
  * ```
+ *
+ * @deprecated Only needed by the deprecated `createRedisDataCacheHandler`. Pass an ioredis client
+ *   straight to `createRemoteCacheHandler({ client })` instead.
+ *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
  */
 export function createIoredisAdapter(redis: IoredisLike): RedisClient {
   return {
