@@ -40,7 +40,7 @@ jobs:
       # ahead of Next's latest stable release cannot merge.
       - name: Version policy
         run: |
-          node --test scripts/
+          node --test scripts/release-version.test.mjs
           node scripts/release-version.mjs check
 
   unit-tests:
