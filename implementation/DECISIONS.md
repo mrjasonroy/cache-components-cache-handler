@@ -98,8 +98,14 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
   reading `Date` in a prerender: it is the performance clock plus `offset = Date.now() −
   performance clock`, re-measured on every call where reading `Date` is safe and reused where it
   is not. Safe means no work unit, or one for which Next's `io()` does nothing, read from Next's
-  `workUnitAsyncStorage` (the shared `.external` module, loaded lazily with `require`, so the
-  edge-safe import graph is unchanged; on the edge runtime `Date` is never read). Design (b),
+  work unit storage: the one Next registers on `globalThis` under
+  `Symbol.for("@next/work-unit-async-storage@<version>")` (16.4+), else the `.external` module
+  `require`d from this package (earlier 16.x). Nothing is imported, so the edge-safe import graph
+  is unchanged; on the edge runtime `Date` is never read. If neither finds it (a packaged deploy
+  that cannot resolve `next` from the package), `Date` counts as safe only while it is not
+  extended (the native constructor, `Date.now` not Next's bound wrapper), so a lookup failure
+  fails closed (Codex review 5). Only a find is cached; a failed `require` is retried after 1 s,
+  so a call before Next has loaded decides nothing for good. Design (b),
   re-anchoring, was chosen over (a), the performance clock only where a prerender can reach,
   because every handler call can be reached from a prerender, so (a) would leave every stored
   time on the drifting clock. A pod that never gets a safe call keeps its last offset (0 before

@@ -51,8 +51,15 @@ const DATE_SAFE_WORK_UNITS = new Set([
   "build-time-generator",
 ]);
 
-/** `null`: Next's work unit storage is not loaded in this process (so its `Date` is not extended). */
-let workUnitStorage: WorkUnitStorage | null | undefined;
+/** The key prefix Next registers its work unit storage under on `globalThis` (16.4+). */
+const GLOBAL_STORAGE_PREFIX = "@next/work-unit-async-storage@";
+
+/** How long a failed `require` of the storage is not retried, in ms. */
+const REQUIRE_RETRY_MS = 1_000;
+
+/** Next's work unit storages found so far; only a find is kept. */
+let workUnitStorages: WorkUnitStorage[] = [];
+let requireFailedAt: number | undefined;
 
 /** Wall time minus the performance clock, in ms, as last measured. */
 let offset = 0;
@@ -63,35 +70,72 @@ function performanceClock(): number {
   return performance.timeOrigin + performance.now();
 }
 
-function loadWorkUnitStorage(): WorkUnitStorage | null {
-  if (workUnitStorage !== undefined) return workUnitStorage;
-  try {
-    // The `.external` module is the instance Next's server shares across its bundles.
-    const loaded = requireModule<{ workUnitAsyncStorage?: WorkUnitStorage }>(
-      "next/dist/server/app-render/work-unit-async-storage.external.js",
-    );
-    workUnitStorage = loaded.workUnitAsyncStorage ?? null;
-  } catch {
-    // Next is not installed, or its server environment (AsyncLocalStorage on globalThis, which it
-    // sets up before extending `Date`) is not: `Date` is the plain one.
-    workUnitStorage = null;
+function isStorage(value: unknown): value is WorkUnitStorage {
+  return typeof (value as WorkUnitStorage | undefined)?.getStore === "function";
+}
+
+/**
+ * Next's work unit storages: the ones it registers on `globalThis` (next@16.4.2
+ * `getOrCreateGlobalAsyncLocalStorage`, keyed by Next's version), or else the `.external` module
+ * `require`d from this package (Next before 16.4). Looked up again until one is found, so a call
+ * before Next has loaded does not decide for good; a failed `require` is retried after
+ * {@link REQUIRE_RETRY_MS}.
+ */
+function findWorkUnitStorages(): WorkUnitStorage[] {
+  if (workUnitStorages.length > 0) return workUnitStorages;
+  const globals = globalThis as unknown as Record<symbol, unknown>;
+  const found = Object.getOwnPropertySymbols(globalThis)
+    .filter((symbol) => symbol.description?.startsWith(GLOBAL_STORAGE_PREFIX))
+    .map((symbol) => globals[symbol])
+    .filter(isStorage);
+  if (found.length === 0) {
+    const now = performanceClock();
+    if (requireFailedAt === undefined || now - requireFailedAt >= REQUIRE_RETRY_MS) {
+      try {
+        // The `.external` module is the instance Next's server shares across its bundles.
+        const loaded = requireModule<{ workUnitAsyncStorage?: unknown }>(
+          "next/dist/server/app-render/work-unit-async-storage.external.js",
+        );
+        if (isStorage(loaded.workUnitAsyncStorage)) found.push(loaded.workUnitAsyncStorage);
+        else requireFailedAt = now;
+      } catch {
+        // Not resolvable from this package, or Next's server environment (AsyncLocalStorage on
+        // globalThis) is not set up yet.
+        requireFailedAt = now;
+      }
+    }
   }
-  return workUnitStorage;
+  workUnitStorages = found;
+  return found;
+}
+
+/**
+ * Whether `Date` is still the built-in one: Next's extension (date.js) replaces the constructor
+ * with a plain function and `Date.now` with a bound one, named "bound now" (a bound function's
+ * source also reads `[native code]`, so its name is checked).
+ */
+function isDateNative(): boolean {
+  return (
+    Function.prototype.toString.call(Date).includes("[native code]") && Date.now.name === "now"
+  );
 }
 
 /**
  * Whether reading `Date` now cannot abort a prerender: the current work unit is none, or one for
- * which Next's `io()` does nothing. Never on the edge runtime (no `require`; the edge entries do
- * not use the clock).
+ * which Next's `io()` does nothing. Without Next's work unit storage, only if `Date` is not
+ * extended. Never on the edge runtime (no `require`; the edge entries do not use the clock).
  */
 export function isDateSafe(): boolean {
   if (isEdgeRuntime()) return false;
-  const storage = loadWorkUnitStorage();
-  if (storage === null) return true;
-  const store = storage.getStore();
-  if (store === undefined) return true;
-  if (store.type === "request") return !store.stagedRendering;
-  return store.type !== undefined && DATE_SAFE_WORK_UNITS.has(store.type);
+  const storages = findWorkUnitStorages();
+  if (storages.length === 0) return isDateNative();
+  for (const storage of storages) {
+    const store = storage.getStore();
+    if (store === undefined) continue;
+    if (store.type === "request") return !store.stagedRendering;
+    return store.type !== undefined && DATE_SAFE_WORK_UNITS.has(store.type);
+  }
+  return true;
 }
 
 /**
@@ -141,7 +185,7 @@ export function toNextClock(time: number): number {
 
 /**
  * Read every clock from `source` instead, with no conversion between them (`undefined`: the real
- * clocks again, with the offset and the work unit storage forgotten), so that tests can fake the
+ * clocks again, with the offset and the work unit storages forgotten), so that tests can fake the
  * time with `vi.setSystemTime`. Test-only.
  * @internal
  */
@@ -149,6 +193,7 @@ export function setClockForTests(source: (() => number) | undefined): void {
   testClock = source;
   if (source === undefined) {
     offset = 0;
-    workUnitStorage = undefined;
+    workUnitStorages = [];
+    requireFailedAt = undefined;
   }
 }

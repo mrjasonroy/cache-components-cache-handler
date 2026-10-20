@@ -136,3 +136,5 @@ aborted it; only `createMemoryDataCacheHandler` (already on the performance cloc
 Fix: every handler path reads `nowMs()`, wall time measured on the performance clock and
 re-anchored to `Date` only where reading it cannot abort a prerender, and converts Next's own
 timestamps at the boundary (DEC-3); `shared/clock.test.ts` keeps `Date` reads out of the source.
+When Next's work unit storage cannot be found (`require` fails in a packaged deploy), `Date` is
+read only if Next has not extended it (`shared/clock-detection.test.ts`).

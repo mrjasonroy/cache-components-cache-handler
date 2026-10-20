@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { fromNextClock, nowMs, setClockForTests, toNextClock } from "./clock.js";
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,6 +39,31 @@ describe("clock", () => {
       ).toBeLessThan(2);
       expect(fromNextClock(toNextClock(now))).toBe(now);
       Reflect.deleteProperty(performance, "timeOrigin");
+    }
+  });
+
+  test("without Next (Date native, nothing to require): re-anchors to wall time", async () => {
+    expect(Function.prototype.toString.call(Date)).toContain("[native code]");
+    vi.resetModules();
+    vi.doMock("./node-require.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./node-require.js")>()),
+      requireModule: () => {
+        throw new Error("Cannot find module 'next'");
+      },
+    }));
+    try {
+      const fresh = await import("./clock.js");
+      Object.defineProperty(performance, "timeOrigin", {
+        value: performance.timeOrigin + 5_000,
+        configurable: true,
+      });
+      const before = Date.now();
+      const now = fresh.nowMs();
+      expect(now).toBeGreaterThanOrEqual(before - 1);
+      expect(now).toBeLessThanOrEqual(Date.now() + 1);
+    } finally {
+      vi.doUnmock("./node-require.js");
+      vi.resetModules();
     }
   });
 
