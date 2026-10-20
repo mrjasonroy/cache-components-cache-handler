@@ -24,6 +24,7 @@ const DATE_READ =
 
 describe("clock", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     Reflect.deleteProperty(performance, "timeOrigin");
     setClockForTests(() => Date.now());
   });
@@ -46,6 +47,24 @@ describe("clock", () => {
       ).toBeLessThan(2);
       expect(fromNextClock(toNextClock(now))).toBe(now);
       Reflect.deleteProperty(performance, "timeOrigin");
+    }
+  });
+
+  test("a time converted to Next's clock and back is the same millisecond, whatever the offset's fraction", () => {
+    setClockForTests(undefined);
+    const wall = 1_800_000_000_000;
+    const origin = performance.timeOrigin;
+    let elapsed = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    vi.spyOn(Date, "now").mockImplementation(() => wall);
+    const time = wall - 60_000;
+    // The performance clock moves within one wall millisecond between the two conversions, so
+    // each measures a slightly different fraction.
+    for (let step = 0; step < 100; step++) {
+      elapsed = wall - origin - step / 100;
+      const onNext = toNextClock(time);
+      elapsed += 0.37;
+      expect(fromNextClock(onNext)).toBe(time);
     }
   });
 

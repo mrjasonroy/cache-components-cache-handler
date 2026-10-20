@@ -24,7 +24,10 @@
  * **Next's own timestamps** (`"use cache"` `entry.timestamp`, and the `lastModified` Next ages
  * page entries by) are on Next's performance clock: convert them with {@link fromNextClock} when
  * they come in and {@link toNextClock} when they go back, so stored times are wall times
- * everywhere and Next still reads its own clock.
+ * everywhere and Next still reads its own clock. Both use a whole-millisecond offset that moves
+ * only when the measured one has drifted by more than 1 ms: `Date.now()` is whole milliseconds, so
+ * each measurement differs by a fraction, and a fractional offset rounded twice, or re-measured
+ * between the two conversions, brought a time back 1 ms off.
  *
  * All values are whole milliseconds: they are stored in Redis as integers.
  */
@@ -63,6 +66,12 @@ let lookupFailedAt: number | undefined;
 
 /** Wall time minus the performance clock, in ms, as last measured. */
 let offset = 0;
+
+/**
+ * The offset Next's timestamps are converted with: whole ms, moved only by more than 1 ms of drift,
+ * so that converting a time to Next's clock and back gives the same time.
+ */
+let conversionOffset = 0;
 
 let testClock: (() => number) | undefined;
 
@@ -159,7 +168,11 @@ export function isDateSafe(): boolean {
  */
 function anchor(): number {
   const performanceNow = performanceClock();
-  if (isDateSafe()) offset = Date.now() - performanceNow;
+  if (isDateSafe()) {
+    offset = Date.now() - performanceNow;
+    const rounded = Math.round(offset);
+    if (Math.abs(rounded - conversionOffset) > 1) conversionOffset = rounded;
+  }
   return performanceNow;
 }
 
@@ -186,7 +199,7 @@ export function nextClockMs(): number {
 export function fromNextClock(time: number): number {
   if (testClock) return time;
   anchor();
-  return Math.round(time + offset);
+  return Math.round(time + conversionOffset);
 }
 
 /**
@@ -195,7 +208,7 @@ export function fromNextClock(time: number): number {
 export function toNextClock(time: number): number {
   if (testClock) return time;
   anchor();
-  return Math.round(time - offset);
+  return Math.round(time - conversionOffset);
 }
 
 /**
@@ -208,6 +221,7 @@ export function setClockForTests(source: (() => number) | undefined): void {
   testClock = source;
   if (source === undefined) {
     offset = 0;
+    conversionOffset = 0;
     moduleStorage = undefined;
     lookupFailedAt = undefined;
   }

@@ -99,11 +99,12 @@ These are documented in the README; they are listed here so they are not redisco
 
 ## ISSUE-3: Connection tuning is not public
 
-**Status:** Resolved for the 16.5 path (PM default, pending Jason; DEC-4) · **Severity:** Low · **Area:** `shared/runtime.ts`, `shared/connection.ts`
+**Status:** Resolved (DEC-4 for the 16.5 path; public on `CacheOptions` since DEC-6, approved by Jason on 2026-10-20) · **Severity:** Low · **Area:** `shared/runtime.ts`, `shared/connection.ts`
 
 Resolution: `createCacheHandler` and `RedisCacheHandler` / `createRedisCacheHandler` (including
 `redis: RedisOptions`) now take `connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts`
-and pass them to the connection. `withCache` and `CacheOptions` stay as they were (env only).
+and pass them to the connection. DEC-6 then made them `CacheOptions`, so every factory and
+`flushCache` take them; `withCache` stays environment-only.
 The original report:
 
 `connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts` exist on the internal
@@ -216,9 +217,11 @@ is dropped silently.
   Accepted: pending invalidations are never dropped to impose a limit. Bounded by distinct
   option sets times key prefixes; an application client's goes with the client.
 - **The shared connection and tag state log through the first handler's `logger`** (DEC-7).
-  Accepted: keying them by logger would split the shared client (DEC-4). Use one logger, or
+  Accepted: keying them by logger would split the shared client (DEC-3, DEC-6). Use one logger, or
   `setCacheLogger`.
-- **`RedisCacheHandlerOptions.redis` is not marked `@deprecated`** (architecture review L7). It
-  is public API, so it was left to Jason; it is documented as the 16.5 form.
+- **`RedisCacheHandlerOptions.redis` is not marked `@deprecated`** (architecture review L7).
+  Declined: `RedisCacheHandler` is not deprecated, and `redis` is how an existing 16.5 setup
+  passes host, port and TLS. Marking it would show strike-through warnings to users who need
+  not change anything. It stays documented as the 16.5 form, beside `url`/`client`.
 - **No `CACHE_DEBUG` line when the clock offset was never measured** (architecture review L6).
   DEC-3, ISSUE-4 and the README describe the fail-closed case; the debug line is not added.

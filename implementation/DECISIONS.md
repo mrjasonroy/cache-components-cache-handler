@@ -18,9 +18,9 @@ lines straight to the console.
   `createRedisCacheHandler`; `flushCache` takes it too). Precedence: the option, then the process
   logger, then the console, decided for each line, so a logger set after the handlers were
   created still applies. The connection and tag state are shared by every handler of a
-  connection and key prefix (DEC-4); they log through the logger of the handler that opened them,
+  connection and key prefix (DEC-3, DEC-6); they log through the logger of the handler that opened them,
   then the process logger. Keying them by logger as well would split the shared client, which is
-  what DEC-4 avoids.
+  what DEC-3 and DEC-6 avoid.
 - **The default is unchanged.** Without a logger, every line reaches `console.<level>` with the
   same arguments as before (`shared/logger.ts` `writeLog`'s `consoleArgs`). The three rate-limited
   reporters (connection, runtime, tag store) and their `[RedisCache]:`-style prefixes are kept;
@@ -138,13 +138,16 @@ the `cacheHandlers` entries, an instrumentation file). The rule:
   the runtime of the other connection, and its tag store, with nothing logged. The ids now live on
   `globalThis` beside the registry (`shared/runtime-graphs.test.ts` loads `runtime.ts` twice).
 
-## DEC-4: Compression: PM default, pending Jason; connection tuning on the 16.5 path
+## DEC-4: Compression on by default; connection tuning on the 16.5 path
 
-**Status:** PM default, pending Jason · **Date:** 2026-10-19
+**Status:** Compression approved by Jason on 2026-10-20 (on by default, 16 KB threshold, Brotli
+quality 4); connection tuning superseded by DEC-6 · **Date:** 2026-10-19
 
 ### Compression
 
-Entries of 16 KB and more (encoded v2 size) are stored Brotli-compressed, on by default.
+Entries of 16 KB and more (encoded v2 size) are stored Brotli-compressed, on by default. This
+started as a PM default; Jason decided on 2026-10-20 to ship it on by default with this threshold
+and quality (Opus final review L2: the 16.6.0 CHANGELOG entry no longer calls it provisional).
 `CACHE_COMPRESSION=off` (also `0`, `false`, `no`) turns it off, resolved in `shared/env.ts` like
 `CACHE_DEBUG`. There is no `withCache` option and no new public API.
 
@@ -261,7 +264,12 @@ Next 16 facts this rests on (read in next@16.4.2 `dist/`):
   `fromNextClock` on the way in (`stored-entry.ts` `readPendingEntry`, the Redis data cache's
   serialize and TTL) and `toNextClock` on the way out (returned entries, `getExpiration`, the
   page and ISR memory handlers' `lastModified`), so every stored time is wall time and each pod
-  converts with its own offset. Without the conversion a comparison between a writer's
+  converts with its own offset. The two conversions use a whole-ms offset that moves only when
+  the measured offset has drifted by more than 1 ms, so a time converted to Next's clock and back
+  is the same millisecond: `Date.now()` is whole ms, so the measured offset's fraction changes
+  from call to call, and a fractional offset rounded twice, or re-measured between the two
+  conversions, brought a time back 1 ms off (`clock.test.ts` failed on and off). It costs up to
+  1.5 ms between the conversions and `nowMs()`, well inside the 5 s skew allowance. Without the conversion a comparison between a writer's
   `entry.timestamp` and another pod's tag record was off by the writer's drift; with it only
   wall-clock skew between pods remains, which the clock-skew limit in ISSUE-2 covers.
   `createMemoryDataCacheHandler` is in-process only and stays on Next's clock (`nextClockMs()`).
