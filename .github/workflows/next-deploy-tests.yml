@@ -38,7 +38,7 @@ on:
         options: ["2", "1"]
         default: "2"
       debug:
-        description: "Set CACHE_DEBUG=1 and NEXT_PRIVATE_DEBUG_CACHE=1 for next build and next start"
+        description: "Set CACHE_DEBUG, NEXT_PRIVATE_DEBUG_CACHE, NEXT_DEBUG_BUILD and __NEXT_VERBOSE_LOGGING for next build and next start"
         type: boolean
         default: false
 
@@ -54,6 +54,8 @@ env:
   NEXT_DEPLOY_INSTANCES: ${{ inputs.instances || '2' }}
   CACHE_DEBUG: ${{ inputs.debug && '1' || '' }}
   NEXT_PRIVATE_DEBUG_CACHE: ${{ inputs.debug && '1' || '' }}
+  NEXT_DEBUG_BUILD: ${{ inputs.debug && '1' || '' }}
+  __NEXT_VERBOSE_LOGGING: ${{ inputs.debug && '1' || '' }}
   # Must match the shard list in the suites matrix.
   SHARDS: "4"
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
