@@ -35,8 +35,9 @@ write a "skipped" result without running anything. That way the first runs still
 
 The job fails only when `branch` ran and either:
 
-- **A regression:** a suite passes on `baseline` and does not pass on `branch`, and it is not
-  listed in `known-failures.txt`.
+- **A regression:** a suite passes on `baseline` and does not pass on `branch`, or `branch`
+  passes fewer of its tests than `baseline` does (this catches a suite that already fails on
+  `baseline`), and it is not listed in `known-failures.txt`.
 - **Incomplete results:** a `baseline` or `branch` shard did not finish, or a suite path in
   `suites.txt` matched no files.
 

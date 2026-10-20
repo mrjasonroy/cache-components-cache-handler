@@ -2,8 +2,7 @@
  * `withCache(nextConfig, options)`: the one public way to configure the app's whole cache.
  */
 
-import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { nodeBuiltin } from "../shared/node-require.js";
 
 /**
  * Options of {@link withCache}. They are read when the config loads and decide which handler
@@ -44,10 +43,14 @@ export interface WithCacheConfig {
  * Absolute path of a built-in entry module shipped in `dist/entries`.
  */
 function entryPath(name: "page" | "remote" | "default"): string {
+  // Built-ins are loaded on use: the package root re-exports this module, and a custom handler
+  // file importing the root is bundled into the edge middleware (../shared/node-require.ts).
+  const { fileURLToPath } = nodeBuiltin<typeof import("node:url")>("node:url");
   return fileURLToPath(new URL(`../entries/${name}.js`, import.meta.url));
 }
 
 function resolvePath(path: string): string {
+  const { isAbsolute, resolve } = nodeBuiltin<typeof import("node:path")>("node:path");
   return isAbsolute(path) ? path : resolve(process.cwd(), path);
 }
 

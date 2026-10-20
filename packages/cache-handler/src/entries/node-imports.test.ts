@@ -67,8 +67,15 @@ describe("handler entries' import graph (bundled into the edge middleware)", () 
     },
   );
 
+  test("the package root loads no Node built-in or package at import time", () => {
+    // A custom handler file imports `createRedisCacheHandler` from the root, and Next bundles that
+    // file into the edge middleware too.
+    expect(Object.fromEntries(externalImports(join(src, "index.ts")))).toEqual({});
+  });
+
   test("the check sees static, re-exported and dynamic imports, and skips type-only ones", () => {
-    expect(runtimeSpecifiers(join(src, "helpers", "with-cache.ts"))).toContain("node:path");
+    // No source file imports a built-in any more; this test file does.
+    expect(runtimeSpecifiers(join(src, "entries", "node-imports.test.ts"))).toContain("node:fs");
     expect(runtimeSpecifiers(join(src, "shared", "connection.ts"))).not.toContain("ioredis");
   });
 });

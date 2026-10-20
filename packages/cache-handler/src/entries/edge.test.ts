@@ -55,6 +55,11 @@ describe("handler entries on the edge runtime (Next bundles the page handler int
     await expect(import("./default.js")).resolves.toBeDefined();
   });
 
+  test("importing the package root loads no Node built-in (a custom handler file imports it)", async () => {
+    const root = await import("../index.js");
+    expect(root.createRedisCacheHandler).toBeTypeOf("function");
+  });
+
   test("the page handler is a no-op: every read a miss, writes and revalidations do nothing", async () => {
     const PageHandler = (await import("./page.js")).default;
     const handler = new PageHandler({ serverDistDir: "/app/.next/server", fs: {} });

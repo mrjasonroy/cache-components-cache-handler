@@ -140,6 +140,14 @@ key starts with `<prefix>tags:`, the namespace where 16.5's `RedisCacheHandler` 
 `createCacheHandler` keep `nextjs:tags:<tag>` keys of other types; a tag named `index` would
 otherwise collide.
 
+The 16.5 page and data handlers' tag keys are neither read nor written, so during a rolling deploy
+from 16.5 a revalidation handled by a 16.5 instance does not reach 16.6 instances (and the
+reverse), and an entry they cached can stay stale for up to its `expire` (Opus final review M1).
+This is documented as an upgrade step (recreate deploy, or one `revalidatePath("/", "layout")`
+from 16.6 once the last 16.5 instance is gone; `flushCache` empties only the caller's memory)
+rather than handled with a compatibility shim: reading 16.5's per-tag keys would cost a `GET` per
+tag on every read forever after, to cover a window of minutes that happens once.
+
 - `updateTags` is 1 EVALSHA + 1 `ZADD GT`, however many tags it carries (EVAL instead when the
   server answers NOSCRIPT). Neither key has a TTL.
 - **Writes are monotonic.** A plain HSET of the whole record let an older write that reached

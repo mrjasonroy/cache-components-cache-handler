@@ -331,23 +331,28 @@ jobs:
 
   test-summary:
     runs-on: ubuntu-latest
-    needs: [e2e-tests, e2e-elasticache, redis-integration]
+    needs: [lint-and-typecheck, unit-tests, e2e-tests, e2e-elasticache, redis-integration]
     if: always()
     steps:
       - name: Check test results
         env:
+          LINT_RESULT: ${{ needs.lint-and-typecheck.result }}
+          UNIT_RESULT: ${{ needs.unit-tests.result }}
           E2E_RESULT: ${{ needs.e2e-tests.result }}
           ELASTICACHE_RESULT: ${{ needs.e2e-elasticache.result }}
           REDIS_INTEGRATION_RESULT: ${{ needs.redis-integration.result }}
         run: |
+          echo "Lint and typecheck: $LINT_RESULT"
+          echo "Unit Tests: $UNIT_RESULT"
           echo "E2E Matrix Tests: $E2E_RESULT"
           echo "ElastiCache Tests: $ELASTICACHE_RESULT"
           echo "Redis Integration: $REDIS_INTEGRATION_RESULT"
 
-          # Accept both 'success' and 'skipped' as valid results
-          for result in "$E2E_RESULT" "$ELASTICACHE_RESULT" "$REDIS_INTEGRATION_RESULT"; do
-            if [[ "$result" != "success" && "$result" != "skipped" ]]; then
-              echo "❌ Some tests failed"
+          # Every job must succeed. No job has an `if:` of its own, so a skipped job means a job
+          # it needs failed or was cancelled: skipped is a failure here, not a pass.
+          for result in "$LINT_RESULT" "$UNIT_RESULT" "$E2E_RESULT" "$ELASTICACHE_RESULT" "$REDIS_INTEGRATION_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "❌ Some checks failed, were cancelled or were skipped"
               exit 1
             fi
           done

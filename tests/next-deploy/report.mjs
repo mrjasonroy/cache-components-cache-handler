@@ -8,7 +8,8 @@
 // the job summary). <ref> is NEXT_REF, e.g. v16.4.2.
 //
 // Exit 1 only when `branch` ran and either
-//   - a suite passes on `baseline` and does not pass on `branch` (not in known-failures.txt), or
+//   - a suite passes on `baseline` and does not pass on `branch`, or passes fewer tests on
+//     `branch` than on `baseline` (either not in known-failures.txt), or
 //   - `baseline` or `branch` results are incomplete (a shard never finished), since a missing
 //     result can hide a regression.
 // `pkg-16.5.1` is informational. A skipped `branch` (no withCache yet) never fails the job.
@@ -170,14 +171,17 @@ for (const [suite, bySuite] of [...suites].sort(([a], [b]) => a.localeCompare(b)
     variants[variant].state === "skipped" ? "not run" : (bySuite[variant]?.status ?? "missing");
   const baseline = status("baseline");
   const branch = status("branch");
+  // A suite that fails on baseline still guards the tests it passes there.
+  const baselinePassed = bySuite.baseline?.passed ?? 0;
+  const fewerPassed = baselinePassed > 0 && (bySuite.branch?.passed ?? 0) < baselinePassed;
   let verdict;
 
   if (!branchRan) {
     verdict = "branch not run";
-  } else if (branch === "pass") {
+  } else if (branch === "pass" && !fewerPassed) {
     verdict = known.has(suite) ? "passes (remove from known-failures.txt)" : "ok";
     if (known.has(suite)) staleKnown.push(suite);
-  } else if (baseline === "pass") {
+  } else if (baseline === "pass" || fewerPassed) {
     if (known.has(suite)) {
       const { reason, nextBug } = known.get(suite);
       verdict = `${nextBug ? "known Next bug" : "known failure"}${reason ? ` (${reason})` : ""}`;

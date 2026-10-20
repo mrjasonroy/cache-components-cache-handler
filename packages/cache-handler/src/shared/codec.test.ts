@@ -8,7 +8,6 @@ import {
   decodeEntry,
   decodeStored,
   encodeEntry,
-  encodeEntryString,
   encodeStored,
   storedSizes,
 } from "./codec.js";
@@ -122,19 +121,12 @@ describe("entry codec", () => {
     expect(decodeEntry(undefined)).toBeUndefined();
   });
 
-  test("decodes the base64 string a string-only client stores", () => {
-    const encoded = encodeEntryString({ value: Buffer.from("via base64"), tags: ["a"] });
-    expect(encoded).toMatch(/^[A-Za-z0-9+/]+=*$/);
-
-    const decoded = decodeEntry<{ value: Buffer; tags: string[] }>(encoded);
-    expect(decoded?.tags).toEqual(["a"]);
-    expect(Buffer.from(decoded?.value ?? []).toString()).toBe("via base64");
-  });
-
-  test("decodes a Buffer holding base64 text", () => {
-    const text = encodeEntryString({ value: Buffer.from("buffered base64") });
-    const decoded = decodeEntry<{ value: Buffer }>(Buffer.from(text, "utf8"));
-    expect(Buffer.from(decoded?.value ?? []).toString()).toBe("buffered base64");
+  test("base64 text of an entry is a miss: every client stores the bytes", async () => {
+    const encoded = encodeEntry({ value: Buffer.from("via base64"), tags: ["a"] });
+    const text = encoded.toString("base64");
+    expect(decodeEntry(text)).toBeUndefined();
+    expect(decodeEntry(Buffer.from(text, "utf8"))).toBeUndefined();
+    expect(await decodeStored(text)).toBeUndefined();
   });
 
   test("decodes binary handed back as a latin1 string", () => {
@@ -328,9 +320,9 @@ describe("entry codec", () => {
       expect(await decodeStored(await encodeStored(value, off))).toBeDefined();
     });
 
-    test("v2 entries, binary or base64, still decode", async () => {
+    test("v2 entries, binary or latin1 text, still decode", async () => {
       const value = { value: Buffer.from("plain v2"), tags: ["t"] };
-      for (const raw of [encodeEntry(value), encodeEntryString(value)]) {
+      for (const raw of [encodeEntry(value), encodeEntry(value).toString("latin1")]) {
         const decoded = await decodeStored<typeof value>(raw);
         expect(Buffer.from(decoded?.value ?? []).toString()).toBe("plain v2");
       }
@@ -339,13 +331,11 @@ describe("entry codec", () => {
       expect(await decodeStored("")).toBeUndefined();
     });
 
-    test("a v3 entry handed back as base64 or latin1 text decodes", async () => {
+    test("a v3 entry handed back as latin1 text decodes", async () => {
       const value = { value: text(64 * 1024) };
       const stored = await encodeStored(value, on);
-      for (const raw of [stored.toString("base64"), stored.toString("latin1")]) {
-        const decoded = await decodeStored<typeof value>(raw);
-        expect(Buffer.compare(decoded?.value ?? Buffer.alloc(0), value.value)).toBe(0);
-      }
+      const decoded = await decodeStored<typeof value>(stored.toString("latin1"));
+      expect(Buffer.compare(decoded?.value ?? Buffer.alloc(0), value.value)).toBe(0);
     });
 
     test("the synchronous v2 reader treats v3 as a miss", async () => {

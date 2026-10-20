@@ -10,8 +10,6 @@
  *
  * A reader accepts only this magic and version, so an entry in any other format (16.5's JSON,
  * a future version, a foreign value under the same key) reads as a miss, never as data.
- * Clients that can only send and receive strings store the same bytes base64-encoded
- * ({@link encodeEntryString}), which {@link decodeEntry} also reads.
  *
  * Format version 3 is a compressed v2 entry, written by {@link encodeStored} for entries of 16 KB
  * and over: `NCH` · version 3 · codec (1 byte: 1 = Brotli; 2 is reserved for zstd) · the v2
@@ -151,13 +149,6 @@ function layoutBlobs(arrays: Uint8Array[]): {
   return { blobs, refs };
 }
 
-/**
- * Encode for a client that only handles strings: the {@link encodeEntry} bytes in base64.
- */
-export function encodeEntryString(value: unknown): string {
-  return encodeEntry(value).toString("base64");
-}
-
 function hasPreamble(bytes: Buffer): boolean {
   return (
     bytes.length >= PREAMBLE_LENGTH &&
@@ -168,20 +159,17 @@ function hasPreamble(bytes: Buffer): boolean {
 }
 
 /**
- * The entry's bytes, starting with the magic: `raw` itself, or decoded from the base64 a
- * string-only client stores. `undefined` when neither starts with the magic.
+ * The entry's bytes, starting with the magic: `raw` itself, or a string a client handed back as
+ * latin1. `undefined` when they do not start with the magic.
  */
 function entryBytes(raw: Buffer | string | null | undefined): Buffer | undefined {
   if (raw === null || raw === undefined) return undefined;
   const bytes = typeof raw === "string" ? Buffer.from(raw, "latin1") : raw;
-  if (hasPreamble(bytes)) return bytes;
-  // Written by a string-only client.
-  const decoded = Buffer.from(typeof raw === "string" ? raw : raw.toString("latin1"), "base64");
-  return hasPreamble(decoded) ? decoded : undefined;
+  return hasPreamble(bytes) ? bytes : undefined;
 }
 
 /**
- * Decode an entry written by {@link encodeEntry} or {@link encodeEntryString}. Returns
+ * Decode an entry written by {@link encodeEntry}. Returns
  * `undefined` for anything else, including other format versions and corrupt entries. Buffers in the result are
  * views of `raw`, not copies.
  */

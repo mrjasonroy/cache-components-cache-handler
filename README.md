@@ -153,7 +153,7 @@ Limits worth knowing:
   values are misses rather than possibly stale hits.
 - A process's first sync reads every tag in the index, 1,000 per round trip, paging by score so
   a tag revalidated mid-sync can never push another out of reach. After that it reads only what
-  changed. The index is trimmed by age only, so a sync never misses an update.
+  changed. The index is never trimmed, so a sync never misses an update.
 - Tag records are never deleted, except by `flushCache({ scope: "all" })`: a deleted record would
   read as never-invalidated and bring stale entries back. Only tags that were revalidated get a
   record, about 230 B each, so the hash grows with the distinct tags ever revalidated (100,000
@@ -437,15 +437,34 @@ Then delete `data-cache-handler.mjs`. Two things change:
 - Pages and route handlers now go through Redis too. Pass `{ pages: false }` to opt out.
 
 The cache starts cold, because the key layout is new. Every deploy starts cold anyway, because
-entries are scoped by build ID, so there is no migration step.
+entries are scoped by build ID, so there is no data to migrate.
+
+#### Revalidations do not cross the upgrade
+
+16.5 records a revalidation in `nextjs:tags:<tag>`
+keys; 16.6 reads and writes only the `<prefix>tags` hash. While 16.5 and 16.6 instances serve side
+by side, a `revalidateTag` or `revalidatePath` handled by a 16.5 instance never reaches the 16.6
+instances, so a page they cached can stay stale until its tag is revalidated again or the entry
+expires (up to a year for `revalidate: false` or the `"max"` profile). The reverse holds too. For
+this one upgrade, either:
+
+- deploy with recreate rather than rolling, so no 16.5 instance serves alongside 16.6; or
+- once the last 16.5 instance is gone, revalidate once from a 16.6 instance:
+  `revalidatePath("/", "layout")`, or the tags that changed during the rollout. That goes through
+  the shared tag store, so it reaches every instance, including each one's `"use cache"` memory.
+  `flushCache()` is not a substitute: it empties only the calling process's memory.
+
+`createCacheHandler` keeps its 16.5 key layout, so its own revalidations are unaffected. Between
+16.6 builds, a revalidation reaches every instance, old build and new.
 
 If you keep `createCacheHandler` for now, it keeps working. It now uses the shared connection and
 the memory fallback, and its `commandTimeout` default drops from 2000 to 1000 ms.
 
 ### From a 16.5.1 `RedisCacheHandler` subclass
 
-Nothing breaks: the class name and constructor are the same, and the internals now implement the
-Next 16 contract. You can delete the subclass and use `withCache`. If you keep it:
+Your code keeps working: the class name and constructor are the same, and the internals now
+implement the Next 16 contract. Revalidations made by 16.5 instances do not reach 16.6 ones during
+the rollout ([above](#revalidations-do-not-cross-the-upgrade) has what to do). You can delete the subclass and use `withCache`. If you keep it:
 
 - With no `redis` option, the handler reads `REDIS_URL`. If that is unset it runs in memory; in
   16.5 it connected to `localhost:6379`.

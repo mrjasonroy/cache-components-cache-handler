@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "nextjsRef": "v16.4.2",
-  "generatedAt": "2026-10-19T22:46:29.045Z",
-  "run": "https://github.com/mrjasonroy/cache-components-cache-handler/actions/runs/39336221878",
-  "commit": "495afb93b70eaaeb3386cb57b32c2c9d4c5b6bb7",
+  "generatedAt": "2026-10-20T01:42:34.991Z",
+  "run": "https://github.com/mrjasonroy/cache-components-cache-handler/actions/runs/39354131437",
+  "commit": "5e8989de0b640445160818fff6f198b57e395e91",
   "options": {
     "shards": 4,
     "useCache": "memory",
@@ -31,15 +31,15 @@
       "state": "ran",
       "incomplete": [],
       "suites": {
-        "pass": 12,
-        "fail": 6,
+        "pass": 13,
+        "fail": 5,
         "timeout": 0,
         "skipped": 10,
         "missing": 0
       },
       "tests": {
-        "passed": 111,
-        "failed": 94,
+        "passed": 112,
+        "failed": 93,
         "skipped": 373,
         "total": 578
       }
@@ -48,34 +48,34 @@
       "state": "ran",
       "incomplete": [],
       "suites": {
-        "pass": 12,
-        "fail": 6,
+        "pass": 15,
+        "fail": 3,
         "timeout": 0,
         "skipped": 10,
         "missing": 0
       },
       "tests": {
-        "passed": 41,
-        "failed": 126,
-        "skipped": 365,
-        "total": 532
+        "passed": 114,
+        "failed": 91,
+        "skipped": 373,
+        "total": 578
       }
     }
   },
   "harnessBroken": null,
-  "regressions": [
-    "test/e2e/app-dir/app-static",
-    "test/e2e/app-dir/cache-components",
-    "test/e2e/app-dir/use-cache-infinity-profile",
-    "test/e2e/app-dir/use-cache-metadata-route-handler"
-  ],
-  "knownFailures": [],
+  "regressions": [],
+  "knownFailures": {
+    "test/e2e/app-dir/app-static": {
+      "reason": "vercel/next.js#100046: Turbopack edge cacheHandlers registration",
+      "nextBug": true
+    }
+  },
   "suites": {
     "test/e2e/app-dir/actions-revalidate-remount": {
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 21,
+        "seconds": 24,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -83,7 +83,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 21,
+        "seconds": 25,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -91,7 +91,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 22,
+        "seconds": 20,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -99,10 +99,10 @@
       }
     },
     "test/e2e/app-dir/app-static": {
-      "verdict": "REGRESSION",
+      "verdict": "known Next bug (vercel/next.js#100046: Turbopack edge cacheHandlers registration)",
       "baseline": {
         "status": "pass",
-        "seconds": 199,
+        "seconds": 202,
         "passed": 89,
         "failed": 0,
         "skipped": 7,
@@ -118,7 +118,7 @@
       },
       "branch": {
         "status": "fail",
-        "seconds": 30,
+        "seconds": 31,
         "passed": 0,
         "failed": 89,
         "skipped": 7,
@@ -126,10 +126,10 @@
       }
     },
     "test/e2e/app-dir/cache-components": {
-      "verdict": "REGRESSION",
+      "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 244,
+        "seconds": 213,
         "passed": 71,
         "failed": 0,
         "skipped": 8,
@@ -137,26 +137,26 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 217,
+        "seconds": 246,
         "passed": 71,
         "failed": 0,
         "skipped": 8,
         "total": 79
       },
       "branch": {
-        "status": "fail",
-        "seconds": 429,
-        "passed": 3,
-        "failed": 30,
-        "skipped": 0,
-        "total": 33
+        "status": "pass",
+        "seconds": 235,
+        "passed": 71,
+        "failed": 0,
+        "skipped": 8,
+        "total": 79
       }
     },
     "test/e2e/app-dir/cache-components-request-apis": {
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 22,
+        "seconds": 12,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -164,7 +164,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 22,
+        "seconds": 23,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -183,7 +183,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 12,
+        "seconds": 13,
         "passed": 1,
         "failed": 0,
         "skipped": 2,
@@ -191,7 +191,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 9,
+        "seconds": 14,
         "passed": 1,
         "failed": 0,
         "skipped": 2,
@@ -199,7 +199,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 12,
+        "seconds": 10,
         "passed": 1,
         "failed": 0,
         "skipped": 2,
@@ -210,7 +210,7 @@
       "verdict": "no baseline pass",
       "baseline": {
         "status": "fail",
-        "seconds": 31,
+        "seconds": 21,
         "passed": 0,
         "failed": 1,
         "skipped": 0,
@@ -218,28 +218,28 @@
       },
       "pkg-16.5.1": {
         "status": "fail",
-        "seconds": 33,
+        "seconds": 32,
         "passed": 0,
         "failed": 1,
         "skipped": 0,
         "total": 1,
-        "notes": ["fixture cacheHandler kept"]
+        "notes": ["fixture cacheHandler kept", "1 instance (fixture handler is per-process)"]
       },
       "branch": {
         "status": "fail",
-        "seconds": 34,
+        "seconds": 31,
         "passed": 0,
         "failed": 1,
         "skipped": 0,
         "total": 1,
-        "notes": ["fixture cacheHandler kept"]
+        "notes": ["fixture cacheHandler kept", "1 instance (fixture handler is per-process)"]
       }
     },
     "test/e2e/app-dir/non-ascii-cache-tags": {
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 23,
+        "seconds": 26,
         "passed": 6,
         "failed": 0,
         "skipped": 0,
@@ -247,7 +247,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 25,
+        "seconds": 30,
         "passed": 6,
         "failed": 0,
         "skipped": 0,
@@ -255,7 +255,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 24,
+        "seconds": 23,
         "passed": 6,
         "failed": 0,
         "skipped": 0,
@@ -266,7 +266,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 22,
@@ -301,7 +301,7 @@
       },
       "pkg-16.5.1": {
         "status": "skipped",
-        "seconds": 2,
+        "seconds": 3,
         "passed": 0,
         "failed": 0,
         "skipped": 194,
@@ -309,7 +309,7 @@
       },
       "branch": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 194,
@@ -320,7 +320,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 3,
@@ -328,7 +328,7 @@
       },
       "pkg-16.5.1": {
         "status": "skipped",
-        "seconds": 2,
+        "seconds": 3,
         "passed": 0,
         "failed": 0,
         "skipped": 3,
@@ -336,7 +336,7 @@
       },
       "branch": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 3,
@@ -374,7 +374,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 35,
+        "seconds": 29,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -382,7 +382,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 36,
+        "seconds": 37,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -390,7 +390,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 36,
+        "seconds": 35,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -401,7 +401,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 26,
+        "seconds": 25,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -409,7 +409,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 22,
+        "seconds": 20,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -428,7 +428,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 8,
+        "seconds": 6,
         "passed": 0,
         "failed": 0,
         "skipped": 104,
@@ -436,7 +436,7 @@
       },
       "pkg-16.5.1": {
         "status": "skipped",
-        "seconds": 5,
+        "seconds": 6,
         "passed": 0,
         "failed": 0,
         "skipped": 104,
@@ -444,7 +444,7 @@
       },
       "branch": {
         "status": "skipped",
-        "seconds": 7,
+        "seconds": 8,
         "passed": 0,
         "failed": 0,
         "skipped": 104,
@@ -455,7 +455,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 14,
+        "seconds": 15,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -463,7 +463,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 9,
+        "seconds": 16,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -471,7 +471,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 14,
+        "seconds": 8,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -482,7 +482,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 4,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 9,
@@ -490,7 +490,7 @@
       },
       "pkg-16.5.1": {
         "status": "skipped",
-        "seconds": 1,
+        "seconds": 3,
         "passed": 0,
         "failed": 0,
         "skipped": 9,
@@ -509,7 +509,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 15,
+        "seconds": 11,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -517,7 +517,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 12,
+        "seconds": 15,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -525,7 +525,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 17,
+        "seconds": 18,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -563,7 +563,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 23,
+        "seconds": 18,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -571,7 +571,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 23,
+        "seconds": 24,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -579,7 +579,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 24,
+        "seconds": 23,
         "passed": 1,
         "failed": 0,
         "skipped": 0,
@@ -587,39 +587,45 @@
       }
     },
     "test/e2e/app-dir/use-cache-infinity-profile": {
-      "verdict": "REGRESSION",
+      "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 11,
+        "seconds": 13,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
         "total": 2
       },
       "pkg-16.5.1": {
-        "status": "fail",
-        "seconds": 20,
-        "passed": 1,
-        "failed": 1,
+        "status": "pass",
+        "seconds": 13,
+        "passed": 2,
+        "failed": 0,
         "skipped": 0,
         "total": 2,
-        "notes": ["fixture cacheHandlers.default kept"]
+        "notes": [
+          "fixture cacheHandlers.default kept",
+          "1 instance (fixture handler is per-process)"
+        ]
       },
       "branch": {
-        "status": "fail",
-        "seconds": 23,
-        "passed": 1,
-        "failed": 1,
+        "status": "pass",
+        "seconds": 9,
+        "passed": 2,
+        "failed": 0,
         "skipped": 0,
         "total": 2,
-        "notes": ["fixture cacheHandlers.default kept"]
+        "notes": [
+          "fixture cacheHandlers.default kept",
+          "1 instance (fixture handler is per-process)"
+        ]
       }
     },
     "test/e2e/app-dir/use-cache-metadata-route-handler": {
-      "verdict": "REGRESSION",
+      "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 15,
+        "seconds": 11,
         "passed": 10,
         "failed": 0,
         "skipped": 0,
@@ -627,17 +633,17 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 12,
+        "seconds": 16,
         "passed": 10,
         "failed": 0,
         "skipped": 0,
         "total": 10
       },
       "branch": {
-        "status": "fail",
-        "seconds": 33,
-        "passed": 6,
-        "failed": 4,
+        "status": "pass",
+        "seconds": 15,
+        "passed": 10,
+        "failed": 0,
         "skipped": 0,
         "total": 10
       }
@@ -646,7 +652,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 70,
+        "seconds": 68,
         "passed": 9,
         "failed": 0,
         "skipped": 0,
@@ -654,7 +660,7 @@
       },
       "pkg-16.5.1": {
         "status": "fail",
-        "seconds": 127,
+        "seconds": 130,
         "passed": 8,
         "failed": 1,
         "skipped": 0,
@@ -673,7 +679,7 @@
       "verdict": "ok",
       "baseline": {
         "status": "pass",
-        "seconds": 16,
+        "seconds": 11,
         "passed": 3,
         "failed": 0,
         "skipped": 1,
@@ -689,7 +695,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 18,
+        "seconds": 16,
         "passed": 3,
         "failed": 0,
         "skipped": 1,
@@ -700,7 +706,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 2,
+        "seconds": 3,
         "passed": 0,
         "failed": 0,
         "skipped": 7,
@@ -708,7 +714,7 @@
       },
       "pkg-16.5.1": {
         "status": "skipped",
-        "seconds": 2,
+        "seconds": 3,
         "passed": 0,
         "failed": 0,
         "skipped": 7,
@@ -716,7 +722,7 @@
       },
       "branch": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 7,
@@ -727,7 +733,7 @@
       "verdict": "no baseline pass",
       "baseline": {
         "status": "fail",
-        "seconds": 21,
+        "seconds": 14,
         "passed": 0,
         "failed": 1,
         "skipped": 0,
@@ -735,7 +741,7 @@
       },
       "pkg-16.5.1": {
         "status": "fail",
-        "seconds": 14,
+        "seconds": 20,
         "passed": 0,
         "failed": 1,
         "skipped": 0,
@@ -770,7 +776,7 @@
       },
       "branch": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 7,
@@ -781,7 +787,7 @@
       "verdict": "skipped in deploy mode",
       "baseline": {
         "status": "skipped",
-        "seconds": 3,
+        "seconds": 2,
         "passed": 0,
         "failed": 0,
         "skipped": 3,
@@ -816,7 +822,7 @@
       },
       "pkg-16.5.1": {
         "status": "pass",
-        "seconds": 33,
+        "seconds": 37,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
@@ -824,7 +830,7 @@
       },
       "branch": {
         "status": "pass",
-        "seconds": 33,
+        "seconds": 31,
         "passed": 2,
         "failed": 0,
         "skipped": 0,
