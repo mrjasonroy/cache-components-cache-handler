@@ -179,11 +179,12 @@ redis-cli zrevrange nextjs:tag-index 0 9 withscores    # the 10 most recently in
 redis-cli hget nextjs:tags <tag>                       # one tag's "<stale>,<expired>"
 ```
 
-The tag keys are shared by every build and never expire or get pruned: a deleted record would read
-as never-invalidated. They grow with the distinct tags ever revalidated (about 230 B each; 100,000
-tags take about 23 MB). `flushCache({ scope: "all" })` clears them with the entries. In `INFO commandstats`, expect about one `HMGET` per
-page `GET`: every page read also reads the records of the tags that apply to it. See
-[Sizing](#sizing).
+The two tag keys have no key TTL. Their fields and index members are expired or pruned by the
+[tag retention rules](./how-it-works.md#distributed-tag-coordination-for-use-cache); on a Cluster
+without hash-field TTLs they grow until `flushCache({ scope: "all" })`.
+
+In `INFO commandstats`, expect about one `HMGET` per page `GET`: every page read also reads the
+records of the tags that apply to it. See [Sizing](#sizing).
 
 Old builds' entries are not deleted on deploy; they expire on their own. To clear them sooner, use
 [`flushCache`](./operations.md#flushing-the-cache).

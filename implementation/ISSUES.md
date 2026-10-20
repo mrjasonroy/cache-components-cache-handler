@@ -90,7 +90,7 @@ A skipped test documenting the expected behavior lives in
 
 **Status:** Open (by design) · **Severity:** Low · **Area:** `shared/tag-store.ts`, `shared/flush.ts`
 
-These are documented in the README; they are listed here so they are not rediscovered as bugs.
+These are documented in `docs/how-it-works.md` and `docs/operations.md`; they are listed here so they are not rediscovered as bugs.
 
 - **Outage invalidations stay local.** A `revalidateTag` while Redis is down reaches only the
   instance that made it (a warning is logged). Other instances keep serving their copy until it
@@ -160,7 +160,7 @@ any other library has replaced `Date` (`@sinonjs/fake-timers`, `timekeeper`, som
 clock then fails closed: it never measures the offset and stays on the performance clock, which is
 what Next's own handlers use. That is safe for prerenders, but that process's stored times can
 drift from other instances' over a long uptime, so "instances agree on time" stops holding for it.
-Documented in the README's tag coordination limits.
+Documented in `docs/how-it-works.md`, under the tag coordination limits.
 
 ## ISSUE-5: `flushCache` kept a plain Node process alive
 
@@ -203,8 +203,8 @@ is dropped silently.
 - **A rolling deploy from 16.4.2 splits tag invalidation** (Opus final review, M1; raised against
   16.5.x, whose tag keys are the same as 16.4.2's). No tag-key shim: 16.4.3 neither reads nor
   writes the old tag keys, so a revalidation on a 16.4.2 instance does not reach 16.4.3 instances
-  while both serve. The README and CHANGELOG give the deploy step instead (recreate, or
-  revalidate once from 16.4.3). A shim would keep the old key layout alive in 16.x.
+  while both serve. `docs/migrating.md` and the CHANGELOG give the deploy step instead (recreate,
+  or revalidate once from 16.4.3). A shim would keep the old key layout alive in 16.x.
 - **`createCacheHandler` does not reconnect after `closeCache()`** (DEC-6). Declined: making the
   16.5 stack re-resolve its connection was not worth it for a deprecated API. Its deprecation note
   says to create it again.
@@ -218,8 +218,8 @@ is dropped silently.
   build time from `cache-handler-build.json`, not the file mtime (DEC-3), which was the problem;
   nobody has asked to turn build output off.
 - **A slow transfer of a 1 to 5 MB entry can count as a timeout** (Opus review 3, #6). Three in a
-  row drop the connection for the process. Documented (README, sizing: about 40 Mbit/s at the
-  default 1 s `commandTimeout`); compression makes such entries 5 to 15 times smaller (DEC-4).
+  row drop the connection for the process. Documented (`docs/custom-handlers.md`: about 40 Mbit/s at
+  the default 1 s `commandTimeout`); compression makes such entries 5 to 15 times smaller (DEC-4).
   No size-proportional timeout: it would let one slow server stall every cached call longer.
 - **A tag state Redis has not acknowledged stays in the process after `closeCache()`** (DEC-6).
   Accepted: pending invalidations are never dropped to impose a limit. Bounded by distinct
@@ -232,7 +232,7 @@ is dropped silently.
   passes host, port and TLS. Marking it would show strike-through warnings to users who need
   not change anything. It stays documented as the 16.5 form, beside `url`/`client`.
 - **No `CACHE_DEBUG` line when the clock offset was never measured** (architecture review L6).
-  DEC-3, ISSUE-4 and the README describe the fail-closed case; the debug line is not added.
+  DEC-3, ISSUE-4 and `docs/how-it-works.md` describe the fail-closed case; the debug line is not added.
 
 ## ISSUE-7: Credentials in logged errors, a Cluster flush that could hang, corrupt blob references
 

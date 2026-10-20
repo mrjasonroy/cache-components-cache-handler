@@ -13,7 +13,7 @@ One Redis-backed cache for a Next.js 16+ app: pages, route handlers, `"use cache
 
 <!-- rc: drop "@rc" (and the note below) once 16.4.3 is the npm latest release -->
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler@rc ioredis
+npm install @mrjasonroy/cache-components-cache-handler@rc
 ```
 
 `withCache` is new in 16.4.3, currently a release candidate on the `rc` tag. Drop `@rc` once
@@ -31,7 +31,7 @@ REDIS_URL=redis://cache:6379   # unset → everything stays in memory (dev, CI, 
 ```
 
 That's it. You keep writing `"use cache"`, `cacheTag` and `revalidateTag` as Next documents them
-([examples](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/usage.md)). `ioredis` is only needed when you use Redis.
+([examples](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/usage.md)). `ioredis` is installed automatically as an optional dependency.
 
 ## What you get
 
@@ -43,8 +43,8 @@ That's it. You keep writing `"use cache"`, `cacheTag` and `revalidateTag` as Nex
   every instance and every handler, including each instance's in-memory `"use cache"` values.
 - **Redis outage safety.** A request never fails because of the cache. Commands time out after
   1 s, and while Redis is down the app serves from per-instance memory, then goes back to Redis.
-- **Entries scoped by build**, so a deploy never serves the previous build's pages, and
-  `next build` never connects to Redis.
+- **Entries scoped by build**, so a deploy never serves the previous build's pages.
+- **`next build` never connects to Redis.**
 
 [How it works](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/how-it-works.md) has the details: what goes where, tag coordination, page
 lifetimes and the outage table.
@@ -79,7 +79,7 @@ instead. It also accepts a function-form `next.config`.
 |---|---|---|
 | `REDIS_URL` (or `VALKEY_URL`) | unset → memory only | `redis://` or `rediss://` URL, password included. |
 | `REDIS_PASSWORD` | — | Password when the URL has none. |
-| `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | port `6379`, TLS on | Host form, used when no URL is set. |
+| `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | port `6379`, TLS on | Host form, used when no URL is set. `ELASTICACHE_TLS=false` turns TLS off. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes and state changes. It never logs the URL. |
@@ -90,24 +90,30 @@ has the full table; for your own client or timeouts, see [Custom handlers](https
 
 ## Tested against Next.js's own tests
 
-Every PR that changes the package runs Next.js's caching e2e suites in deploy mode, using the
-harness Next.js provides for deployment adapters. Each suite runs twice: once against a plain
-`next start`, and once with this package, two instances behind a round-robin proxy, sharing one
-Redis. CI fails if a suite (or a test) that passes on `next start` does not pass with the package.
+Every PR that changes the package's source runs the caching e2e suites from the
+[`vercel/next.js`](https://github.com/vercel/next.js) repo, using Next's deploy-mode test harness
+for deployment adapters. Each suite runs twice: once against a plain `next start`, and once with
+this package, two instances behind a round-robin proxy (one instance where a fixture keeps its own
+handler), sharing one Redis. CI fails if a suite (or a test) that passes on `next start` does not
+pass with the package.
 
-At Next 16.4.2 that is **0 regressions**: every suite and test that passes on `next start` also
-passes with the package, out of 28 suites run
-([results](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/tests/next-deploy/results/baseline-v16.4.2.md)). The limits:
+At Next 16.4.2 that is **0 regressions outside one known Next bug**: apart from `app-static`
+(below), every suite and test that passes on `next start` also passes with the package. 28
+suites, 18 of which run tests in deploy mode
+([results](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/tests/next-deploy/results/baseline-v16.4.2.md); live results on the
+[deploy-tests workflow](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml)).
+The limits:
 
 - `test/e2e/app-dir/app-static` fails with any custom cache handler, because of a Next bug
-  (Turbopack's edge `cacheHandlers` registration, vercel/next.js#100046, fixed in
-  `16.5.0-canary.10`). It is listed as a known failure.
+  (Turbopack's edge `cacheHandlers` registration, fixed in a later Next canary,
+  vercel/next.js#100046). It is listed as a known failure.
 - 10 suites, such as `use-cache` and `ppr-full`, run no tests in deploy mode, so they are not
   covered here.
 
-The package's own tests add an e2e matrix on production builds (memory, Redis, Valkey and
-ElastiCache with TLS and auth), including two instances sharing Redis and Redis stopped mid-run,
-and an outage suite on real Redis 7 and Valkey 8 (down at boot, lost mid-run, stalled, back).
+The package's own tests add an e2e matrix on production builds (memory, Redis, Valkey, and the
+ElastiCache host form: Redis with TLS and an auth token), including two instances sharing Redis
+and Redis stopped mid-run, and an outage suite on real Redis 7 and Valkey 8 (down at boot, lost
+mid-run, stalled, back).
 See [the harness README](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/tests/next-deploy/README.md) and
 [how it's tested](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/development.md#how-its-tested).
 
@@ -116,9 +122,9 @@ See [the harness README](https://github.com/mrjasonroy/cache-components-cache-ha
 | Backend | How |
 |---|---|
 | **Memory** | No `REDIS_URL`: dev, CI, previews, single instance |
-| **Redis 7+** | `REDIS_URL=redis://…` or `rediss://…` |
+| **Redis 6.2+** | `REDIS_URL=redis://…` or `rediss://…` |
 | **Valkey** | `VALKEY_URL` or `REDIS_URL`, same URL format |
-| **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on |
+| **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on (`ELASTICACHE_TLS=false` turns it off) |
 | **Redis Cluster, Sentinel** | Your own ioredis client through a [custom handler](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/custom-handlers.md). `flushCache` scans every master. |
 
 The minimum is Redis 6.2 (or any Valkey): revalidations use `ZADD GT` and a single-key Lua
@@ -162,14 +168,6 @@ pnpm test
 
 See [docs/development.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/development.md) for the test lanes and release process. AI agents
 start with [CLAUDE.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CLAUDE.md); humans with [CONTRIBUTING.md](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/CONTRIBUTING.md).
-
-## Why this package
-
-I was originally going to contribute to
-[fortedigital/nextjs-cache-handler](https://github.com/fortedigital/nextjs-cache-handler), but that
-project is focused on backwards compatibility and carries a lot of legacy baggage. This one is
-written for Next.js 16+ only (Cache Components, `"use cache"`, `cacheLife`), ships with real
-end-to-end coverage for every backend, and keeps the surface small: one `withCache` call.
 
 ## License
 

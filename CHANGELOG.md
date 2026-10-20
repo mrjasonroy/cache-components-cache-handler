@@ -74,8 +74,7 @@ Still exported and still working, removed on the Next 17 line. Each has JSDoc po
 
 ### Docs
 
-- The README is rewritten around `withCache`, with migration notes from 16.4.2, from `RedisCacheHandler` subclasses, and from `@fortedigital/nextjs-cache-handler` / `@neshca/cache-handler`. It also documents the outage behaviour and the key layout for operators.
-- The README is a short landing page: quick start, configuration, how the package is tested against Next.js's own suites, backends and a migration summary. The reference material moved to `docs/`: `how-it-works.md` (what goes where, tag coordination, pages and route handlers, Redis outages), `operations.md` (flushing, closing, logging), `custom-handlers.md`, `migrating.md`, and the key layout and sizing in `redis.md`; the export and deprecation tables are in `api-reference.md`.
+- The README is rewritten around `withCache` as a short landing page: quick start, configuration, how the package is tested against Next.js's own suites, backends and a migration summary. The reference material is in `docs/`: `how-it-works.md` (what goes where, tag coordination, pages and route handlers, the outage behaviour), `operations.md` (flushing, closing, logging), `custom-handlers.md`, `migrating.md` (from 16.4.2, from `RedisCacheHandler` subclasses, and from `@fortedigital/nextjs-cache-handler` / `@neshca/cache-handler`), and the key layout and sizing for operators in `redis.md`; the export and deprecation tables are in `api-reference.md`.
 - JSDoc import paths point at the package root, and `createCacheHandler`'s documented `keyPrefix` default is the real one, `nextjs:data-cache:`.
 
 ## [16.0.0] - 2025-11-18
