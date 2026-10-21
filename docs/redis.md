@@ -16,6 +16,7 @@ Redis, and what operators see in it.
 | `REDIS_URL` / `VALKEY_URL` | `redis://` or `rediss://` (TLS) URL. Takes precedence over the ElastiCache form. |
 | `REDIS_PASSWORD` | Password when the URL has none. |
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | Host form. Port `6379`, TLS on unless `ELASTICACHE_TLS=false`. |
+| `ELASTICACHE_IAM_USER`, `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION`, `ELASTICACHE_SERVERLESS` | IAM authentication instead of an auth token. See [IAM authentication](#iam-authentication). |
 | `CACHE_REDIS` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. |
 
 URL examples:
@@ -56,9 +57,108 @@ That covers cluster-mode-disabled ElastiCache (one primary with replicas). Use t
 endpoint, not a reader endpoint. For cluster-mode-enabled ElastiCache, use a `Cluster` client as
 shown below.
 
+### IAM authentication
+
+ElastiCache can authenticate a connection with AWS IAM instead of an auth token. The package does
+this itself: set the IAM user instead of `ELASTICACHE_AUTH_TOKEN` and install the AWS signing
+packages, which are optional dependencies loaded only when IAM is on:
+
+```bash
+npm install @smithy/signature-v4 @aws-crypto/sha256-js @aws-sdk/credential-provider-node
+```
+
+```bash
+ELASTICACHE_ENDPOINT=master.my-cache.abc123.use1.cache.amazonaws.com
+ELASTICACHE_IAM_USER=app-user          # the IAM-enabled ElastiCache user id (= its user name)
+ELASTICACHE_CACHE_NAME=my-cache        # replication group id, or serverless cache name
+ELASTICACHE_REGION=us-east-1           # else AWS_REGION, else AWS_DEFAULT_REGION
+# ELASTICACHE_SERVERLESS=true          # detected from a ".serverless." endpoint hostname
+```
+
+| Variable | Meaning |
+|---|---|
+| `ELASTICACHE_IAM_USER` | Turns IAM on. The user id, which ElastiCache requires to equal the user name. |
+| `ELASTICACHE_CACHE_NAME` | The replication group id (node-based cache) or serverless cache name the token is signed for. Required; it is not parsed out of the endpoint. Lowercased, as ElastiCache stores it. |
+| `ELASTICACHE_REGION` | The cache's region. Falls back to `AWS_REGION`, then `AWS_DEFAULT_REGION`. Required. |
+| `ELASTICACHE_SERVERLESS` | `true` for ElastiCache Serverless. Unset: on when the endpoint's hostname contains `.serverless.`. |
+
+A `rediss://` URL in `REDIS_URL` works too, with `ELASTICACHE_IAM_USER` and the variables above;
+any password in it is replaced by the token. AWS credentials come from the AWS SDK's default
+chain: environment variables, SSO, web identity, ECS and EKS pod identity, and EC2 instance
+metadata. In a custom handler file, pass the same settings as `iam` (`{ userId, cacheName,
+region, serverless, credentials }`); fields you leave out come from the environment.
+
+The handlers throw at startup when IAM cannot work: TLS off (`ELASTICACHE_TLS=false`, a
+`redis://` URL), no cache name, no region, or the AWS packages not installed. They never connect
+to Redis during `next build`, so the build does not need these variables.
+
+**What the package does about the token's limits.** A token is valid for 15 minutes, and
+ElastiCache closes an IAM-authenticated connection after 12 hours unless it re-authenticates. So a
+token generated once and passed as a password stops working on the first reconnect after 15
+minutes, and the app then serves from memory. Instead, the package:
+
+- connects only once the first token is ready (until then, and if it takes longer than 500 ms, the
+  handlers serve from memory, as during an outage);
+- makes a new token every 10 minutes, for every reconnect to use, and sends `AUTH` with it on the
+  live connection, which keeps ElastiCache's 12-hour limit moving;
+- makes a new token before a reconnect if the last one is more than 10 minutes old (a process
+  that was suspended, for example);
+- logs a refused `AUTH` (`WRONGPASS`, `NOAUTH`) as an error that names IAM as the likely cause,
+  and a token it could not make (no credentials, a wrong region) as an error too, both at most once
+  a minute, and tries again on the next reconnect or refresh. A cache call never fails because of
+  it. The token itself is never logged.
+
+**On the AWS side** (see [Authenticating with IAM](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html)):
+
+- Valkey 7.2+ or Redis OSS 7.0+, with in-transit encryption (TLS) on.
+- An ElastiCache user with IAM authentication, whose user id and user name are the same, in a
+  user group attached to the cache:
+
+  ```bash
+  aws elasticache create-user --user-id app-user --user-name app-user \
+    --engine redis --authentication-mode Type=iam --access-string "on ~* +@all"
+  aws elasticache create-user-group --user-group-id app-users \
+    --engine redis --user-ids default app-user
+  aws elasticache modify-replication-group --replication-group-id my-cache \
+    --user-group-ids-to-add app-users --apply-immediately
+  # serverless: aws elasticache modify-serverless-cache --serverless-cache-name my-cache --user-group-id app-users
+  ```
+
+  On a cache shared with other apps, limit the key pattern to the key prefix
+  (`on ~nextjs:* +@all`). Keep scripting and `INFO` allowed: revalidations run a Lua script, and
+  ioredis checks readiness with `INFO`.
+- An IAM policy on the app's role that allows `elasticache:Connect` on **both** the cache and the
+  user:
+
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": "elasticache:Connect",
+        "Resource": [
+          "arn:aws:elasticache:us-east-1:123456789012:replicationgroup:my-cache",
+          "arn:aws:elasticache:us-east-1:123456789012:user:app-user"
+        ]
+      }
+    ]
+  }
+  ```
+
+  For a serverless cache the first resource is
+  `arn:aws:elasticache:us-east-1:123456789012:serverlesscache:my-cache`.
+
+A refused token is nearly always one of: the user id is not in the cache's user group, the policy
+is missing one of the two resources, or the cache name, region or serverless setting does not
+match the cache (the token is signed for them).
+
+For cluster-mode-enabled ElastiCache, build a `Cluster` yourself and keep it authenticated with
+`attachElastiCacheIamAuth` (see [Your own client](#your-own-client)).
+
 ## Your own client
 
-For Sentinel, Cluster, IAM auth or other ioredis options, build the client yourself and pass it to
+For Sentinel, Cluster or other ioredis options, build the client yourself and pass it to
 [custom handler files](./custom-handlers.md). Give all three handlers the same client so
 they share one connection and one tag store.
 
@@ -111,6 +211,33 @@ globalThis[key] ??= new Cluster(
   { redisOptions: { commandTimeout: 1000 } },
 );
 ```
+
+For cluster-mode-enabled ElastiCache with IAM authentication, create the `Cluster` with
+`lazyConnect: true` and TLS, and attach the package's token refresh to it. It connects once the
+first token is ready, puts a fresh token in every node's options every 10 minutes and sends `AUTH`
+to every connected node; settings you leave out come from the `ELASTICACHE_*` environment:
+
+```js
+import { Cluster } from "ioredis";
+import { attachElastiCacheIamAuth } from "@mrjasonroy/cache-components-cache-handler";
+
+globalThis[key] ??= new Cluster(
+  [{ host: "clustercfg.my-cache.abc123.use1.cache.amazonaws.com", port: 6379 }],
+  {
+    lazyConnect: true,
+    dnsLookup: (address, callback) => callback(null, address),
+    redisOptions: { tls: {}, commandTimeout: 1000 },
+  },
+);
+attachElastiCacheIamAuth(globalThis[key], {
+  userId: "app-user",
+  cacheName: "my-cache",
+  region: "us-east-1",
+});
+```
+
+Call it once per client (inside the same `??=` guard in real code), and do not call `connect()`
+yourself.
 
 Cluster mode needs no hash tags. Every command the handlers send touches a single key, so none
 can fail with `CROSSSLOT`. `flushCache` scans every master. The two tag keys live on one shard
