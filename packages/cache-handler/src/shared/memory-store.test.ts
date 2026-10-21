@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
+import { MemoryStore, clearAllMemoryStores, stringListBytes } from "./memory-store.js";
 
 describe("MemoryStore", () => {
   test("expires entries", () => {
@@ -30,6 +30,25 @@ describe("MemoryStore", () => {
     store.set("huge", 3, 11, null);
     expect(store.get("huge")).toBeUndefined();
     expect(store.get("b")).toBe(2);
+  });
+
+  test("counts the key with the value, and stays within maxBytes when filled past it", () => {
+    const store = new MemoryStore<number>({ maxBytes: 1_000, maxEntries: 1_000 });
+    store.set("k".repeat(100), 1, 50, null);
+    expect(store.byteSize).toBe(150);
+    for (let i = 0; i < 100; i++) store.set(`key${i}`, i, 100, null);
+    expect(store.byteSize).toBeLessThanOrEqual(1_000);
+    expect(store.size).toBeLessThan(10);
+    // The most recent entries are the ones kept.
+    expect(store.get("key99")).toBe(99);
+    store.delete("key99");
+    store.clear();
+    expect(store.byteSize).toBe(0);
+  });
+
+  test("stringListBytes grows with each string's length", () => {
+    expect(stringListBytes([])).toBe(32);
+    expect(stringListBytes(["ab", "cde"])).toBe(32 + 32 + 4 + 32 + 6);
   });
 
   test("clearAllMemoryStores empties every store and counts the entries", () => {

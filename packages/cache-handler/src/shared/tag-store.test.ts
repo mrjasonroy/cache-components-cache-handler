@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import { getClientConnection } from "./connection.js";
-import { tagIndexKey, tagsKey } from "./keys.js";
+import { FLUSH_TAG, tagIndexKey, tagsKey } from "./keys.js";
+import { TAG_MAINTENANCE_INTERVAL_MS, TAG_RETENTION_MS } from "./tag-retention.js";
 import {
   type KeyTagState,
   SYNC_PAGE_SIZE,
@@ -170,14 +171,65 @@ describe("TagStore", () => {
 
     expect(await shared.hmget(tagsKey(PREFIX), "old")).toEqual([`${old},${old}`]);
     expect(await shared.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).toContain("old");
-    expect(tags.get("old")).toEqual({ stale: old, expired: old });
-    expect(tags.get("new")).toBeDefined();
+    // Past retention: never loaded into this process, but left in Redis for maintenance.
+    expect(tags.get("old")).toBeUndefined();
+    expect(tags.get("newer")).toBeDefined();
     for (const command of ["hdel", "zrem", "del", "unlink", "expire"]) {
       expect(shared.commands).not.toContain(command);
     }
     await tags.maintain();
     expect(await shared.hmget(tagsKey(PREFIX), "old")).toEqual([null]);
     expect(await shared.zrangebyscore(tagIndexKey(PREFIX), "-inf", "+inf")).not.toContain("old");
+  });
+
+  test("local records past retention are dropped, at most once a minute; barriers and unsent stay", async () => {
+    vi.setSystemTime(Date.UTC(2040, 0, 1));
+    const tags = new TagStore(undefined, PREFIX);
+    await tags.update(["old", FLUSH_TAG, `${FLUSH_TAG}:build`]);
+    await tags.update(["delayed"], { expire: 2 * 365 * 86_400 });
+    vi.setSystemTime(Date.now() + 30_000);
+    await tags.update(["edge"]);
+    // Past "old"'s horizon, 30 s short of "edge"'s: the first update or sync since prunes.
+    vi.setSystemTime(Date.now() - 30_000 + TAG_RETENTION_MS + 1_000);
+    await tags.update(["fresh"]);
+    expect(tags.get("old")).toBeUndefined();
+    expect(tags.get("edge")).toBeDefined();
+    // "edge" is past its horizon now, but the next prune waits for the interval.
+    vi.setSystemTime(Date.now() + 30_000);
+    await tags.update(["fresh2"]);
+    expect(tags.get("edge")).toBeDefined();
+    vi.setSystemTime(Date.now() + TAG_MAINTENANCE_INTERVAL_MS);
+    await tags.update(["fresh3"]);
+    expect(tags.get("edge")).toBeUndefined();
+    // Its delayed `expired` is still inside the horizon.
+    expect(tags.get("delayed")).toBeDefined();
+    expect(tags.get("fresh")).toBeDefined();
+
+    const kept = new TagStore(getClientConnection(asClient(new FakeRedis())), PREFIX, {
+      state: { records: new Map([["queued", { stale: 1, expired: 1 }]]), unsent: new Map() },
+    });
+    (kept as unknown as { state: KeyTagState }).state.unsent.set("queued", null);
+    expect(kept.pruneLocal()).toBe(0);
+    expect(kept.get("queued")).toBeDefined();
+  });
+
+  test("a first sync over many old records keeps only those inside retention", async () => {
+    vi.setSystemTime(Date.UTC(2040, 0, 1));
+    const shared = new FakeRedis();
+    const old = Date.now() - TAG_RETENTION_MS - 1_000;
+    const fields: Record<string, string> = {};
+    for (let i = 0; i < 2_500; i++) {
+      fields[`old${i}`] = `${old},${old}`;
+      await shared.zadd(tagIndexKey(PREFIX), old, `old${i}`);
+    }
+    fields.recent = `${Date.now() - 1_000},`;
+    await shared.zadd(tagIndexKey(PREFIX), Date.now() - 1_000, "recent");
+    await shared.hset(tagsKey(PREFIX), fields);
+
+    const tags = storeOn(shared);
+    await tags.sync();
+    const state = (tags as unknown as { state: KeyTagState }).state;
+    expect([...state.records.keys()]).toEqual(["recent"]);
   });
 
   test("identical updates in one synchronous run (Next's dispatch loop) write once", async () => {

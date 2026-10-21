@@ -4,6 +4,7 @@
  * sync has run or succeeded. Used by the page and remote handlers.
  */
 
+import { stringListBytes } from "./memory-store.js";
 import type { CacheRuntime } from "./runtime.js";
 
 /**
@@ -40,6 +41,6 @@ export async function readWithTags<T extends { tags: string[] }>(
 
   const missing = entry.tags.filter((tag) => !fetched.has(tag));
   if (missing.length > 0) await tags.fetch(missing);
-  if (!inMemory) stores.entryTags.set(redisKey, entry.tags, entry.tags.length, null);
+  if (!inMemory) stores.entryTags.set(redisKey, entry.tags, stringListBytes(entry.tags), null);
   return entry;
 }

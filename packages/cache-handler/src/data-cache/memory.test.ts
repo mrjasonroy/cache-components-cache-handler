@@ -4,7 +4,12 @@
  */
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createMemoryDataCacheHandler } from "./memory.js";
+import {
+  MAX_TAG_MANIFEST_RECORDS,
+  clearTagManifestForTests,
+  createMemoryDataCacheHandler,
+  tagManifestStatsForTests,
+} from "./memory.js";
 import type { DataCacheEntry } from "./types.js";
 
 /**
@@ -267,6 +272,44 @@ describe("MemoryDataCacheHandler - Tag Invalidation", () => {
       // Note: This assertion verifies stale entry behavior
       // If this fails, check areTagsStale() logic in memory.ts
       expect(result?.revalidate).toBe(-1);
+    });
+  });
+
+  describe("Global Tags Manifest - bounded", () => {
+    test("keeps at most MAX_TAG_MANIFEST_RECORDS; entries older than a dropped record miss", async () => {
+      clearTagManifestForTests();
+      const handler = createMemoryDataCacheHandler();
+      const old = createTestEntry("old", ["unrelated"], { timestamp: Date.now() - 60_000 });
+      await handler.set("old", Promise.resolve(old));
+
+      const tags = Array.from({ length: MAX_TAG_MANIFEST_RECORDS + 1 }, (_, i) => `t${i}`);
+      await handler.updateTags(tags.slice(0, MAX_TAG_MANIFEST_RECORDS));
+      expect(tagManifestStatsForTests().records).toBe(MAX_TAG_MANIFEST_RECORDS);
+      expect(tagManifestStatsForTests().floor).toBe(0);
+      await handler.updateTags(tags.slice(MAX_TAG_MANIFEST_RECORDS));
+      const { records, floor } = tagManifestStatsForTests();
+      expect(records).toBe(MAX_TAG_MANIFEST_RECORDS / 2);
+      expect(floor).toBeGreaterThan(0);
+
+      // Its tag record was never dropped, but it predates one that was: a miss, conservatively.
+      expect(await handler.get("old", [])).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const fresh = createTestEntry("fresh", ["unrelated"]);
+      await handler.set("fresh", Promise.resolve(fresh));
+      expect(await handler.get("fresh", [])).toBeDefined();
+      clearTagManifestForTests();
+    });
+
+    test("a record with a future expiry is dropped last", async () => {
+      clearTagManifestForTests();
+      const handler = createMemoryDataCacheHandler();
+      await handler.updateTags(["delayed"], { expire: 3600 });
+      const tags = Array.from({ length: MAX_TAG_MANIFEST_RECORDS }, (_, i) => `t${i}`);
+      await handler.updateTags(tags);
+      // "delayed" is the oldest but kept; the floor stays in the past.
+      expect(await handler.getExpiration(["delayed"])).toBeGreaterThan(Date.now());
+      expect(tagManifestStatsForTests().floor).toBeLessThanOrEqual(Date.now());
+      clearTagManifestForTests();
     });
   });
 });

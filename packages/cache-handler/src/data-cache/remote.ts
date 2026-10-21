@@ -22,6 +22,7 @@ import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored } from "../shared/codec.js";
 import { isEdgeRuntime } from "../shared/env.js";
 import { dataKey } from "../shared/keys.js";
+import { stringListBytes } from "../shared/memory-store.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
@@ -188,7 +189,7 @@ export function createRemoteCacheHandler(
             const key = keyOf(cacheKey);
             const encoded = await encodeStored(stored);
             await connection.client.set(key, encoded, "EX", ttl);
-            stores.entryTags.set(key, stored.tags, stored.tags.length, null);
+            stores.entryTags.set(key, stored.tags, stringListBytes(stored.tags), null);
             log?.("set", cacheKey, "redis", {
               ttl,
               bytes: stored.value.byteLength,

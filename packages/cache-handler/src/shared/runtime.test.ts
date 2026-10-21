@@ -13,7 +13,14 @@ vi.mock("./node-require.js", async (importOriginal) => ({
 
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
-import { bufferToStream, getCacheRuntime, resolveConnection, streamToBuffer } from "./runtime.js";
+import {
+  MEMORY_STORE_CAPS,
+  type RuntimeStores,
+  bufferToStream,
+  getCacheRuntime,
+  resolveConnection,
+  streamToBuffer,
+} from "./runtime.js";
 
 describe("cache runtime", () => {
   beforeEach(async () => {
@@ -56,6 +63,28 @@ describe("cache runtime", () => {
   test("CACHE_KEY_PREFIX is the default prefix", () => {
     process.env.CACHE_KEY_PREFIX = "shop:";
     expect(getCacheRuntime({}).keyPrefix).toBe("shop:");
+  });
+
+  test("every in-process store stays within its byte cap when filled past it", () => {
+    const { stores } = getCacheRuntime();
+    const MiB = 1024 * 1024;
+    for (const [name, caps] of Object.entries(MEMORY_STORE_CAPS)) {
+      const store = stores[name as keyof RuntimeStores];
+      const writes = Math.ceil((2 * caps.maxBytes) / MiB);
+      for (let i = 0; i < writes; i++) store.set(`${name}:${i}`, [], MiB, null);
+      expect(store.byteSize, name).toBeLessThanOrEqual(caps.maxBytes);
+      expect(store.byteSize, name).toBeGreaterThan(caps.maxBytes - 2 * MiB);
+    }
+  });
+
+  test("in-process caps: under 100 MiB in all, under 40 MiB for what fills with Redis healthy", () => {
+    const MiB = 1024 * 1024;
+    const caps = Object.values(MEMORY_STORE_CAPS).map((cap) => cap.maxBytes);
+    expect(caps.reduce((sum, cap) => sum + cap, 0)).toBeLessThan(100 * MiB);
+    // Without MEMORY_ONLY_TAG entries, only these fill while Redis is up.
+    expect(MEMORY_STORE_CAPS.local.maxBytes + MEMORY_STORE_CAPS.entryTags.maxBytes).toBeLessThan(
+      40 * MiB,
+    );
   });
 
   test("reconnecting drops the outage fallback stores", () => {
