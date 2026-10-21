@@ -11,7 +11,8 @@
  * line also goes through {@link redactForLog} on its way out, because errors from Redis can carry
  * credentials of their own: ioredis attaches the failed command, arguments included, to a reply
  * error, so a rejected `AUTH` carries the password it tried. The guarantee covers structured
- * fields, error causes and URL user information, not arbitrary free text in a message.
+ * fields, error causes, URL user information and the signature, credential and session token of
+ * an AWS presigned URL (an ElastiCache IAM token), not arbitrary free text in a message.
  */
 
 /**
@@ -139,10 +140,15 @@ const URL_USERINFO = /([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi;
 /** Error properties kept besides name, message, stack and cause: none can hold a credential. */
 const SAFE_ERROR_FIELDS = ["code", "errno", "syscall", "address", "port"] as const;
 
+/**
+ * The secret parts of an AWS SigV4 presigned query, which is what an ElastiCache IAM token is.
+ */
+const PRESIGNED_SECRETS = /(X-Amz-(?:Signature|Security-Token|Credential)=)[^&\s"']*/gi;
+
 const REDACTED = "[redacted]";
 
 function redactText(text: string): string {
-  return text.replace(URL_USERINFO, `$1${REDACTED}@`);
+  return text.replace(URL_USERINFO, `$1${REDACTED}@`).replace(PRESIGNED_SECRETS, `$1${REDACTED}`);
 }
 
 /**
@@ -150,7 +156,8 @@ function redactText(text: string): string {
  * - an error (or error-like object) as a new `Error` with only its name, message, stack,
  *   {@link SAFE_ERROR_FIELDS} and a cause redacted the same way;
  * - plain objects and arrays copied without {@link SECRET_KEYS};
- * - URLs in strings without their user information;
+ * - URLs in strings without their user information, and presigned AWS queries without their
+ *   signature, credential and session token;
  * - anything else (a `Buffer`, a typed array, a class instance) as a placeholder such as
  *   `[Buffer 12 bytes]` or `[ClassName]`.
  *

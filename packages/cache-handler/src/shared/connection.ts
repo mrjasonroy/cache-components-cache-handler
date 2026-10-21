@@ -27,6 +27,7 @@
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { nowMs } from "./clock.js";
+import { type ResolvedIamOptions, attachIamAuth } from "./elasticache-iam.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import { type LoggerSource, processLogger, writeLog } from "./logger.js";
 import { requireModule } from "./node-require.js";
@@ -122,6 +123,12 @@ export interface RedisConnectionOptions {
    * Extra ioredis options, applied last.
    */
   redisOptions?: RedisOptions;
+
+  /**
+   * Authenticate to ElastiCache with IAM tokens, minted and refreshed by the package
+   * (`shared/elasticache-iam.ts`). Replaces `password`.
+   */
+  iam?: ResolvedIamOptions;
 }
 
 /**
@@ -377,6 +384,8 @@ function buildClient(options: RedisConnectionOptions): Redis {
     ...(options.password ? { password: options.password } : {}),
     ...(options.tls ? { tls: {} } : {}),
     ...options.redisOptions,
+    // With IAM the first connect waits for the first token (see `attachIamAuth`).
+    ...(options.iam ? { lazyConnect: true } : {}),
   };
 
   if (options.host) {
@@ -648,7 +657,30 @@ export function openRedisConnection(
   options: RedisConnectionOptions = {},
   logger: LoggerSource = processLogger,
 ): RedisConnection {
-  return createRedisConnection(buildClient(options), { ...options, logger });
+  const client = buildClient(options);
+  const connection = createRedisConnection(client, { ...options, logger });
+  if (!options.iam) return connection;
+  let iam: ReturnType<typeof attachIamAuth>;
+  try {
+    iam = attachIamAuth(client, options.iam, {
+      logger,
+      ...(options.errorLogIntervalMs === undefined
+        ? {}
+        : { errorLogIntervalMs: options.errorLogIntervalMs }),
+      connect: true,
+    });
+  } catch (error) {
+    // The AWS packages are missing: nothing may keep this client around.
+    client.disconnect();
+    throw error;
+  }
+  return {
+    ...connection,
+    async close() {
+      iam.stop();
+      await connection.close();
+    },
+  };
 }
 
 /**
