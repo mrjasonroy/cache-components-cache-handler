@@ -80,6 +80,7 @@ instead. It also accepts a function-form `next.config`.
 | `REDIS_URL` (or `VALKEY_URL`) | unset → memory only | `redis://` or `rediss://` URL, password included. |
 | `REDIS_PASSWORD` | — | Password when the URL has none. |
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | port `6379`, TLS on | Host form, used when no URL is set. `ELASTICACHE_TLS=false` turns TLS off. |
+| `ELASTICACHE_IAM_USER`, `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION` | unset | IAM authentication instead of an auth token, with tokens refreshed by the package ([details](./docs/redis.md#iam-authentication)). |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes and state changes. It never logs the URL. |
@@ -124,7 +125,7 @@ See [the harness README](./tests/next-deploy/README.md) and
 | **Memory** | No `REDIS_URL`: dev, CI, previews, single instance |
 | **Redis 6.2+** | `REDIS_URL=redis://…` or `rediss://…` |
 | **Valkey** | `VALKEY_URL` or `REDIS_URL`, same URL format |
-| **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on (`ELASTICACHE_TLS=false` turns it off) |
+| **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on (`ELASTICACHE_TLS=false` turns it off), or + `ELASTICACHE_IAM_USER` for [IAM authentication](./docs/redis.md#iam-authentication) |
 | **Redis Cluster, Sentinel** | Your own ioredis client through a [custom handler](./docs/custom-handlers.md). `flushCache` scans every master. |
 
 The minimum is Redis 6.2 (or any Valkey): revalidations use `ZADD GT` and a single-key Lua

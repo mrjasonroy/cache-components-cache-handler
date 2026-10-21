@@ -37,10 +37,20 @@ export {
   withCache,
 } from "./helpers/with-cache.js";
 export {
+  type AttachElastiCacheIamAuthOptions,
+  attachElastiCacheIamAuth,
+  type ElastiCacheIamAuth,
+} from "./helpers/elasticache-iam.js";
+export {
   type FlushCacheOptions,
   type FlushCacheResult,
   flushCache,
 } from "./shared/flush.js";
+export type {
+  AwsCredentials,
+  AwsCredentialsProvider,
+  ElastiCacheIamOptions,
+} from "./shared/elasticache-iam.js";
 export { type CacheLogger, setCacheLogger } from "./shared/logger.js";
 export { type CacheOptions, closeCache, MEMORY_ONLY_TAG } from "./shared/runtime.js";
 

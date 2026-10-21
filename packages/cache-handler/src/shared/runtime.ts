@@ -18,6 +18,7 @@ import {
   getRedisConnection,
   openRedisConnection,
 } from "./connection.js";
+import type { ElastiCacheIamOptions } from "./elasticache-iam.js";
 import {
   isDebugEnabled,
   resolveEnvConnectionOptions,
@@ -103,6 +104,17 @@ export interface CacheOptions {
    * @default 3
    */
   maxConsecutiveTimeouts?: number;
+
+  /**
+   * Authenticate to AWS ElastiCache with IAM instead of a password: the package mints a token,
+   * refreshes it every 10 minutes and re-authenticates its connection before ElastiCache's
+   * 12-hour limit. Unset fields come from the environment (`ELASTICACHE_IAM_USER`,
+   * `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION`, ...), and `ELASTICACHE_IAM_USER` alone turns
+   * it on. Needs TLS and the optional AWS packages; throws at startup without them. For a `client`
+   * you pass in, call `attachElastiCacheIamAuth` on the client instead.
+   * @default IAM when `ELASTICACHE_IAM_USER` is set
+   */
+  iam?: ElastiCacheIamOptions;
 
   /**
    * Log hits, misses and state changes. Never logs the URL.
@@ -200,7 +212,14 @@ function connectionRequest(
   options: RuntimeOptions,
 ): { client: RedisClientLike } | { options: RedisConnectionOptions } | undefined {
   if (!shouldUseRedis()) return undefined;
-  if (options.client) return { client: options.client };
+  if (options.client) {
+    if (options.iam) {
+      throw new Error(
+        "The iam option applies to connections the package opens, not to a client you pass in: call attachElastiCacheIamAuth(client, ...) on your client instead.",
+      );
+    }
+    return { client: options.client };
+  }
 
   const tuning = definedOnly({
     commandTimeout: options.commandTimeout,
@@ -209,9 +228,18 @@ function connectionRequest(
     maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
   });
   if (options.redisOptions && !options.url) {
+    if (options.iam) {
+      throw new Error(
+        "The iam option needs a url or the ELASTICACHE_* environment, not ioredis options.",
+      );
+    }
     return { options: { ...tuning, redisOptions: options.redisOptions } };
   }
-  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...tuning });
+  const connectionOptions = resolveEnvConnectionOptions({
+    url: options.url,
+    ...tuning,
+    ...definedOnly({ iam: options.iam }),
+  });
   return connectionOptions ? { options: connectionOptions } : undefined;
 }
 

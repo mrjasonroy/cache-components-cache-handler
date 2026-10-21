@@ -9,6 +9,7 @@
  * |---|---|
  * | `REDIS_URL` / `VALKEY_URL` | `redis://` or `rediss://` URL. Unset → memory only. |
  * | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | Host form, TLS on unless `ELASTICACHE_TLS=false`. |
+ * | `ELASTICACHE_IAM_USER` | IAM authentication as this user id (host form or a `rediss://` URL), with `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION` (else `AWS_REGION`, `AWS_DEFAULT_REGION`) and `ELASTICACHE_SERVERLESS` (else detected from a `.serverless.` hostname). |
  * | `REDIS_PASSWORD` | Password when the URL has none. |
  * | `CACHE_KEY_PREFIX` | Prefix for every key. Default `nextjs:`. |
  * | `CACHE_REDIS=off` | Kill switch: memory everywhere, even with a URL set. |
@@ -21,6 +22,7 @@
  */
 
 import type { RedisConnectionOptions } from "./connection.js";
+import type { ElastiCacheIamOptions, ResolvedIamOptions } from "./elasticache-iam.js";
 
 /**
  * `NEXT_PHASE` during `next build` (`PHASE_PRODUCTION_BUILD` in next/dist/shared/lib/constants).
@@ -96,6 +98,8 @@ export interface ConnectionSettings {
   maxConsecutiveTimeouts?: number;
   initialConnectWaitMs?: number;
   errorLogIntervalMs?: number;
+  /** ElastiCache IAM authentication; also turned on by `ELASTICACHE_IAM_USER`. */
+  iam?: ElastiCacheIamOptions;
 }
 
 function optional<K extends keyof RedisConnectionOptions>(
@@ -105,6 +109,75 @@ function optional<K extends keyof RedisConnectionOptions>(
   return value === undefined ? {} : { [key]: value };
 }
 
+/** `true`/`false` from `1`, `true`, `yes` / `0`, `false`, `no`; anything else is `undefined`. */
+function parseFlag(value: string | undefined): boolean | undefined {
+  const flag = value?.trim().toLowerCase();
+  if (flag === "1" || flag === "true" || flag === "yes") return true;
+  if (flag === "0" || flag === "false" || flag === "no") return false;
+  return undefined;
+}
+
+/**
+ * The IAM settings for a connection to `host`, or `undefined` when IAM is off (no `iam` option
+ * and no `ELASTICACHE_IAM_USER`). Throws, naming everything that is missing, when IAM is asked for
+ * but cannot work: no user, cache name or region, or TLS off.
+ */
+export function resolveIamOptions(
+  iam: ElastiCacheIamOptions | undefined,
+  connection: { host: string | undefined; tls: boolean },
+  env: NodeJS.ProcessEnv = process.env,
+): ResolvedIamOptions | undefined {
+  const envUser = env.ELASTICACHE_IAM_USER?.trim();
+  if (iam === undefined && !envUser) return undefined;
+
+  const userId = iam?.userId?.trim() || envUser;
+  const cacheName = (iam?.cacheName || env.ELASTICACHE_CACHE_NAME)?.trim().toLowerCase();
+  const region = (
+    iam?.region ||
+    env.ELASTICACHE_REGION ||
+    env.AWS_REGION ||
+    env.AWS_DEFAULT_REGION
+  )?.trim();
+  const problems: string[] = [];
+  if (!userId) problems.push("no user: set ELASTICACHE_IAM_USER (or iam.userId)");
+  if (!cacheName) {
+    problems.push(
+      "no cache name: set ELASTICACHE_CACHE_NAME (or iam.cacheName) to the replication group id or serverless cache name",
+    );
+  }
+  if (!region) {
+    problems.push("no region: set ELASTICACHE_REGION or AWS_REGION (or iam.region)");
+  }
+  if (!connection.tls) {
+    problems.push(
+      "TLS is off, and IAM authentication needs it: use a rediss:// URL, or leave ELASTICACHE_TLS unset",
+    );
+  }
+  if (!userId || !cacheName || !region || problems.length > 0) {
+    throw new Error(`ElastiCache IAM authentication cannot work: ${problems.join("; ")}.`);
+  }
+  const serverless =
+    iam?.serverless ??
+    parseFlag(env.ELASTICACHE_SERVERLESS) ??
+    connection.host?.toLowerCase().includes(".serverless.") === true;
+  return {
+    userId,
+    cacheName,
+    region,
+    serverless,
+    ...(iam?.credentials ? { credentials: iam.credentials } : {}),
+  };
+}
+
+/** The hostname of a Redis URL, if it parses. */
+function urlHost(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
 function elasticacheOptions(
   settings: ConnectionSettings,
   endpoint: string,
@@ -112,13 +185,19 @@ function elasticacheOptions(
 ): RedisConnectionOptions {
   const port =
     settings.port || (env.ELASTICACHE_PORT ? Number.parseInt(env.ELASTICACHE_PORT, 10) : 6379);
-  const password = settings.password || env.ELASTICACHE_AUTH_TOKEN || env.REDIS_PASSWORD;
+  const tls = settings.tls ?? env.ELASTICACHE_TLS !== "false";
+  const iam = resolveIamOptions(settings.iam, { host: endpoint, tls }, env);
+  // An IAM token replaces any password.
+  const password = iam
+    ? undefined
+    : settings.password || env.ELASTICACHE_AUTH_TOKEN || env.REDIS_PASSWORD;
   return {
     host: endpoint,
     port,
-    tls: settings.tls ?? env.ELASTICACHE_TLS !== "false",
+    tls,
     connectTimeout: settings.connectTimeout ?? 10000,
     ...optional("password", password || undefined),
+    ...optional("iam", iam),
   };
 }
 
@@ -150,12 +229,20 @@ export function resolveConnectionOptions(
     return { ...common, ...elasticacheOptions(settings, endpoint, env) };
   }
 
-  const password = settings.password ?? env.REDIS_PASSWORD;
+  const url = settings.url || env.REDIS_URL || env.VALKEY_URL || "redis://localhost:6379";
+  const tls = settings.tls ?? false;
+  const iam = resolveIamOptions(
+    settings.iam,
+    { host: urlHost(url), tls: tls || url.toLowerCase().startsWith("rediss://") },
+    env,
+  );
+  const password = iam ? undefined : (settings.password ?? env.REDIS_PASSWORD);
   return {
     ...common,
-    url: settings.url || env.REDIS_URL || env.VALKEY_URL || "redis://localhost:6379",
-    tls: settings.tls ?? false,
+    url,
+    tls,
     ...optional("password", password || undefined),
+    ...optional("iam", iam),
   };
 }
 
