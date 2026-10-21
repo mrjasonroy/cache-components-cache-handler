@@ -152,6 +152,59 @@ class LRUCache<T> {
 const globalTagsManifest = new Map<string, TagManifestEntry>();
 
 /**
+ * Most tag records {@link globalTagsManifest} holds. Past it the least recently updated half is
+ * dropped, records already in effect first, and {@link manifestFloor} moves up to the latest time
+ * among them.
+ */
+export const MAX_TAG_MANIFEST_RECORDS = 10_000;
+
+/**
+ * Entries created before this (Next clock, ms) may carry a tag whose record was dropped, so they
+ * are treated as expired.
+ */
+let manifestFloor = 0;
+
+/**
+ * Set `tag`'s record, as the most recently updated, and keep the manifest within
+ * {@link MAX_TAG_MANIFEST_RECORDS}.
+ */
+function recordTag(tag: string, record: TagManifestEntry): void {
+  globalTagsManifest.delete(tag);
+  globalTagsManifest.set(tag, record);
+  if (globalTagsManifest.size <= MAX_TAG_MANIFEST_RECORDS) return;
+  let excess = globalTagsManifest.size - MAX_TAG_MANIFEST_RECORDS / 2;
+  const now = nextClockMs();
+  // A record with a future `expired` would push the floor into the future and miss new entries
+  // until then, so those go only if the others are not enough.
+  for (const inEffectOnly of [true, false]) {
+    for (const [oldTag, old] of globalTagsManifest) {
+      if (excess === 0) return;
+      if (inEffectOnly && (old.expired ?? 0) > now) continue;
+      manifestFloor = Math.max(manifestFloor, old.stale ?? 0, old.expired ?? 0);
+      globalTagsManifest.delete(oldTag);
+      excess -= 1;
+    }
+  }
+}
+
+/**
+ * Number of tag records held, and the floor. Test-only.
+ * @internal
+ */
+export function tagManifestStatsForTests(): { records: number; floor: number } {
+  return { records: globalTagsManifest.size, floor: manifestFloor };
+}
+
+/**
+ * Forget every tag record and the floor. Test-only.
+ * @internal
+ */
+export function clearTagManifestForTests(): void {
+  globalTagsManifest.clear();
+  manifestFloor = 0;
+}
+
+/**
  * Check if tags are expired based on manifest
  * Returns true if any tag was revalidated (invalidated) after the entry was created
  */
@@ -290,6 +343,11 @@ export function createMemoryDataCacheHandler(
 
       let revalidate = entry.revalidate;
 
+      if (entry.timestamp < manifestFloor) {
+        debug?.("get", cacheKey, "older than a dropped tag record");
+        return undefined;
+      }
+
       if (areTagsExpired(entry.tags, entry.timestamp, debug)) {
         debug?.("get", cacheKey, "had expired tag");
         return undefined;
@@ -397,10 +455,10 @@ export function createMemoryDataCacheHandler(
             updates.expired = now + durations.expire * 1000; // Convert seconds to ms
           }
 
-          globalTagsManifest.set(tag, updates);
+          recordTag(tag, updates);
         } else {
           // Update expired field for immediate expiration (default behavior)
-          globalTagsManifest.set(tag, { ...existingEntry, expired: now });
+          recordTag(tag, { ...existingEntry, expired: now });
         }
       }
     },

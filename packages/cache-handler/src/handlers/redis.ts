@@ -41,6 +41,7 @@ import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
 import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
 import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
+import { stringListBytes } from "../shared/memory-store.js";
 import { readWithTags } from "../shared/read-with-tags.js";
 import {
   type CacheOptions,
@@ -444,7 +445,7 @@ export class RedisCacheHandler {
       const encoded = await encodeStored(entry);
       const key = this.redisKey(cacheKey);
       const written = await connection.client.set(key, encoded, "EX", lifetime, "NX");
-      stores.entryTags.set(key, entry.tags, entry.tags.length, null);
+      stores.entryTags.set(key, entry.tags, stringListBytes(entry.tags), null);
       this.log?.(
         "set",
         cacheKey,
@@ -520,7 +521,7 @@ export class RedisCacheHandler {
         encoded = await encodeStored(entry);
         const key = this.redisKey(cacheKey);
         await connection.client.set(key, encoded, "EX", lifetime);
-        stores.entryTags.set(key, tags, tags.length, null);
+        stores.entryTags.set(key, tags, stringListBytes(tags), null);
         this.log?.("set", cacheKey, "redis", { tags, lifetime, ...storedSizes(encoded) });
         return;
       } catch (error) {

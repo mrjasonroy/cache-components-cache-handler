@@ -1,6 +1,7 @@
 # Operations
 
-Flushing the cache, closing it in tests and scripts, and sending its logs to your own logger.
+Flushing the cache, closing it in tests and scripts, how much memory it holds, and sending its
+logs to your own logger.
 What sits in Redis, and how to size it, is in [Redis Configuration](./redis.md#whats-in-redis).
 
 ## Flushing the cache
@@ -75,6 +76,34 @@ cache call opened meanwhile. A `client` you passed in is never closed; close it 
 Handlers created before it keep working: on their next call they reconnect, all onto one new
 connection. The deprecated `createCacheHandler` is the exception: it keeps its closed connection
 and serves from memory, so create it again after `closeCache()`.
+
+## Memory
+
+Each Node process holds these in memory, on top of what Next itself uses:
+
+| What | Cap | Fills when |
+|---|---|---|
+| `"use cache"` values (the local handler) | 32 MiB, 10,000 entries | Always |
+| Tag lists of entries read or written | 2 MiB, 10,000 entries | With Redis |
+| Page entries kept in memory | 16 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
+| `"use cache: remote"` entries kept in memory | 16 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
+| Page entries written during an outage | 16 MiB | Redis down; emptied on reconnect |
+| `"use cache: remote"` entries written during an outage | 16 MiB | Redis down; emptied on reconnect |
+| Tag records | about 150 bytes per tag | Always |
+
+So 34 MiB at most while Redis is healthy (66 MiB if you use `MEMORY_ONLY_TAG`), 64 MiB without
+Redis, and 98 MiB during an outage. An entry larger than its cap is not kept in memory. Sizes count values and keys, not
+JavaScript object overhead, so heap use runs somewhat higher.
+
+Tag records cover every tag revalidated in the last 365 days (longer for a revalidation with a
+longer `expire`), the same set Redis keeps; older ones are dropped. With Redis, the first
+`"use cache"` read after startup loads them all: 100,000 such tags take about 15 MiB.
+
+Sizing a pod: measure your app's own baseline (the pod's memory after warm-up with the cache
+empty) and leave room for it plus the cache's 100 MiB under the container limit. Set `--max-old-space-size` to about 75% of the
+container limit, never above it, so V8 collects garbage before the kernel kills the process, for
+example `NODE_OPTIONS=--max-old-space-size=448` for a 600 MB limit. A value above the limit lets
+the heap grow until the container is killed for running out of memory.
 
 ## Logging
 

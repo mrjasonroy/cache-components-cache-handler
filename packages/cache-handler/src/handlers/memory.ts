@@ -38,6 +38,13 @@ export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
 }
 
 /**
+ * Most revalidated tags a {@link MemoryCacheHandler} remembers. Past it the oldest half is
+ * forgotten, and entries last modified before the latest of those times are treated as
+ * invalidated.
+ */
+export const MAX_REVALIDATED_TAGS = 10_000;
+
+/**
  * In-memory LRU cache handler for Next.js 16+
  * Suitable for development and single-instance deployments
  *
@@ -63,6 +70,8 @@ export class MemoryCacheHandler implements CacheHandler {
 
   private cache: Map<string, CacheHandlerValue>;
   private revalidatedTags: Map<string, number>; // tag -> timestamp (milliseconds)
+  /** Entries last modified before this (ms) may carry a forgotten revalidated tag. */
+  private revalidatedFloor = 0;
   private readonly maxItemsNumber: number;
   private readonly maxItemSizeBytes: number;
   private readonly defaultTTL?: number;
@@ -84,6 +93,11 @@ export class MemoryCacheHandler implements CacheHandler {
 
     // Check if expired based on lifespan
     if (entry.lifespan && isExpired(entry.lifespan)) {
+      await this.delete(key);
+      return null;
+    }
+
+    if (entry.lastModified < this.revalidatedFloor) {
       await this.delete(key);
       return null;
     }
@@ -153,7 +167,17 @@ export class MemoryCacheHandler implements CacheHandler {
     // Store revalidation timestamp
     // Note: profile parameter is used by Next.js for cache-life configuration
     // but for memory handler we just invalidate immediately
+    this.revalidatedTags.delete(tag);
     this.revalidatedTags.set(tag, nowMs());
+    if (this.revalidatedTags.size > MAX_REVALIDATED_TAGS) {
+      let excess = this.revalidatedTags.size - MAX_REVALIDATED_TAGS / 2;
+      for (const [oldTag, at] of this.revalidatedTags) {
+        if (excess === 0) break;
+        this.revalidatedFloor = Math.max(this.revalidatedFloor, at);
+        this.revalidatedTags.delete(oldTag);
+        excess -= 1;
+      }
+    }
 
     // For explicit tags (non-implicit), we can directly delete entries
     if (!isImplicitTag(tag)) {
@@ -185,6 +209,7 @@ export class MemoryCacheHandler implements CacheHandler {
   async clear(): Promise<void> {
     this.cache.clear();
     this.revalidatedTags.clear();
+    this.revalidatedFloor = 0;
   }
 
   /**
