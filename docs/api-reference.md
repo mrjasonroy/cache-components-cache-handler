@@ -17,10 +17,11 @@ coordination) is described in [How it works](./how-it-works.md), and the key lay
 | `flushCache(options?)` | async function | Deletes this app's keys. [Flushing](./operations.md#flushing-the-cache). |
 | `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](./operations.md#closing-the-cache). |
 | `setCacheLogger(logger)` | function | Sends the package's log lines to your logger. [Logging](./operations.md#logging). |
+| `attachElastiCacheIamAuth(client, options?)` | function | Keeps your own `Redis` or `Cluster` authenticated to ElastiCache with refreshed IAM tokens. [Below](#attachelasticacheiamauthclient-options). |
 | `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
 | `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the original data handler factory ([legacy data cache API](#legacy-data-cache-api)). |
 | `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the original building blocks behind `createCacheHandler`. |
-| `CacheOptions`, `CacheLogger`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
+| `CacheOptions`, `CacheLogger`, `ElastiCacheIamOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
 
 The [deprecated exports](#deprecated) are still exported.
 
@@ -90,6 +91,12 @@ interface CacheOptions {
   socketTimeout?: number;
   /** Timeouts in a row that reopen an owned connection, or send a passed client to memory for 2 s. @default 3 */
   maxConsecutiveTimeouts?: number;
+  /**
+   * ElastiCache IAM authentication for the connection the package opens: { userId, cacheName,
+   * region, serverless, credentials }, each defaulting to the ELASTICACHE_* / AWS_REGION env.
+   * Throws with client. @default IAM when ELASTICACHE_IAM_USER is set
+   */
+  iam?: ElastiCacheIamOptions;
   /** @default CACHE_DEBUG is `1` or `true` */
   debug?: boolean;
   /** Where this handler's warnings, errors and debug lines go. @default setCacheLogger's, else the console */
@@ -245,6 +252,23 @@ those lines are dropped. Errors stay rate-limited. No line carries a Redis URL o
 options; errors, their causes, objects and URLs are scrubbed of credentials, but other free text in
 a message is not. A logger that throws never fails a cache call: the line goes to the console.
 
+## `attachElastiCacheIamAuth(client, options?)`
+
+```ts
+function attachElastiCacheIamAuth(
+  client: Redis | Cluster,
+  options?: ElastiCacheIamOptions & { logger?: CacheLogger },
+): { refresh(): Promise<boolean>; stop(): void };
+```
+
+For a client you build yourself, such as a `Cluster` for cluster-mode-enabled ElastiCache. Create
+it with `lazyConnect: true` and TLS and do not connect it: this connects it once the first IAM
+token is in its options, makes a new token every 10 minutes for reconnects (every node's options
+on a `Cluster`) and sends `AUTH` with it on every connected node. Options left out come from the
+environment, as in [IAM authentication](./redis.md#iam-authentication). Throws when IAM cannot work
+(TLS off, no user, cache name or region) or the AWS packages are not installed. `stop()` ends the
+refresh; the client keeps its connections.
+
 ## `MEMORY_ONLY_TAG`
 
 `"cache:memory-only"`. An entry tagged with it (`cacheTag(MEMORY_ONLY_TAG)`), and a page that
@@ -369,7 +393,9 @@ replacements.
 
 ## Types
 
-`WithCacheOptions`, `WithCacheConfig`, `CacheOptions`, `RedisCacheHandlerOptions`,
+`WithCacheOptions`, `WithCacheConfig`, `CacheOptions`, `ElastiCacheIamOptions`,
+`AttachElastiCacheIamAuthOptions`, `ElastiCacheIamAuth`, `AwsCredentials`,
+`AwsCredentialsProvider`, `RedisCacheHandlerOptions`,
 `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `FlushCacheOptions`, `FlushCacheResult`,
 `PageCacheControl`, `PageCacheGetContext`, `PageCacheHandlerContext`, `PageCacheHandlerValue`,
 `PageCacheSetContext`, `PageCacheValue`, `DataCacheHandler`, `DataCacheEntry`, `Timestamp`,

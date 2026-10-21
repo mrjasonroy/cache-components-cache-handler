@@ -1,7 +1,9 @@
 # Custom handlers
 
-Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster,
-IAM auth) or different timeouts. Write one file per handler and give the paths to `withCache`:
+Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster)
+or different timeouts. ElastiCache IAM authentication needs neither: the environment turns it on
+(see [IAM authentication](./redis.md#iam-authentication)), and the `iam` option sets it in a
+handler file. Write one file per handler and give the paths to `withCache`:
 
 ```js
 // cache/redis.mjs: one client for both files, parked on globalThis because Next can load the
@@ -89,6 +91,7 @@ All three factories take `CacheOptions`:
 | `connectTimeout` | `2000` (`10000` with the `ELASTICACHE_*` host form) | Ms to wait for a connection the package opens. Not used with `client`. |
 | `socketTimeout` | `2000` | Ms a pending command may go without a reply before a connection the package opens is dropped and reopened. Not used with `client`. |
 | `maxConsecutiveTimeouts` | `3` | Command timeouts in a row that drop a connection the package opens or, for a `client` you pass in, send the handlers to memory for 2 s at a time. |
+| `iam` | IAM when `ELASTICACHE_IAM_USER` is set | ElastiCache IAM authentication for the connection the package opens: `{ userId, cacheName, region, serverless, credentials }`, each falling back to the environment (see [IAM authentication](./redis.md#iam-authentication)). Throws with `client`; for your own client call `attachElastiCacheIamAuth(client, iam)`. |
 | `debug` | `CACHE_DEBUG` | Log hits, misses and state changes. |
 | `logger` | `setCacheLogger`'s, else the console | Where this handler's warnings, errors and debug lines go (see [Logging](./operations.md#logging)). |
 
