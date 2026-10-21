@@ -13,7 +13,7 @@ are cached, and what happens when Redis goes down. Setup is in the
 | `cacheHandler` (singular) | the page handler (`RedisCacheHandler`) | Page shells (`APP_PAGE`), route handler responses (`APP_ROUTE`) and cached `fetch` (`FETCH`) are stored in Redis. It honours `x-next-cache-tags`, soft tags, `cacheControl` and `revalidateTag(tag, { expire })`. |
 | `cacheHandlers.remote` | the remote handler (`createRemoteCacheHandler`) | `"use cache: remote"` entries are stored in Redis, shared by every instance. |
 | `cacheHandlers.default` | the local handler (`createLocalCacheHandler`) | `"use cache"` values are kept in each instance's memory. Tag invalidation still reaches every instance ([how](#distributed-tag-coordination-for-use-cache)). |
-| `cacheMaxMemorySize: 0` | — | Turns off Next's built-in page LRU, so every page goes through the handler. |
+| `cacheMaxMemorySize: 0` | — | Has no effect on caching here. It sizes the memory LRU inside Next's own file-system page cache, which Next does not use once `cacheHandler` is set, and Next's built-in `"use cache"` handler, which `cacheHandlers` replaces. Without `withCache`, `0` in production turns Next's built-in `"use cache"` handler into a no-op. |
 
 What you get without configuring anything:
 
@@ -43,7 +43,8 @@ it. Invalidation is still shared, following Next's
 [Distributed Tag Coordination](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination)
 pattern:
 
-- **Values live in per-instance memory**: an LRU of up to 10,000 entries. Like Next's built-in
+- **Values live in per-instance memory**: an LRU of up to 10,000 entries and 32 MiB
+  ([Memory](./operations.md#memory)). Like Next's built-in
   handler, a value is dropped once its `revalidate` period has passed, and the next request
   renders it again.
 - **`updateTags` writes the invalidation to Redis**: one script call (`EVALSHA`) that merges it

@@ -27,6 +27,8 @@
  *   sync minus a skew margin, then HMGETs only those tags: one ZRANGEBYSCORE while nothing
  *   changed. The first sync of a process reads the whole index, in pages of
  *   {@link SYNC_PAGE_SIZE} walked by score, never by offset (see {@link TagStore.readIndexFrom}).
+ * - Local records are bounded like Redis's (DEC-8, DEC-9): a record past the retention horizon is
+ *   never loaded, and those already held are dropped at most once a minute, on an update or sync.
  * - `check` and `getExpiration` read local state only: no Redis call per lookup.
  * - `isSynced` says whether local state may be trusted for a value only this process holds (the
  *   local handler's): with Redis, only once a sync has completed since the connection was last
@@ -46,7 +48,7 @@ import { nowMs } from "./clock.js";
 import type { RedisConnection } from "./connection.js";
 import { isDebugEnabled } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
-import { tagIndexKey, tagsKey } from "./keys.js";
+import { FLUSH_TAG, tagIndexKey, tagsKey } from "./keys.js";
 import { type LoggerSource, debugWriter, processLogger, writeLog } from "./logger.js";
 import {
   PRUNE_TAGS_SCRIPT,
@@ -144,6 +146,16 @@ export function decodeRecord(raw: string | null | undefined): TagRecord | undefi
 }
 
 /**
+ * Whether `record` can no longer affect any entry that may still be served, at `now`: its later
+ * time (`stale` or a delayed `expired`) is more than {@link TAG_RETENTION_MS} ago, the same horizon
+ * Redis prunes on (DEC-8). Flush barriers never pass it.
+ */
+export function isPastRetention(tag: string, record: TagRecord, now: number): boolean {
+  if (tag === FLUSH_TAG || tag.startsWith(`${FLUSH_TAG}:`)) return false;
+  return Math.max(record.stale ?? 0, record.expired ?? 0) < now - TAG_RETENTION_MS;
+}
+
+/**
  * Apply an update made at `now` with `durations` to `existing`.
  */
 export function applyUpdate(
@@ -186,6 +198,7 @@ export class TagStore {
   private readonly log: ((...args: unknown[]) => void) | undefined;
   private syncedUpTo = 0;
   private lastSyncAt = 0;
+  private lastLocalPrune = 0;
   private synced = false;
   /** Bumped each time the connection becomes ready; a sync started before counts for nothing. */
   private connectedSince = 0;
@@ -321,6 +334,7 @@ export class TagStore {
       if (this.connection) this.queue(tag, durations ?? null);
     }
 
+    this.pruneLocalSoon(now);
     const done = this.send();
     const lastUpdate = { key, done };
     this.lastUpdate = lastUpdate;
@@ -577,6 +591,7 @@ export class TagStore {
       // Only once every score from `since` up has been read: a failed sync is retried whole.
       this.syncedUpTo = Math.max(this.syncedUpTo, startedAt);
       if (this.connectedSince === connectedSince) this.synced = true;
+      this.pruneLocalSoon(nowMs());
       // An update Redis refused while the connection stayed up (OOM, READONLY, a timeout) would
       // otherwise wait for this process's next revalidation or reconnect.
       if (this.unsent.size > 0) void this.send();
@@ -637,10 +652,34 @@ export class TagStore {
     const list = [...new Set(tags)];
     if (list.length === 0) return;
     const raws = await connection.client.hmget(tagsKey(this.keyPrefix), ...list);
+    const now = nowMs();
     list.forEach((tag, i) => {
       const remote = decodeRecord(raws[i]);
-      if (remote) this.merge(tag, remote);
+      // A record past retention cannot affect a servable entry; Redis drops it too, later.
+      if (remote && !isPastRetention(tag, remote, now)) this.merge(tag, remote);
     });
+  }
+
+  /**
+   * Drop local records past retention ({@link isPastRetention}), except those with an update Redis
+   * has not taken. Returns how many were dropped. Run by {@link pruneLocalSoon}.
+   */
+  pruneLocal(now: number = nowMs()): number {
+    let dropped = 0;
+    for (const [tag, record] of this.records) {
+      if (this.unsent.has(tag) || !isPastRetention(tag, record, now)) continue;
+      this.records.delete(tag);
+      dropped += 1;
+    }
+    return dropped;
+  }
+
+  /** {@link pruneLocal}, at most once per maintenance interval: it walks every record. */
+  private pruneLocalSoon(now: number): void {
+    if (now - this.lastLocalPrune < TAG_MAINTENANCE_INTERVAL_MS) return;
+    this.lastLocalPrune = now;
+    const dropped = this.pruneLocal(now);
+    if (dropped > 0) this.log?.("local tag records pruned", { dropped, kept: this.records.size });
   }
 
   /**

@@ -18,8 +18,8 @@ export interface MemoryStoreOptions {
 
   /**
    * Oldest entries go first once the stored size passes this many bytes. A larger entry is not
-   * stored.
-   * @default 50MiB
+   * stored. An entry counts its given size plus its key's length.
+   * @default 16MiB
    */
   maxBytes?: number;
 }
@@ -42,7 +42,7 @@ export class MemoryStore<T> {
 
   constructor(options: MemoryStoreOptions = {}) {
     this.maxEntries = options.maxEntries ?? 1000;
-    this.maxBytes = options.maxBytes ?? 50 * 1024 * 1024;
+    this.maxBytes = options.maxBytes ?? 16 * 1024 * 1024;
     getRegistry().add(this as MemoryStore<unknown>);
   }
 
@@ -71,11 +71,19 @@ export class MemoryStore<T> {
     return item.value;
   }
 
+  /** Bytes held: the sizes given to {@link set} plus the keys' lengths. */
+  get byteSize(): number {
+    return this.bytes;
+  }
+
   /**
-   * Store `value` (counted as `size` bytes) until `expiresAt` (ms), or forever with `null`.
+   * Store `value` (counted as `valueSize` bytes, plus the key) until `expiresAt` (ms), or forever
+   * with `null`.
    */
-  set(key: string, value: T, size: number, expiresAt: number | null): void {
+  set(key: string, value: T, valueSize: number, expiresAt: number | null): void {
     this.delete(key);
+    // Keys count: a `"use cache"` key carries the function's encoded arguments.
+    const size = valueSize + key.length;
     if (size > this.maxBytes) return;
     while (this.items.size >= this.maxEntries || this.bytes + size > this.maxBytes) {
       const oldest = this.items.keys().next().value;
@@ -102,6 +110,16 @@ export class MemoryStore<T> {
     this.bytes = 0;
     return count;
   }
+}
+
+/**
+ * Approximate bytes held by a list of strings (tags): each string's characters at two bytes, plus
+ * a fixed overhead per string and per list.
+ */
+export function stringListBytes(list: readonly string[]): number {
+  let bytes = 32;
+  for (const item of list) bytes += 32 + item.length * 2;
+  return bytes;
 }
 
 function getRegistry(): Set<MemoryStore<unknown>> {
