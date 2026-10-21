@@ -9,6 +9,7 @@ page shows which cache each one lands in.
 | `fetch(url, { cache: "force-cache" })` or `{ next: { revalidate } }` | Redis (the page handler) | yes |
 | `"use cache: remote"` | Redis | yes |
 | `"use cache"` | each instance's memory (Redis with `useCache: "redis"`) | values no, invalidation yes |
+| `"use cache: private"` | not this package: request-scoped on the server, then the browser's router cache | no |
 
 ## Basic caching
 
@@ -116,6 +117,32 @@ export async function POST() {
   return Response.json({ revalidated: true });
 }
 ```
+
+## Per-user data: `"use cache: private"`
+
+`"use cache: private"` can read `cookies()`, `headers()` and `searchParams`, so it suits
+personalized output. Next never hands it to a cache handler: on the server a result is reused only
+within the same request, and the browser's router keeps it for the `cacheLife` `stale` time (lost
+on reload). Nothing reaches Redis or this package's memory, and you can't configure a handler for
+it. That's what you want for per-user data, and why you won't see these entries with `redis-cli`.
+
+```tsx
+import { cookies } from "next/headers";
+import { cacheLife } from "next/cache";
+
+async function getRecommendations(productId: string) {
+  "use cache: private";
+  cacheLife({ stale: 60 });
+  const session = (await cookies()).get("session-id")?.value ?? "guest";
+  return recommendationsFor(productId, session);
+}
+```
+
+Don't move per-user data into `"use cache"` or `"use cache: remote"` to get it into Redis: those
+entries are shared by every user. When the output only varies by a few values (a locale, a plan
+tier), read the cookie outside the cached function and pass that value in: arguments are part of
+the cache key, so each value gets its own shared entry.
+See Next's [`"use cache: private"` docs](https://nextjs.org/docs/app/api-reference/directives/use-cache-private).
 
 ## Keeping an entry out of Redis
 
