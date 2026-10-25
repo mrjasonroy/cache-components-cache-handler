@@ -287,3 +287,15 @@ Reproduce: build twice with different `NEXT_DEPLOYMENT_ID`s and the same Redis; 
 `nextjs:build-TfctsWXpff2fKS:page:*`. Fix: keys and `flushCache`'s default scope use the
 deployment ID when one is set (`getCacheScope`). Covered by `build-id.test.ts`, `redis.test.ts`
 ("a deployment ID scopes keys instead of Next's constant BUILD_ID") and `flush.test.ts`.
+
+## ISSUE-10: Under `next dev`, an edited `CACHE_MEMORY_*` in `.env` applies only after a restart
+
+**Status:** Open · **Severity:** Low · **Area:** `shared/memory-budget.ts`, `shared/runtime.ts`
+
+`next dev` reloads `.env` files into `process.env` when they change, but the memory budget is read
+once, when a runtime is created (DEC-11), and the runtime lives for the process. So a changed
+`CACHE_MEMORY_HEAP_PERCENT` or `CACHE_MEMORY_MAX_MIB` in `.env` has no effect until the dev server
+restarts (or `closeCache()` drops the runtime). Production is unaffected: the environment does not
+change while a server runs. A change to `withCache`'s `memory` restarts the dev server, since
+`next.config` changed. Possible fix: re-read the budget on `.env` reload in development, which
+would need resizing live stores; not worth it for a dev-only setting.

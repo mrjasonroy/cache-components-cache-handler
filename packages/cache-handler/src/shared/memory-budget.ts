@@ -12,6 +12,7 @@
  * beats `CACHE_KEY_PREFIX`).
  */
 
+import { type LoggerSource, processLogger, writeLog } from "./logger.js";
 import type { MemoryStoreOptions } from "./memory-store.js";
 
 /**
@@ -19,8 +20,9 @@ import type { MemoryStoreOptions } from "./memory-store.js";
  */
 export interface MemoryOptions {
   /**
-   * Share of the V8 heap limit (`v8.getHeapStatistics().heap_size_limit`, which
-   * `--max-old-space-size` sets), in percent. More than 0 and less than 100.
+   * Share of the V8 heap limit (`v8.getHeapStatistics().heap_size_limit`), in percent. The
+   * limit is a little above `--max-old-space-size`, since it includes the young generation
+   * (496 MiB for `--max-old-space-size=448` on Node 22). More than 0 and less than 100.
    * @default 10
    */
   heapPercent?: number;
@@ -30,6 +32,12 @@ export interface MemoryOptions {
    */
   maxMiB?: number;
 }
+
+/** Keys a `memory` setting may have. */
+const MEMORY_OPTION_KEYS = new Set(["heapPercent", "maxMiB"]);
+
+/** A budget above this share of the heap limit is logged once per process as a warning. */
+export const OVERSIZED_HEAP_SHARE = 0.5;
 
 /** Default share of the heap limit, in percent. */
 export const DEFAULT_HEAP_PERCENT = 10;
@@ -79,6 +87,12 @@ const MAX_ENTRIES: Partial<Record<MemoryStoreName, number>> = {
 export function validateMemoryOptions(options: unknown, source: string): MemoryOptions {
   if (options === null || typeof options !== "object" || Array.isArray(options)) {
     throw new Error(`${source}: memory must be an object like { heapPercent: 10 }.`);
+  }
+  const unknown = Object.keys(options).filter((key) => !MEMORY_OPTION_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `${source}: unknown memory option ${unknown.map((key) => `"${key}"`).join(", ")}; the options are heapPercent and maxMiB.`,
+    );
   }
   const { heapPercent, maxMiB } = options as Record<string, unknown>;
   if (heapPercent !== undefined) checkHeapPercent(heapPercent, `${source} memory.heapPercent`);
@@ -191,6 +205,33 @@ export function resolveMemoryBudget(
   if (maxMiB !== undefined) return Math.floor(maxMiB * MiB);
   if (heapLimit === undefined) return FALLBACK_BUDGET_MIB * MiB;
   return Math.floor((heapLimit * heapPercent) / 100);
+}
+
+let warnedOversized = false;
+
+/**
+ * Log once per process, as a warning, a budget above {@link OVERSIZED_HEAP_SHARE} of the heap
+ * limit: the caches could then crowd out the app and run the heap out of memory.
+ */
+export function warnIfOversized(
+  budgetBytes: number,
+  heapLimit: number | undefined,
+  logger: LoggerSource = processLogger,
+): void {
+  if (warnedOversized || heapLimit === undefined) return;
+  if (budgetBytes <= heapLimit * OVERSIZED_HEAP_SHARE) return;
+  warnedOversized = true;
+  const percent = Math.round((budgetBytes / heapLimit) * 100);
+  writeLog(
+    logger,
+    "warn",
+    `[RedisCache]: the in-process cache budget (${(budgetBytes / MiB).toFixed(0)} MiB) is ${percent}% of V8's heap limit (${(heapLimit / MiB).toFixed(0)} MiB); above 50% the caches can crowd out the app and run the heap out of memory. Lower memory.heapPercent / maxMiB or CACHE_MEMORY_*, or raise --max-old-space-size.`,
+  );
+}
+
+/** Test-only: warn again. */
+export function resetMemoryBudgetWarningForTests(): void {
+  warnedOversized = false;
 }
 
 /**

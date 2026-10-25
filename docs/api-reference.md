@@ -61,8 +61,8 @@ Returns `nextConfig` plus:
 | `cacheMaxMemorySize` | `0`, unless `nextConfig` sets it: then that value is kept, with a warning if it is not `0` (it has no effect once `withCache` sets the handlers). Omitted with `pages: false`. |
 
 Throws if `nextConfig` already sets `cacheHandlers`, or `cacheHandler` unless `pages: false`
-(then yours is kept), and if `memory` has a `heapPercent` outside (0, 100) or a `maxMiB` that is
-not a finite number above 0. `memory` adds no key to the config: it is handed to the handlers
+(then yours is kept), and if `memory` has a `heapPercent` outside (0, 100), a `maxMiB` that is
+not a finite number above 0, or any other key. `memory` adds no key to the config: it is handed to the handlers
 through the environment of the process that loaded `next.config` (`next dev`, `next start`), so a
 standalone `server.js` does not see it; `withCache` warns when `output: "standalone"` is set with it.
 See [Memory](./operations.md#memory). A config function is wrapped
@@ -167,7 +167,7 @@ handler is created). Every entry is kept at most 365 days.
 ### `createLocalCacheHandler(options?)`
 
 For `"use cache"`. Values live in this process's memory (up to 10,000 entries and 32/98 of the
-[memory budget](./operations.md#memory), 25 MiB on a 768 MB heap; a larger value is not kept) until their `revalidate` period. When Redis is configured, tag invalidations are shared across instances.
+[memory budget](./operations.md#memory), about 27 MiB at `--max-old-space-size=768` on Node 22; a larger value is not kept) until their `revalidate` period. When Redis is configured, tag invalidations are shared across instances.
 Takes `CacheOptions`; only the connection, `keyPrefix` and `debug` matter.
 
 ```js

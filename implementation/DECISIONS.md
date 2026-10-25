@@ -18,7 +18,10 @@ option or environment variable" rule for this one setting.
 10) of `v8.getHeapStatistics().heap_size_limit`, or `maxMiB`, an absolute budget that wins. It is
 split by DEC-9's ratios, `page`, `pageFallback`, `data` and `dataFallback` 16, `local` 32,
 `entryTags` 2 (of 98), each cap rounded down so they sum to at most the budget; `local` and
-`entryTags` keep their 10,000-entry caps. 10% of a 768 MB heap is about 77 MiB, close to DEC-9's 98.
+`entryTags` keep their 10,000-entry caps. `heap_size_limit` is a little above `--max-old-space-size`, since it includes the young
+generation (Node 22: 448 → 496 MiB, 768 → 816 MiB), so 10% is about 50 MiB and 82 MiB there, close
+to DEC-9's 98 for the pods it was sized for. The budget is per runtime (connection and key prefix),
+as DEC-9's caps were. A budget above half the heap limit is allowed but warned about once per process.
 
 **Precedence.** `withCache`'s `memory`, then `CACHE_MEMORY_MAX_MIB` / `CACHE_MEMORY_HEAP_PERCENT`,
 then the default. The first level that sets either value decides; within it `maxMiB` wins. We
@@ -47,7 +50,7 @@ budget has one source per process: `withCache`, else the environment. Custom han
 `withCache({ handlers })` still get `withCache`'s `memory`, since it is process-wide.
 
 **Validation.** `heapPercent` must be finite, more than 0 and less than 100; `maxMiB` finite and
-more than 0. `withCache` throws when the config loads. An invalid variable throws when a runtime
+more than 0; any other key in `memory` (`maxMib`, `heapPercentage`) is rejected. `withCache` throws when the config loads. An invalid variable throws when a runtime
 is created, which every cache call attempts until it is fixed; the error names the variable.
 `acquireCacheRuntime` resolves the budget before opening its connection, so the error leaves no
 connection open. An empty variable counts as unset; `Number` parsing rejects `10%` or `64MiB`.

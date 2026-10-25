@@ -93,6 +93,16 @@ describe("cache runtime", () => {
     expect(stores.entryTags.maxEntries).toBe(10_000);
   });
 
+  test("a budget over half the heap limit is logged once", () => {
+    process.env.CACHE_MEMORY_HEAP_PERCENT = "60";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getCacheRuntime();
+    getCacheRuntime({ keyPrefix: "other:" });
+    const oversized = warn.mock.calls.filter((call) => String(call[0]).includes("heap limit"));
+    expect(oversized).toHaveLength(1);
+    warn.mockRestore();
+  });
+
   test("the budget is read once, when the runtime is created", () => {
     process.env.CACHE_MEMORY_MAX_MIB = "49";
     const runtime = getCacheRuntime();

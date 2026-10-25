@@ -79,19 +79,25 @@ and serves from memory, so create it again after `closeCache()`.
 
 ## Memory
 
-The package's in-process caches share one budget: **10% of the V8 heap limit** by default
-(`v8.getHeapStatistics().heap_size_limit`, which `--max-old-space-size` sets). That is about
-77 MiB on a 768 MB heap and about 45 MiB on a 448 MB one, so a pod with a larger heap gets a
-larger cache. Each Node process splits it across these stores, on top of what Next itself uses:
+The package's in-process caches share one budget: **10% of V8's heap limit** by default
+(`v8.getHeapStatistics().heap_size_limit`). That limit is a little above `--max-old-space-size`,
+because it includes the young generation: on Node 22, `--max-old-space-size=448` gives a 496 MiB
+limit (a budget of about 50 MiB) and `--max-old-space-size=768` an 816 MiB one (about 82 MiB).
+The gap differs between Node versions. A pod with a larger heap gets a larger cache.
 
-| What | Share of the budget | At 77 MiB (768 MB heap) | Fills when |
+The budget is **per runtime**, not per process: one runtime exists for each Redis connection and
+key prefix, and each splits its own budget across these stores, on top of what Next itself uses.
+An app on the built-in handlers has one runtime; custom handler files with different key prefixes
+or connections have one each, and each gets the full budget.
+
+| What | Share of the budget | At 82 MiB (`--max-old-space-size=768`) | Fills when |
 |---|---|---|---|
-| `"use cache"` values (the local handler) | 32/98, and at most 10,000 entries | 25 MiB | Always |
-| Tag lists of entries read or written | 2/98, and at most 10,000 entries | 1.6 MiB | With Redis |
-| Page entries kept in memory | 16/98 | 12.5 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
-| `"use cache: remote"` entries kept in memory | 16/98 | 12.5 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
-| Page entries written during an outage | 16/98 | 12.5 MiB | Redis down; emptied on reconnect |
-| `"use cache: remote"` entries written during an outage | 16/98 | 12.5 MiB | Redis down; emptied on reconnect |
+| `"use cache"` values (the local handler) | 32/98, and at most 10,000 entries | 27 MiB | Always |
+| Tag lists of entries read or written | 2/98, and at most 10,000 entries | 1.7 MiB | With Redis |
+| Page entries kept in memory | 16/98 | 13 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
+| `"use cache: remote"` entries kept in memory | 16/98 | 13 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
+| Page entries written during an outage | 16/98 | 13 MiB | Redis down; emptied on reconnect |
+| `"use cache: remote"` entries written during an outage | 16/98 | 13 MiB | Redis down; emptied on reconnect |
 | Tag records | about 150 bytes per tag, outside the budget | | Always |
 
 So about 35% of the budget at most while Redis is healthy (67% if you use `MEMORY_ONLY_TAG`),
@@ -112,9 +118,11 @@ first that sets either value decides, and within it `maxMiB` wins. This is the p
 order: an option in code wins over its variable, as `keyPrefix` does over `CACHE_KEY_PREFIX`.
 `heapPercent` must be more than 0 and less than 100, `maxMiB` more than 0. `withCache` throws on
 an invalid value when the config loads; an invalid variable makes every cache call throw, with
-the variable named, until it is fixed.
+the variable named, until it is fixed. A budget above half the heap limit is allowed but logged
+once per process as a warning, since the caches could then crowd out the app.
 
-The budget is read once, when the process first uses the cache. `withCache` hands its `memory` to
+The budget is read once, when a runtime is created (the first cache call, for the built-in
+handlers). `withCache` hands its `memory` to
 the handlers through the process environment, which works wherever `next.config` is loaded by the
 serving process (`next dev`, `next start`). **A standalone `server.js` never loads `next.config`**,
 so there set `CACHE_MEMORY_HEAP_PERCENT` or `CACHE_MEMORY_MAX_MIB` in the container's environment
@@ -131,10 +139,10 @@ Sizing a pod is a separate rule, about the container limit rather than the cache
 `--max-old-space-size` to about 75% of the container limit, never above it, so V8 collects garbage
 before the kernel kills the process, for example `NODE_OPTIONS=--max-old-space-size=448` for a
 600 MB limit. A value above the limit lets the heap grow until the container is killed for running
-out of memory. The cache's budget is a share of that heap, so it fits inside it by construction;
-measure your app's own baseline (the pod's memory after warm-up with the cache empty) and check
-that it plus the budget leaves the heap room to spare. If it does not, lower `heapPercent` or raise
-the limit.
+out of memory. The cache's budget is a share of that heap, so it grows and shrinks with it, but
+it still competes with the app for the same heap: measure your app's own baseline (the pod's
+memory after warm-up with the cache empty) and check that it plus the budget (per runtime) leaves
+the heap room to spare. If it does not, lower `heapPercent` or raise the limit.
 
 ## Logging
 

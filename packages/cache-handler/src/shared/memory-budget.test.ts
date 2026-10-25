@@ -5,8 +5,10 @@ import {
   MEMORY_STORE_SHARES,
   memoryStoreCaps,
   readHeapLimit,
+  resetMemoryBudgetWarningForTests,
   resolveMemoryBudget,
   validateMemoryOptions,
+  warnIfOversized,
 } from "./memory-budget.js";
 
 const MiB = 1024 * 1024;
@@ -127,6 +129,26 @@ describe("memory budget", () => {
     [10, "memory must be an object"],
   ])("rejects memory %o", (memory, message) => {
     expect(() => validateMemoryOptions(memory, "withCache")).toThrow(message);
+  });
+
+  test.each(["maxMib", "heapPercentage", "max"])("rejects the unknown memory key %s", (key) => {
+    expect(() => validateMemoryOptions({ [key]: 10 }, "withCache")).toThrow(
+      `withCache: unknown memory option "${key}"; the options are heapPercent and maxMiB.`,
+    );
+  });
+
+  test("warns once when the budget is over half the heap limit", () => {
+    resetMemoryBudgetWarningForTests();
+    const warn = vi.fn();
+    const logger = () => ({ warn, error: vi.fn() });
+    warnIfOversized(HEAP / 2, HEAP, logger);
+    warnIfOversized(64 * MiB, undefined, logger);
+    expect(warn).not.toHaveBeenCalled();
+    warnIfOversized(HEAP / 2 + 1, HEAP, logger);
+    warnIfOversized(HEAP, HEAP, logger);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("50% of V8's heap limit (768 MiB)");
+    resetMemoryBudgetWarningForTests();
   });
 
   test("keeps only the fields that are set", () => {

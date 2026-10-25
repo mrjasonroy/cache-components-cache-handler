@@ -120,6 +120,12 @@ describe("withCache memory", () => {
     },
   );
 
+  test("rejects an unknown memory key", () => {
+    expect(() => withCache({}, { memory: { maxMib: 64 } as never })).toThrow(
+      'unknown memory option "maxMib"',
+    );
+  });
+
   test("warns that a standalone server.js does not see it", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     withCache({ output: "standalone" }, { memory: { heapPercent: 20 } });

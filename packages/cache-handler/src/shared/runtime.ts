@@ -26,7 +26,12 @@ import {
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { type CacheLogger, type LoggerSource, debugWriter, loggerSource } from "./logger.js";
-import { memoryStoreCaps, resolveMemoryBudget } from "./memory-budget.js";
+import {
+  memoryStoreCaps,
+  readHeapLimit,
+  resolveMemoryBudget,
+  warnIfOversized,
+} from "./memory-budget.js";
 import { MemoryStore, type MemoryStoreOptions, clearAllMemoryStores } from "./memory-store.js";
 import {
   type TagStateKey,
@@ -336,7 +341,7 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   }
   const logger = loggerSource(options.logger);
   // Before the connection opens, so an invalid `CACHE_MEMORY_*` value cannot leave it open.
-  const caps = resolveMemoryStoreCaps();
+  const caps = resolveMemoryStoreCaps(logger);
   const connection = openRedisConnection(request.options, logger);
   const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix(), logger, caps);
   return {
@@ -356,12 +361,17 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
  * healthy only `local` and `entryTags` fill (plus `page` and `data` for `MEMORY_ONLY_TAG` entries);
  * without Redis `page` and `data` hold everything; the fallbacks fill only during an outage and
  * are emptied on reconnect. An entry larger than its store's cap is not kept in memory. Throws on
- * an invalid `CACHE_MEMORY_*` value.
+ * an invalid `CACHE_MEMORY_*` value; warns once per process when the budget is over half the heap
+ * limit.
  */
 export function resolveMemoryStoreCaps(
+  logger?: LoggerSource,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<keyof RuntimeStores, MemoryStoreOptions & { maxBytes: number }> {
-  return memoryStoreCaps(resolveMemoryBudget(env));
+  const heapLimit = readHeapLimit();
+  const budget = resolveMemoryBudget(env, heapLimit);
+  warnIfOversized(budget, heapLimit, logger);
+  return memoryStoreCaps(budget);
 }
 
 function createRuntime(
@@ -369,7 +379,7 @@ function createRuntime(
   keyPrefix: string,
   logger: LoggerSource,
   // The budget is read once, here or by the caller: a runtime's caps never change.
-  caps = resolveMemoryStoreCaps(),
+  caps = resolveMemoryStoreCaps(logger),
   shared?: { stateKey: TagStateKey | undefined; liveStore(): TagStore },
 ): OwnedRuntime {
   const stores: RuntimeStores = {

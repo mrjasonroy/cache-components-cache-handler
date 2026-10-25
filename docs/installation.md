@@ -94,7 +94,7 @@ from the environment, the same under `next start`, standalone and Docker. The on
 | `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch for every backend: it turns off Valkey and ElastiCache too, whatever variable set the URL. |
 | `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |
 | `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are stored Brotli-compressed (usually 5 to 15 times smaller). `off` (or `0`, `false`, `no`) stores them uncompressed. Either way, both forms are read. Entries over 64 MB are always stored uncompressed. |
-| `CACHE_MEMORY_HEAP_PERCENT` | `10` | The in-process cache budget as a share of the V8 heap limit (`--max-old-space-size`), in percent: more than 0 and less than 100. See [Memory](./operations.md#memory). |
+| `CACHE_MEMORY_HEAP_PERCENT` | `10` | The in-process cache budget as a share of V8's heap limit (a little above `--max-old-space-size`), in percent: more than 0 and less than 100. See [Memory](./operations.md#memory). |
 | `CACHE_MEMORY_MAX_MIB` | unset | The in-process cache budget in MiB, more than 0. Wins over `CACHE_MEMORY_HEAP_PERCENT`; `withCache`'s `memory` option wins over both. An invalid value makes cache calls throw, naming the variable. |
 
 There are no tuning variables for timeouts or TTLs: the defaults are the product. If you need
