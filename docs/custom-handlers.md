@@ -71,6 +71,34 @@ again. Your other uses of the client are unaffected, so set its own `commandTime
 `retryStrategy`) for those. [Redis Configuration](./redis.md#your-own-client) has Sentinel and
 Cluster clients.
 
+For ElastiCache IAM authentication on a client of your own, which is the way to use IAM with
+cluster-mode-enabled ElastiCache (a `Cluster`), create the client with `lazyConnect: true` and TLS,
+do not connect it, and call `attachElastiCacheIamAuth(client, { userId, cacheName, region })`
+once: it connects the client when the first token is ready, refreshes the token every 10 minutes
+and re-authenticates the live connections. Fields you leave out come from the `ELASTICACHE_*`
+environment. Then pass the client as `client` (not `iam`, which throws with `client`):
+
+```js
+// cache/redis.mjs
+import { Cluster } from "ioredis";
+import { attachElastiCacheIamAuth } from "@mrjasonroy/cache-components-cache-handler";
+
+const key = Symbol.for("my-app.redis");
+globalThis[key] ??= (() => {
+  const client = new Cluster([{ host: process.env.ELASTICACHE_ENDPOINT, port: 6379 }], {
+    lazyConnect: true,
+    dnsLookup: (address, callback) => callback(null, address),
+    redisOptions: { tls: {}, commandTimeout: 1000 },
+  });
+  attachElastiCacheIamAuth(client, { userId: "app-user", cacheName: "my-cache", region: "us-east-1" });
+  return client;
+})();
+export const client = globalThis[key];
+```
+
+ElastiCache Serverless and cluster-mode-disabled caches need none of this: the environment's
+connection handles them.
+
 All commands share one connection, so a large value on a slow link delays the commands queued
 behind it. At 1000 ms, a 5 MB entry needs about 40 Mbit/s (compression usually makes a page
 entry much smaller than the page); on a slower link (cross-region, or an
