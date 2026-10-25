@@ -1,6 +1,9 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { MEMORY_OPTIONS_ENV } from "../shared/memory-budget.js";
+import { getCacheRuntime } from "../shared/runtime.js";
+import { resetCacheState } from "../testing/env.js";
 import { withCache } from "./with-cache.js";
 
 /** Built entries are `dist/entries/*.js`; in source they are the `.ts` files beside them. */
@@ -89,6 +92,41 @@ describe("withCache", () => {
     expect(warn).not.toHaveBeenCalled();
     expect(withCache({ cacheMaxMemorySize: 1024 }).cacheMaxMemorySize).toBe(1024);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("cacheMaxMemorySize"));
+    warn.mockRestore();
+  });
+});
+
+describe("withCache memory", () => {
+  afterEach(resetCacheState);
+
+  test("hands memory to the runtime in this process, over the environment", () => {
+    process.env.CACHE_MEMORY_MAX_MIB = "980";
+    withCache({}, { memory: { maxMiB: 49 } });
+    expect(getCacheRuntime().stores.local.maxBytes).toBe(16 * 1024 * 1024);
+  });
+
+  test("without memory, the environment decides again", () => {
+    withCache({}, { memory: { maxMiB: 49 } });
+    withCache({});
+    expect(process.env[MEMORY_OPTIONS_ENV]).toBeUndefined();
+    process.env.CACHE_MEMORY_MAX_MIB = "98";
+    expect(getCacheRuntime().stores.local.maxBytes).toBe(32 * 1024 * 1024);
+  });
+
+  test.each([{ heapPercent: 0 }, { heapPercent: 100 }, { maxMiB: -1 }, { maxMiB: Number.NaN }])(
+    "rejects memory %o when the config loads",
+    (memory) => {
+      expect(() => withCache({}, { memory })).toThrow(/withCache memory\.(heapPercent|maxMiB)/);
+    },
+  );
+
+  test("warns that a standalone server.js does not see it", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    withCache({ output: "standalone" }, { memory: { heapPercent: 20 } });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("CACHE_MEMORY_HEAP_PERCENT"));
+    warn.mockClear();
+    withCache({ output: "standalone" });
+    expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });

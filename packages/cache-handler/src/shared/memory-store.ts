@@ -36,8 +36,10 @@ interface StoredItem<T> {
  */
 export class MemoryStore<T> {
   private readonly items = new Map<string, StoredItem<T>>();
-  private readonly maxEntries: number;
-  private readonly maxBytes: number;
+  /** Most entries held. */
+  readonly maxEntries: number;
+  /** Most bytes held. */
+  readonly maxBytes: number;
   private bytes = 0;
 
   constructor(options: MemoryStoreOptions = {}) {
