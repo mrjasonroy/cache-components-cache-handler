@@ -66,13 +66,14 @@ export type NextConfigFunction<T extends object> = (
 
 /**
  * Configure the app's cache: pages and route handlers (`cacheHandler`), `"use cache"`
- * (`cacheHandlers.default`) and `"use cache: remote"` (`cacheHandlers.remote`), with Next's
- * built-in page LRU turned off (`cacheMaxMemorySize: 0`). Set `REDIS_URL` to share them across
- * instances; without it everything stays in memory.
+ * (`cacheHandlers.default`) and `"use cache: remote"` (`cacheHandlers.remote`), and
+ * `cacheMaxMemorySize: 0`. Set `REDIS_URL` to share them across instances; without it everything
+ * stays in memory.
  *
  * Accepts a config object or a config function; a function is wrapped in an async one that
  * applies `withCache` to its result. An explicit `cacheMaxMemorySize` is kept, with a warning
- * when it is not 0 (Next's own page LRU would then serve entries other instances revalidated).
+ * when it is not 0: it sizes the memory caches of Next's own file-system page cache and built-in
+ * `"use cache"` handler, and with these handlers set Next uses neither, so it has no effect.
  *
  * Throws if the config already sets `cacheHandlers`, or `cacheHandler` unless `pages: false`
  * (then your own `cacheHandler` is kept as it is).
@@ -130,7 +131,7 @@ function applyCache<T extends object>(
     writeLog(
       processLogger,
       "warn",
-      `withCache: keeping cacheMaxMemorySize: ${userMemorySize}. Next's built-in page memory cache can serve pages that another instance has revalidated; withCache sets it to 0 unless you set it.`,
+      `withCache: keeping cacheMaxMemorySize: ${userMemorySize}. It has no effect with withCache's handlers: it sizes Next's own page and "use cache" memory caches, which Next does not use once cacheHandler and cacheHandlers are set. The package's own memory caps are in docs/operations.md#memory.`,
     );
   }
 

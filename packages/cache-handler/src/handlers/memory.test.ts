@@ -1,6 +1,10 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CacheValue } from "../types.js";
-import { type MemoryCacheHandler, createMemoryCacheHandler } from "./memory.js";
+import {
+  MAX_REVALIDATED_TAGS,
+  type MemoryCacheHandler,
+  createMemoryCacheHandler,
+} from "./memory.js";
 
 describe("MemoryCacheHandler", () => {
   let handler: MemoryCacheHandler;
@@ -216,6 +220,30 @@ describe("MemoryCacheHandler", () => {
   });
 
   describe("tag-based revalidation", () => {
+    test("remembers at most MAX_REVALIDATED_TAGS; entries older than a forgotten one miss", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(1_000_000);
+        const value: CacheValue = {
+          kind: "FETCH",
+          data: { headers: {}, body: "x", status: 200, url: "https://example.com" },
+          revalidate: false,
+        };
+        await handler.set("before", value, { tags: ["kept"] });
+        for (let i = 0; i <= MAX_REVALIDATED_TAGS; i++) {
+          vi.setSystemTime(1_000_001 + i);
+          await handler.revalidateTag(`_N_T_/p${i}`);
+        }
+        expect(handler.getStats().revalidatedTags).toBe(MAX_REVALIDATED_TAGS / 2);
+        expect(await handler.get("before")).toBeNull();
+        vi.setSystemTime(Date.now() + 1);
+        await handler.set("after", value, { tags: ["kept"] });
+        expect(await handler.get("after")).not.toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     test("should revalidate entries by explicit tag", async () => {
       const value: CacheValue = {
         kind: "FETCH",

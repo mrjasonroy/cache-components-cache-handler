@@ -7,6 +7,66 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-9: A fixed in-process memory budget (16.4.3)
+
+**Problem.** A consumer's pods (605 MB container limit) ran out of memory. The in-process stores
+added up to about 336 MiB per runtime: `local` 10,000 entries / 50 MiB, `page` and `pageFallback`
+64 MiB each, `data` and `dataFallback` 50 MiB each, `entryTags` "8 MiB" counted in tags. Local tag
+records were never pruned, and the deprecated handlers' tag maps were unbounded.
+
+**What fills when.** With Redis healthy only `local` (every `"use cache"` value) and `entryTags`
+fill; `page` and `data` hold only `MEMORY_ONLY_TAG` entries. Without Redis, `page` and `data`
+hold everything and `entryTags` is unused. `pageFallback` and `dataFallback` fill only while
+Redis is down, at most 60 s per entry, and are emptied on reconnect.
+
+**Decision.** Smaller fixed caps, no new option or environment variable (the maintainer's rule):
+`local` 32 MiB / 10,000 entries, `page`, `data` and both fallbacks 16 MiB each, `entryTags` 2 MiB.
+That is 34 MiB with Redis healthy, 64 MiB without Redis and 98 MiB at most during an outage. The
+caps live in one table, `MEMORY_STORE_CAPS` in `shared/runtime.ts`, and a test fails if their
+sum reaches 100 MiB. Sizes are bytes: `entryTags` now counts each tag's characters, and every
+store counts keys, since a `"use cache"` key carries the function's encoded arguments. The page
+store no longer has to fit the codec's 64 MiB entry cap: a page larger than 16 MiB is not kept in
+memory, which only matters without Redis, where it is rendered again. We kept the six stores
+rather than merging them: merging `page` with `pageFallback` would need per-entry outage marks to
+empty only the outage copies on reconnect, for no saving in the worst case.
+
+**Tag records.** A local record follows the Redis horizon of DEC-8: it is dropped once
+`max(stale, expired) + TAG_RETENTION_MS` has passed, flush barriers never, and a record with an
+update Redis has not taken is kept. Dropping it is safe: any entry it could affect is past the
+365-day age bound every handler enforces on read. A sync or read skips such records, so the first
+sync over a Cluster that cannot prune does not load years of records. The walk over all records
+runs at most once a minute, on an update or a sync, with no timer, so it covers memory-only mode
+too. This is a time bound, not a count bound: an app that revalidates many distinct tags holds
+about 150 bytes per tag revalidated in the last year (measured), in step with the Redis hash. A
+count cap is not safe here, since a dropped record that is still in effect would let the local
+handler serve an invalidated value.
+
+**Legacy maps.** `createMemoryDataCacheHandler`'s module-level manifest and
+`MemoryCacheHandler.revalidatedTags` keep at most 10,000 tags. Past that the least recently
+updated half is dropped. `MemoryCacheHandler` keeps one floor, the latest dropped revalidation
+time (always in the past); entries last modified before it miss.
+
+The data handler keeps three floors, because a record's `expired` can lie in the future (a
+`revalidateTag(tag, "max")` sets it a year ahead). One floor collapsing `stale` and `expired`
+would move into the future and make every entry, new ones included, miss until then. So: the
+latest dropped `stale` (older entries are served stale, `revalidate: -1`); the latest dropped
+`expired` that had already passed (older entries miss); and the latest dropped `expired` still
+ahead, which misses older entries only once it has passed, as a kept record would. New entries are
+never affected by a pending floor. `getExpiration` reports, for a tag it has no record of, the
+latest dropped `expired` that has passed (0 if none): a lower bound, so a soft or implicit tag
+checked outside this handler still sees a dropped revalidation, never a future time.
+
+Approximation: pending expiries collapse to their maximum, so an earlier dropped one takes effect
+only when the latest passes. Until then the entries it covers are still served stale (their
+`stale` time is in the stale floor) unless they were created between its `stale` and `expired`
+times. Records whose `expired` has already passed are dropped first to keep this rare. This is
+the deprecated stack; an exact list of pending deadlines would itself be unbounded.
+
+**`cacheMaxMemorySize`.** It sizes the memory LRU of Next's `FileSystemCache` (unused when
+`cacheHandler` is set) and Next's built-in `"use cache"` handler (replaced by `cacheHandlers`; in
+production `0` makes it a no-op). With `withCache` it therefore has no effect. `withCache` still
+sets 0, which is harmless, and its warning for another value now says it has no effect.
+
 ## DEC-8: Bound tag retention; use server field expiry and a standalone fallback (16.4.3-rc.1)
 
 **Entry lifetime.** The page, remote and local handlers share `MAX_ENTRY_AGE_SECONDS` = 365

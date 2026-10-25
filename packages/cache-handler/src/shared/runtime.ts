@@ -6,7 +6,7 @@
  */
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
-import { MAX_STORED_ENTRY_BYTES } from "./codec.js";
+
 import {
   type RedisClientLike,
   type RedisConnection,
@@ -26,7 +26,7 @@ import {
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { type CacheLogger, type LoggerSource, debugWriter, loggerSource } from "./logger.js";
-import { MemoryStore, clearAllMemoryStores } from "./memory-store.js";
+import { MemoryStore, type MemoryStoreOptions, clearAllMemoryStores } from "./memory-store.js";
 import {
   type TagStateKey,
   clearTagStatesForTests,
@@ -346,11 +346,23 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   };
 }
 
+const MiB = 1024 * 1024;
+
 /**
- * Bytes of page entries kept in memory per store. The size of the largest stored entry today, but
- * a memory budget, not the codec's inflation cap: the two may change apart.
+ * Caps of the in-process stores. Their sum is the most the package keeps in memory per runtime;
+ * see the Memory section of docs/operations.md before changing one. With Redis healthy only
+ * `local` and `entryTags` fill (plus `page` and `data` for `MEMORY_ONLY_TAG` entries); without
+ * Redis `page` and `data` hold everything; the fallbacks fill only during an outage and are
+ * emptied on reconnect. An entry larger than its store's cap is not kept in memory.
  */
-const PAGE_MEMORY_MAX_BYTES = MAX_STORED_ENTRY_BYTES;
+export const MEMORY_STORE_CAPS = {
+  page: { maxBytes: 16 * MiB },
+  pageFallback: { maxBytes: 16 * MiB },
+  data: { maxBytes: 16 * MiB },
+  dataFallback: { maxBytes: 16 * MiB },
+  local: { maxEntries: 10_000, maxBytes: 32 * MiB },
+  entryTags: { maxEntries: 10_000, maxBytes: 2 * MiB },
+} as const satisfies Record<keyof RuntimeStores, MemoryStoreOptions>;
 
 function createRuntime(
   connection: RedisConnection | undefined,
@@ -359,12 +371,12 @@ function createRuntime(
   shared?: { stateKey: TagStateKey | undefined; liveStore(): TagStore },
 ): OwnedRuntime {
   const stores: RuntimeStores = {
-    page: new MemoryStore({ maxBytes: PAGE_MEMORY_MAX_BYTES }),
-    pageFallback: new MemoryStore({ maxBytes: PAGE_MEMORY_MAX_BYTES }),
-    data: new MemoryStore(),
-    dataFallback: new MemoryStore(),
-    local: new MemoryStore({ maxEntries: 10_000 }),
-    entryTags: new MemoryStore({ maxEntries: 10_000, maxBytes: 8 * 1024 * 1024 }),
+    page: new MemoryStore(MEMORY_STORE_CAPS.page),
+    pageFallback: new MemoryStore(MEMORY_STORE_CAPS.pageFallback),
+    data: new MemoryStore(MEMORY_STORE_CAPS.data),
+    dataFallback: new MemoryStore(MEMORY_STORE_CAPS.dataFallback),
+    local: new MemoryStore(MEMORY_STORE_CAPS.local),
+    entryTags: new MemoryStore(MEMORY_STORE_CAPS.entryTags),
   };
   // Outage entries are never read once Redis is back; dropping them frees the memory.
   const stopListening = connection?.onReady(() => {

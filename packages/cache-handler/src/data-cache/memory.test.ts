@@ -4,7 +4,12 @@
  */
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { createMemoryDataCacheHandler } from "./memory.js";
+import {
+  MAX_TAG_MANIFEST_RECORDS,
+  clearTagManifestForTests,
+  createMemoryDataCacheHandler,
+  tagManifestStatsForTests,
+} from "./memory.js";
 import type { DataCacheEntry } from "./types.js";
 
 /**
@@ -267,6 +272,101 @@ describe("MemoryDataCacheHandler - Tag Invalidation", () => {
       // Note: This assertion verifies stale entry behavior
       // If this fails, check areTagsStale() logic in memory.ts
       expect(result?.revalidate).toBe(-1);
+    });
+  });
+
+  describe("Global Tags Manifest - bounded", () => {
+    const tagsFor = (count: number, prefix = "t") =>
+      Array.from({ length: count }, (_, i) => `${prefix}${i}`);
+
+    test("keeps at most MAX_TAG_MANIFEST_RECORDS; entries older than a dropped record miss", async () => {
+      clearTagManifestForTests();
+      const handler = createMemoryDataCacheHandler();
+      const old = createTestEntry("old", ["unrelated"], { timestamp: Date.now() - 60_000 });
+      await handler.set("old", Promise.resolve(old));
+
+      const tags = tagsFor(MAX_TAG_MANIFEST_RECORDS + 1);
+      await handler.updateTags(tags.slice(0, MAX_TAG_MANIFEST_RECORDS));
+      expect(tagManifestStatsForTests().records).toBe(MAX_TAG_MANIFEST_RECORDS);
+      expect(tagManifestStatsForTests().floors.expired).toBe(0);
+      await handler.updateTags(tags.slice(MAX_TAG_MANIFEST_RECORDS));
+      const { records, floors } = tagManifestStatsForTests();
+      expect(records).toBe(MAX_TAG_MANIFEST_RECORDS / 2);
+      expect(floors.expired).toBeGreaterThan(0);
+
+      // Its tag record was never dropped, but it predates one that was: a miss, conservatively.
+      expect(await handler.get("old", [])).toBeUndefined();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const fresh = createTestEntry("fresh", ["unrelated"]);
+      await handler.set("fresh", Promise.resolve(fresh));
+      expect(await handler.get("fresh", [])).toBeDefined();
+      // A tag with no record reports at least the dropped records' expiry, not 0.
+      expect(await handler.getExpiration(["t0"])).toBe(floors.expired);
+      expect(await handler.getExpiration(["never-seen"])).toBe(floors.expired);
+      clearTagManifestForTests();
+    });
+
+    test('10,001 tags revalidated with "max": new entries still hit, older ones are served stale', async () => {
+      clearTagManifestForTests();
+      const handler = createMemoryDataCacheHandler();
+      const old = createTestEntry("old", ["unrelated"], { timestamp: Date.now() - 60_000 });
+      await handler.set("old", Promise.resolve(old));
+
+      const max = { expire: 365 * 24 * 60 * 60 };
+      await handler.updateTags(tagsFor(MAX_TAG_MANIFEST_RECORDS + 1), max);
+      const { records, floors } = tagManifestStatsForTests();
+      expect(records).toBe(MAX_TAG_MANIFEST_RECORDS / 2);
+      expect(floors.expired).toBe(0);
+      expect(floors.pendingExpired).toBeGreaterThan(Date.now());
+
+      // Older than the dropped records: stale, as their kept records would make it, not gone.
+      const stale = await handler.get("old", []);
+      expect(stale).toBeDefined();
+      expect(stale?.revalidate).toBe(-1);
+      // A future expiry is never a lower bound yet.
+      expect(await handler.getExpiration(["never-seen"])).toBe(0);
+
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await handler.set("fresh", Promise.resolve(createTestEntry("fresh", ["unrelated"])));
+      const fresh = await handler.get("fresh", []);
+      expect(fresh).toBeDefined();
+      expect(fresh?.revalidate).toBe(900);
+      clearTagManifestForTests();
+    });
+
+    test("a dropped future expiry misses older entries once it has passed", async () => {
+      clearTagManifestForTests();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(10_000_000);
+        const handler = createMemoryDataCacheHandler();
+        const entry = createTestEntry("old", ["unrelated"], {
+          timestamp: Date.now() - 1_000,
+          revalidate: 365 * 24 * 60 * 60,
+        });
+        await handler.set("old", Promise.resolve(entry));
+        await handler.updateTags(tagsFor(MAX_TAG_MANIFEST_RECORDS + 1), { expire: 60 });
+        expect((await handler.get("old", []))?.revalidate).toBe(-1);
+        vi.setSystemTime(Date.now() + 61_000);
+        expect(await handler.get("old", [])).toBeUndefined();
+        expect(await handler.getExpiration(["never-seen"])).toBe(
+          tagManifestStatsForTests().floors.pendingExpired,
+        );
+      } finally {
+        vi.useRealTimers();
+        clearTagManifestForTests();
+      }
+    });
+
+    test("a record with a future expiry is dropped last", async () => {
+      clearTagManifestForTests();
+      const handler = createMemoryDataCacheHandler();
+      await handler.updateTags(["delayed"], { expire: 3600 });
+      await handler.updateTags(tagsFor(MAX_TAG_MANIFEST_RECORDS));
+      // "delayed" is the oldest but kept.
+      expect(await handler.getExpiration(["delayed"])).toBeGreaterThan(Date.now());
+      expect(tagManifestStatsForTests().floors.pendingExpired).toBe(0);
+      clearTagManifestForTests();
     });
   });
 });
