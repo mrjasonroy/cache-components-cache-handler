@@ -43,10 +43,24 @@ handler serve an invalidated value.
 
 **Legacy maps.** `createMemoryDataCacheHandler`'s module-level manifest and
 `MemoryCacheHandler.revalidatedTags` keep at most 10,000 tags. Past that the least recently
-updated half is dropped and a floor moves up to the latest time among the dropped records;
-entries created before the floor are misses. That trades a burst of misses for a hard bound and
-never serves an invalidated entry. The data handler drops records whose `expired` is still in the
-future last, so the floor does not move into the future unless nothing else is left.
+updated half is dropped. `MemoryCacheHandler` keeps one floor, the latest dropped revalidation
+time (always in the past); entries last modified before it miss.
+
+The data handler keeps three floors, because a record's `expired` can lie in the future (a
+`revalidateTag(tag, "max")` sets it a year ahead). One floor collapsing `stale` and `expired`
+would move into the future and make every entry, new ones included, miss until then. So: the
+latest dropped `stale` (older entries are served stale, `revalidate: -1`); the latest dropped
+`expired` that had already passed (older entries miss); and the latest dropped `expired` still
+ahead, which misses older entries only once it has passed, as a kept record would. New entries are
+never affected by a pending floor. `getExpiration` reports, for a tag it has no record of, the
+latest dropped `expired` that has passed (0 if none): a lower bound, so a soft or implicit tag
+checked outside this handler still sees a dropped revalidation, never a future time.
+
+Approximation: pending expiries collapse to their maximum, so an earlier dropped one takes effect
+only when the latest passes. Until then the entries it covers are still served stale (their
+`stale` time is in the stale floor) unless they were created between its `stale` and `expired`
+times. Records whose `expired` has already passed are dropped first to keep this rare. This is
+the deprecated stack; an exact list of pending deadlines would itself be unbounded.
 
 **`cacheMaxMemorySize`.** It sizes the memory LRU of Next's `FileSystemCache` (unused when
 `cacheHandler` is set) and Next's built-in `"use cache"` handler (replaced by `cacheHandlers`; in

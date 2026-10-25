@@ -153,16 +153,48 @@ const globalTagsManifest = new Map<string, TagManifestEntry>();
 
 /**
  * Most tag records {@link globalTagsManifest} holds. Past it the least recently updated half is
- * dropped, records already in effect first, and {@link manifestFloor} moves up to the latest time
- * among them.
+ * dropped, records already in effect first, and their times move up {@link droppedFloors}.
  */
 export const MAX_TAG_MANIFEST_RECORDS = 10_000;
 
 /**
- * Entries created before this (Next clock, ms) may carry a tag whose record was dropped, so they
- * are treated as expired.
+ * What dropped tag records may still say about an entry, by its creation time (Next clock, ms).
+ * Each floor is the latest such time among the dropped records, so an entry is never treated as
+ * fresher than its tags made it:
+ * - `stale`: entries created before it are served stale (`revalidate: -1`).
+ * - `expired`: `expired` times already passed when dropped; entries created before it miss.
+ * - `pendingExpired`: `expired` times still ahead when dropped (a `revalidateTag(tag, "max")`
+ *   sets one a year ahead). Like a kept record, it misses entries created before it only once it
+ *   has passed, so it never makes new entries miss.
  */
-let manifestFloor = 0;
+const droppedFloors = { stale: 0, expired: 0, pendingExpired: 0 };
+
+/**
+ * Fold a dropped record into {@link droppedFloors}.
+ */
+function dropRecord(record: TagManifestEntry, now: number): void {
+  droppedFloors.stale = Math.max(droppedFloors.stale, record.stale ?? 0);
+  const expired = record.expired ?? 0;
+  if (expired <= now) droppedFloors.expired = Math.max(droppedFloors.expired, expired);
+  else droppedFloors.pendingExpired = Math.max(droppedFloors.pendingExpired, expired);
+}
+
+/**
+ * The latest `expired` time among dropped records that has passed by `now`, or 0: a lower bound
+ * for the record of a tag this handler no longer knows.
+ */
+function droppedExpiredBy(now: number): number {
+  const pending = droppedFloors.pendingExpired;
+  return Math.max(droppedFloors.expired, pending <= now ? pending : 0);
+}
+
+/**
+ * Whether dropped records make an entry created at `timestamp` expired, stale or neither.
+ */
+function droppedState(timestamp: Timestamp, now: number): "expired" | "stale" | "fresh" {
+  if (timestamp < droppedExpiredBy(now)) return "expired";
+  return timestamp < droppedFloors.stale ? "stale" : "fresh";
+}
 
 /**
  * Set `tag`'s record, as the most recently updated, and keep the manifest within
@@ -174,13 +206,13 @@ function recordTag(tag: string, record: TagManifestEntry): void {
   if (globalTagsManifest.size <= MAX_TAG_MANIFEST_RECORDS) return;
   let excess = globalTagsManifest.size - MAX_TAG_MANIFEST_RECORDS / 2;
   const now = nextClockMs();
-  // A record with a future `expired` would push the floor into the future and miss new entries
-  // until then, so those go only if the others are not enough.
+  // A dropped future `expired` is folded into the latest pending one, which can only delay an
+  // earlier one, so those go only if the others are not enough.
   for (const inEffectOnly of [true, false]) {
     for (const [oldTag, old] of globalTagsManifest) {
       if (excess === 0) return;
       if (inEffectOnly && (old.expired ?? 0) > now) continue;
-      manifestFloor = Math.max(manifestFloor, old.stale ?? 0, old.expired ?? 0);
+      dropRecord(old, now);
       globalTagsManifest.delete(oldTag);
       excess -= 1;
     }
@@ -188,20 +220,25 @@ function recordTag(tag: string, record: TagManifestEntry): void {
 }
 
 /**
- * Number of tag records held, and the floor. Test-only.
+ * Number of tag records held, and the floors. Test-only.
  * @internal
  */
-export function tagManifestStatsForTests(): { records: number; floor: number } {
-  return { records: globalTagsManifest.size, floor: manifestFloor };
+export function tagManifestStatsForTests(): {
+  records: number;
+  floors: { stale: number; expired: number; pendingExpired: number };
+} {
+  return { records: globalTagsManifest.size, floors: { ...droppedFloors } };
 }
 
 /**
- * Forget every tag record and the floor. Test-only.
+ * Forget every tag record and the floors. Test-only.
  * @internal
  */
 export function clearTagManifestForTests(): void {
   globalTagsManifest.clear();
-  manifestFloor = 0;
+  droppedFloors.stale = 0;
+  droppedFloors.expired = 0;
+  droppedFloors.pendingExpired = 0;
 }
 
 /**
@@ -343,10 +380,12 @@ export function createMemoryDataCacheHandler(
 
       let revalidate = entry.revalidate;
 
-      if (entry.timestamp < manifestFloor) {
-        debug?.("get", cacheKey, "older than a dropped tag record");
+      const dropped = droppedState(entry.timestamp, now);
+      if (dropped === "expired") {
+        debug?.("get", cacheKey, "expired by a dropped tag record");
         return undefined;
       }
+      if (dropped === "stale") revalidate = -1;
 
       if (areTagsExpired(entry.tags, entry.timestamp, debug)) {
         debug?.("get", cacheKey, "had expired tag");
@@ -423,9 +462,11 @@ export function createMemoryDataCacheHandler(
     },
 
     async getExpiration(tags) {
+      // A tag with no record may have had one dropped: at least the dropped records' bound.
+      const unknown = droppedExpiredBy(nextClockMs());
       const expirations = tags.map((tag) => {
         const entry = globalTagsManifest.get(tag);
-        if (!entry) return 0;
+        if (!entry) return unknown;
         // Return the most recent timestamp (either expired or stale)
         return entry.expired || 0;
       });
