@@ -15,17 +15,22 @@ const redis = vi.hoisted(() => ({
 }));
 
 // ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
-vi.mock("./node-require.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./node-require.js")>()),
-  requireModule: (moduleName: string) => {
-    if (moduleName !== "ioredis") throw new Error(`Unexpected require for module: ${moduleName}`);
-    return function Redis() {
-      return redis.build?.();
-    };
-  },
-}));
+// The AWS packages (for IAM) load for real.
+vi.mock("./node-require.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./node-require.js")>();
+  return {
+    ...original,
+    requireModule: (moduleName: string) => {
+      if (moduleName !== "ioredis") return original.requireModule(moduleName);
+      return function Redis() {
+        return redis.build?.();
+      };
+    },
+  };
+});
 
 import { resetCacheState } from "../testing/env.js";
+import { DEFAULT_INITIAL_CONNECT_WAIT_MS } from "./connection.js";
 import { flushCache } from "./flush.js";
 import { getCacheRuntime } from "./runtime.js";
 
@@ -111,5 +116,82 @@ describe("flushCache: the Redis client it uses", () => {
       /could not record the flush/,
     );
     expect(redis.created[0].quit).toHaveBeenCalledTimes(1);
+  });
+
+  describe("with IAM, whose first connect waits for credentials and a signed token", () => {
+    /** A client created `lazyConnect`, as with IAM: it connects when `connect` is called. */
+    const lazyClient = () => {
+      const client = Object.assign(new FakeRedis(redis.items), {
+        options: {} as Record<string, unknown>,
+        connect: async () => client.comeUp(),
+      });
+      client.status = "wait";
+      vi.spyOn(client, "quit");
+      redis.created.push(client);
+      return client;
+    };
+    const iamUrl = "rediss://flush-test:6379";
+    const iam = (credentialsAfterMs: number) => ({
+      userId: "app-user",
+      cacheName: "my-cache",
+      region: "us-east-1",
+      credentials: () =>
+        new Promise<{ accessKeyId: string; secretAccessKey: string }>((resolve) => {
+          setTimeout(
+            () => resolve({ accessKeyId: "AKID", secretAccessKey: "s" }),
+            credentialsAfterMs,
+          );
+        }),
+    });
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      redis.build = lazyClient;
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    test("a flush on its own connection waits past the request wait for a slow token", async () => {
+      redis.items.set("app:development:page:/a", { value: "x" });
+      const result = flushCache({ url: iamUrl, keyPrefix: "app:", iam: iam(3000) });
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(await result).toEqual({ deleted: 1 });
+      expect(
+        (redis.created[0] as unknown as { options: Record<string, unknown> }).options.username,
+      ).toBe("app-user");
+      expect(redis.created[0].quit).toHaveBeenCalledTimes(1);
+    });
+
+    test("it gives up after 5 s when no token comes, and quits its connection", async () => {
+      const result = flushCache({ url: iamUrl, keyPrefix: "app:", iam: iam(60_000) });
+      const settled = vi.fn();
+      result.then(settled, settled);
+
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(settled).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).rejects.toThrow(/unavailable/);
+      expect(redis.created[0].quit).toHaveBeenCalledTimes(1);
+    });
+
+    test("a request on the same IAM connection still waits only the request wait", async () => {
+      const runtime = getCacheRuntime({ url: iamUrl, keyPrefix: "app:", iam: iam(3000) });
+      const connection = runtime.connection;
+      if (!connection) throw new Error("expected a connection");
+      const ready = vi.fn();
+      void connection.waitForInitialConnection().then(ready);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_CONNECT_WAIT_MS);
+      expect(ready).toHaveBeenCalledWith(false);
+
+      // A flush through the handlers' connection waits on until the token comes.
+      const result = flushCache({ url: iamUrl, keyPrefix: "app:", iam: iam(3000) });
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(await result).toEqual({ deleted: 0 });
+      expect(redis.created).toHaveLength(1);
+    });
   });
 });

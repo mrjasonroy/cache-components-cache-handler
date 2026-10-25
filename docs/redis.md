@@ -98,7 +98,9 @@ token generated once and passed as a password stops working on the first reconne
 minutes, and the app then serves from memory. Instead, the package:
 
 - connects only once the first token is ready (until then, and if it takes longer than 500 ms, the
-  handlers serve from memory, as during an outage);
+  handlers serve from memory, as during an outage). `flushCache`, which needs Redis rather than
+  memory, waits up to 5 s for that first connection, so a one-off script on a cold pod (credentials
+  from web identity or instance metadata) does not give up before the token is signed;
 - makes a new token every 10 minutes, for every reconnect to use, and sends `AUTH` with it on the
   live connection, which keeps ElastiCache's 12-hour limit moving;
 - makes a new token before a reconnect if the last one is more than 10 minutes old (a process
@@ -155,6 +157,13 @@ match the cache (the token is signed for them).
 
 For cluster-mode-enabled ElastiCache, build a `Cluster` yourself and keep it authenticated with
 `attachElastiCacheIamAuth` (see [Your own client](#your-own-client)).
+
+ElastiCache Serverless works with the environment's plain connection (no `Cluster` needed). It is
+sharded behind its endpoint, so a command over keys in different slots is refused with
+`CROSSSLOT`. The handlers send single-key commands only; `flushCache` falls back to one `UNLINK`
+per key, pipelined, when its batched `UNLINK` is refused; and the background tag pruning (a
+two-key script) is skipped with a warning, so tag records are bounded by field TTLs where the
+server has them and otherwise grow until a flush, as on a Cluster.
 
 ## Your own client
 

@@ -104,6 +104,38 @@ describe("flushCache", () => {
     expect(await fake.hmget("app:tags", "products")).toEqual(["1,1"]);
   });
 
+  test("one endpoint sharded behind a proxy (ElastiCache Serverless): CROSSSLOT, then one key per UNLINK", async () => {
+    const fake = new FakeRedis();
+    await seed(fake);
+    const unlink = fake.unlink.bind(fake);
+    const unlinks: number[] = [];
+    Object.assign(fake, {
+      // Like the serverless proxy: keys of different slots in one command are refused.
+      unlink: async (...keys: string[]) => {
+        unlinks.push(keys.length);
+        if (keys.length > 1)
+          throw new Error("CROSSSLOT Keys in request don't hash to the same slot");
+        return unlink(...keys);
+      },
+      pipeline: () => {
+        const ops: Promise<[Error | null, number]>[] = [];
+        const pipeline = {
+          unlink: (key: string) => {
+            ops.push(fake.unlink(key).then((count) => [null, count]));
+            return pipeline;
+          },
+          exec: () => Promise.all(ops),
+        };
+        return pipeline;
+      },
+    });
+
+    const result = await flushCache({ client: asClient(fake), keyPrefix: "app:", buildId: "b1" });
+    expect(result).toEqual({ deleted: 2 });
+    expect(entryKeys(fake)).toEqual(["app:b2:page:/a", "other:b1:page:/a"]);
+    expect(unlinks).toEqual([2, 1, 1]);
+  });
+
   test("scope build defaults to the deployment ID when one is set; buildId still wins", async () => {
     vi.stubEnv("NEXT_DEPLOYMENT_ID", "b2");
     try {

@@ -138,6 +138,41 @@ describe("createRedisConnection", () => {
     expect(result).toBe(false);
   });
 
+  test("waitForOperationConnection is the request wait unless a longer one is given", async () => {
+    vi.useFakeTimers();
+    const plain = createRedisConnection(asRedis(new FakeClient()));
+    expect(plain.waitForOperationConnection()).toBe(plain.waitForInitialConnection());
+
+    const client = new FakeClient();
+    const connection = createRedisConnection(asRedis(client), { operationConnectWaitMs: 5000 });
+    const request = vi.fn();
+    const operation = vi.fn();
+    void connection.waitForInitialConnection().then(request);
+    void connection.waitForOperationConnection().then(operation);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(request).toHaveBeenCalledWith(false);
+    expect(operation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2500);
+    client.becomeReady();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(operation).toHaveBeenCalledWith(true);
+  });
+
+  test("waitForOperationConnection gives up after operationConnectWaitMs from opening", async () => {
+    vi.useFakeTimers();
+    const connection = createRedisConnection(asRedis(new FakeClient()), {
+      operationConnectWaitMs: 5000,
+    });
+    const operation = vi.fn();
+    await vi.advanceTimersByTimeAsync(4000);
+    void connection.waitForOperationConnection().then(operation);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(operation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(operation).toHaveBeenCalledWith(false);
+  });
+
   test("onReady fires on every ready and can be removed", () => {
     const client = new FakeClient();
     const connection = createRedisConnection(asRedis(client));

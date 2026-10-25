@@ -52,7 +52,13 @@ vi.mock("./node-require.js", async (importOriginal) => {
 
 import type { Redis } from "ioredis";
 import { resetCacheState } from "../testing/env.js";
-import { closeAllRedisConnections, findRedisConnection, getRedisConnection } from "./connection.js";
+import {
+  DEFAULT_IAM_OPERATION_CONNECT_WAIT_MS,
+  DEFAULT_INITIAL_CONNECT_WAIT_MS,
+  closeAllRedisConnections,
+  findRedisConnection,
+  getRedisConnection,
+} from "./connection.js";
 import { DEFAULT_IAM_REFRESH_INTERVAL_MS, type ResolvedIamOptions } from "./elasticache-iam.js";
 import { getCacheRuntime } from "./runtime.js";
 
@@ -96,6 +102,42 @@ describe("a connection the package opens with IAM", () => {
     expect(String(client.connects[0]?.password)).toMatch(
       /^my-cache\/\?Action=connect&User=app-user&X-Amz-Algorithm=AWS4-HMAC-SHA256&/,
     );
+  });
+
+  test("a slow token: requests wait 500 ms as without IAM, a one-off operation up to 5 s", async () => {
+    vi.useFakeTimers();
+    const credentials = vi.fn(
+      () =>
+        new Promise<{ accessKeyId: string; secretAccessKey: string }>((resolve) => {
+          setTimeout(() => resolve({ accessKeyId: "AKID", secretAccessKey: "s" }), 3000);
+        }),
+    );
+    const { iam } = iamOptions(credentials);
+    const connection = getRedisConnection({ host: "cache.aws", tls: true, iam });
+    const request = vi.fn();
+    const operation = vi.fn();
+    void connection.waitForInitialConnection().then(request);
+    void connection.waitForOperationConnection().then(operation);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_INITIAL_CONNECT_WAIT_MS);
+    expect(request).toHaveBeenCalledWith(false);
+    expect(operation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(operation).toHaveBeenCalledWith(true);
+    expect(connection.isReady()).toBe(true);
+  });
+
+  test("a one-off operation gives up after DEFAULT_IAM_OPERATION_CONNECT_WAIT_MS", async () => {
+    vi.useFakeTimers();
+    const { iam } = iamOptions(vi.fn(() => new Promise<never>(() => {})));
+    const connection = getRedisConnection({ host: "cache.aws", tls: true, iam });
+    const operation = vi.fn();
+    void connection.waitForOperationConnection().then(operation);
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_IAM_OPERATION_CONNECT_WAIT_MS - 1);
+    expect(operation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(operation).toHaveBeenCalledWith(false);
   });
 
   test("close stops the refresh timer", async () => {

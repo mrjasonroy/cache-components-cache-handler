@@ -65,9 +65,31 @@ and `X-Amz-Security-Token` values from any text.
 (DEC-6). `attachElastiCacheIamAuth(client, options)` is the explicit opt-in for one, and the only
 way to IAM-authenticate a `Cluster` (cluster-mode-enabled ElastiCache).
 
+**Startup wait.** The first connection waits for credentials (web identity, IMDS) and a signed
+token before it even dials, which can take seconds on a cold pod, and the 500 ms
+`initialConnectWaitMs` runs from when the connection opens. Requests keep 500 ms: every request path
+(`isRedisReady`, the `"use cache"` fallback, the tag sync and send) awaits that one promise, then
+serves from memory or misses, so raising it would make the first requests on a cold pod wait for
+the token. A one-off operation that needs Redis rather than memory (`flushCache`, which otherwise
+threw "Redis is unavailable" from a script on a cold pod) awaits a second promise,
+`waitForOperationConnection`, on the same connection: 5 s with IAM (as the `ELASTICACHE_*` host
+form already raises `connectTimeout` to 10 s), the request wait without. Both are timed from when
+the connection opens, so a flush in a process that has been up a while does not wait again, and
+both end at once on a connection error. It is not part of the connection's identity: a flush and
+the handlers still share one connection.
+
+**Serverless.** ElastiCache Serverless is reached with the environment's plain `Redis` client; it is
+sharded behind its proxy, so keys of different slots in one command are refused with `CROSSSLOT`.
+The handlers' commands are single-key; the tag pruning script (two keys) already stopped on
+`CROSSSLOT` with a warning. `flushCache`'s batched `UNLINK` did not: it now falls back to one
+`UNLINK` per key, pipelined, for the rest of the flush. No hash tags: they would change the key
+layout for every user to suit one deployment type.
+
 **Not covered.** The ioredis Cluster pub/sub subscriber connection is not re-`AUTH`ed (the package
-does not use pub/sub); it picks up a fresh token when ioredis recreates it. A real-cluster e2e
-(`src/integration/elasticache-iam.e2e.test.ts`, `ELASTICACHE_IAM_E2E=1`) has not run in CI yet.
+does not use pub/sub); it picks up a fresh token when ioredis recreates it. A real-cache e2e
+(`src/integration/elasticache-iam.e2e.test.ts`, `ELASTICACHE_IAM_E2E=1`: connect, re-`AUTH`,
+reconnect, a tag revalidation across two connections, `flushCache({ scope: "build" })`) runs by
+hand against a serverless Valkey cache; it is not in CI.
 
 ## DEC-11: The memory budget is a share of the heap (16.4.3)
 
