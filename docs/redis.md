@@ -133,9 +133,11 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 <prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```
 
-`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`. It
-is read from the build output that `next start` and a standalone `server.js` use, and it is
-`development` under `next dev`. Every entry key has a TTL. A remote entry is kept until its
+`<prefix>` is `CACHE_KEY_PREFIX` (`nextjs:` by default). `<buildId>` is the app's `BUILD_ID`, or
+its deployment ID when one is set, percent-encoded
+([why](./how-it-works.md#skew-protection-and-the-deployment-id)). It is read from the build
+output that `next start` and a standalone `server.js` use, and it is `development` under
+`next dev`. Every entry key has a TTL. A remote entry is kept until its
 `expire`, or for `defaultTTL` (24 hours) when `expire` is infinite, at most 365 days; page entries
 as described under [Pages and route handlers](./how-it-works.md#pages-and-route-handlers). The two
 tag keys are shared by every build and have no key TTL. Individual fields and index members follow

@@ -274,3 +274,16 @@ still bounds retention. The standalone fallback walks the index, so on older ser
 orphan field stays until a full flush or a later revalidation. Reproduce by rejecting ZADD
 after an acknowledged hash write, then terminating the writer before its next sync/reconnect.
 An extra hash scan could recover these fields, but is not part of this release's bounded prune.
+
+## ISSUE-9: With a deployment ID, every deploy shared one key namespace
+
+**Status:** ✅ Resolved (DEC-11) · **Severity:** High · **Area:** `shared/build-id.ts`
+
+Keys were scoped by `BUILD_ID`. When `deploymentId` (or `NEXT_DEPLOYMENT_ID`) is set without
+`generateBuildId`, Next 16 gives every build the constant `BUILD_ID` `build-TfctsWXpff2fKS`
+(`getBuildId`, next/dist/build/index.js), so a new deploy read page shells an earlier build had
+written, and the page linked CSS and JS chunks that 404 (reported from production, 2026-10-25).
+Reproduce: build twice with different `NEXT_DEPLOYMENT_ID`s and the same Redis; both write
+`nextjs:build-TfctsWXpff2fKS:page:*`. Fix: keys and `flushCache`'s default scope use the
+deployment ID when one is set (`getCacheScope`). Covered by `build-id.test.ts`, `redis.test.ts`
+("a deployment ID scopes keys instead of Next's constant BUILD_ID") and `flush.test.ts`.

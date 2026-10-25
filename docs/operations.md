@@ -26,7 +26,7 @@ whole database.
 | Option | Default | Meaning |
 |---|---|---|
 | `scope` | `"build"` | `"build"` deletes `<prefix><buildId>:*`. `"all"` deletes every key under the prefix. |
-| `buildId` | the app's `BUILD_ID` | The build that `scope: "build"` deletes. |
+| `buildId` | the app's deployment ID if set, else its `BUILD_ID` | The build that `scope: "build"` deletes. |
 | `url`, `client`, `keyPrefix` | the environment | Which Redis and prefix, as in [`CacheOptions`](./custom-handlers.md#cacheoptions). |
 
 The package ships no HTTP endpoint. The route is yours to write and to authenticate:

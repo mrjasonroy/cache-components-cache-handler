@@ -19,9 +19,10 @@ What you get without configuring anything:
 
 - **One Redis connection per process**, shared by every handler. It is registered on
   `globalThis`, so Next loading the handler modules more than once never opens a second one.
-- **Entries scoped by build.** Entries live under the build ID that wrote them, so a deploy never
-  serves the previous build's pages or RSC payloads. Tag records sit above the build ID, so a
-  `revalidateTag` during a rolling deploy reaches the old build and the new one.
+- **Entries scoped by build.** Entries live under the build ID that wrote them, or the deployment
+  ID when one is set ([skew protection](#skew-protection-and-the-deployment-id)), so a deploy
+  never serves the previous build's pages or RSC payloads. Tag records sit above the build ID, so
+  a `revalidateTag` during a rolling deploy reaches the old build and the new one.
 - **No Redis during `next build`.** The build uses memory and never connects to or waits on Redis.
 - **Outages absorbed.** The app keeps serving from per-instance memory, each entry kept there for
   at most 60 s. Errors are logged at most once a minute, not once per request. When Redis comes
@@ -35,6 +36,22 @@ What you get without configuring anything:
 - **Prerendered pages survive a restart.** On a miss, prerendered pages and route handlers are
   served from the build output in `.next` until their revalidate window runs out
   ([details](#pages-and-route-handlers)).
+
+### Skew protection and the deployment ID
+
+When an app sets a deployment ID for skew protection (`deploymentId` in `next.config`, or the
+`NEXT_DEPLOYMENT_ID` environment variable) and no `generateBuildId`, Next 16 gives every build the
+same constant `BUILD_ID`. Scoping by `BUILD_ID` would then put every deploy in one namespace, and
+a new deploy could serve a page shell from an earlier build that links CSS and JS the new build no
+longer has.
+
+So when a deployment ID is set, entries are scoped by it instead. It is read from the same build
+output as the `BUILD_ID`: `deploymentId` in a standalone server's config or in
+`.next/required-server-files.json`, then `NEXT_DEPLOYMENT_ID` (which is where Next keeps it with
+`experimental.runtimeServerDeploymentId`). An empty value counts as unset. The ID is
+percent-encoded in keys, so `dpl_abc` stays `dpl_abc` and a `:` becomes `%3A`. Nothing needs
+configuring; give each deploy its own deployment ID, as skew protection already requires. An
+explicit `buildId` option on a handler or `flushCache` still replaces it.
 
 ## Distributed tag coordination for `"use cache"`
 

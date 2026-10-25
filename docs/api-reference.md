@@ -134,7 +134,7 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 
 | Option | Default | Meaning |
 |---|---|---|
-| `buildId` | the app's `BUILD_ID` | The build that scopes entry keys. |
+| `buildId` | the app's deployment ID if set, else its `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
 | `redis` | — | The 16.4.2 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
@@ -177,7 +177,7 @@ function flushCache(options?: FlushCacheOptions): Promise<FlushCacheResult>;
 interface FlushCacheOptions extends CacheOptions {
   /** "build": <prefix><buildId>:*. "all": every key under the prefix. @default "build" */
   scope?: "build" | "all";
-  /** @default the app's BUILD_ID */
+  /** @default the app's deployment ID if set, else its BUILD_ID */
   buildId?: string;
 }
 

@@ -7,6 +7,43 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-10: Scope keys by the deployment ID when one is set (16.4.3)
+
+**Problem.** Page and data keys were `<prefix><BUILD_ID>:page|data:`. Next 16 makes `BUILD_ID` a
+constant whenever a deployment ID is set: `getBuildId` in next/dist/build/index.js (next@16.4.2
+and 16.4.3) returns `'build-TfctsWXpff2fKS'` when `config.deploymentId && !config.generateBuildId`,
+and `generateBuildId` has no default. Every deploy of an app using skew protection therefore
+shared one key namespace, and a new deploy served page shells an old build had written, linking
+CSS and JS chunks that no longer exist (reported from production, 2026-10-25).
+
+**Decision.** The key scope is the deployment ID when one is set, else `BUILD_ID`
+(`getCacheScope` in `src/shared/build-id.ts`). The deployment ID is read, `''` counting as unset,
+from `deploymentId` in `__NEXT_PRIVATE_STANDALONE_CONFIG` (standalone), otherwise from `config` in
+the first readable `<distDir>/required-server-files.json` (same `distDir` candidates as
+`BUILD_ID`), then `NEXT_DEPLOYMENT_ID`. Next writes `deploymentId: ''` into both configs when
+`experimental.runtimeServerDeploymentId` is on (`getNextConfigRuntime`, server/config-shared.js)
+and the server then takes the ID from `NEXT_DEPLOYMENT_ID` (server/base-server.js), so the
+variable is the last source. `required-server-files.json` is written before Next collects page
+data, so builds see the current ID too, and the build process sets `NEXT_DEPLOYMENT_ID` from the
+config before its workers start. The ID is percent-encoded (`encodeURIComponent`) for the key: a
+`:` would otherwise let one scope's keys match another's flush glob, and the encoding is
+injective, so distinct IDs stay distinct.
+
+`getBuildId` still returns the real `BUILD_ID`, because the build stamp (DEC-3's
+`cache-handler-build.json`) compares against what Next wrote to `<distDir>/BUILD_ID`. Keys,
+`flushCache`'s default `scope: "build"` and the per-build flush barrier tag all use the scope, so
+a flush still matches what the handlers wrote. An explicit `buildId` option still replaces it.
+
+**Alternatives.** Injecting `generateBuildId` in `withCache` would also work, but it changes
+Next's own build ID (and asset URLs that embed it) for every app, does nothing for apps that use
+the handlers without `withCache`, and makes two mechanisms. Reading the ID at runtime is possible
+in every mode, so it is the only mechanism. No option or variable was added.
+
+**Consequences.** Apps with a deployment ID start cold once after upgrading. An app that sets a
+constant deployment ID together with a per-build `generateBuildId` would now share one namespace
+across builds; that configuration also defeats Next's own skew protection, so it is not
+supported.
+
 ## DEC-9: A fixed in-process memory budget (16.4.3)
 
 **Problem.** A consumer's pods (605 MB container limit) ran out of memory. The in-process stores

@@ -2,7 +2,7 @@
  * Delete this app's cache entries.
  */
 
-import { getBuildId } from "./build-id.js";
+import { getCacheScope } from "./build-id.js";
 import { FLUSH_TAG, buildFlushTag } from "./keys.js";
 import { loggerSource, writeLog } from "./logger.js";
 import { clearAllMemoryStores } from "./memory-store.js";
@@ -27,7 +27,7 @@ export interface FlushCacheOptions extends CacheOptions {
 
   /**
    * The build whose entries `scope: "build"` deletes.
-   * @default the app's BUILD_ID
+   * @default the app's deployment ID when one is set, else its BUILD_ID (the handlers' default)
    */
   buildId?: string;
 }
@@ -87,7 +87,7 @@ async function flush(
 ): Promise<FlushCacheResult> {
   const connection = runtime.connection;
   const barrier =
-    options.scope === "all" ? FLUSH_TAG : buildFlushTag(options.buildId ?? getBuildId());
+    options.scope === "all" ? FLUSH_TAG : buildFlushTag(options.buildId ?? getCacheScope());
   if (!connection) {
     const deleted = clearAllMemoryStores();
     await runtime.tags.update([barrier]);
@@ -107,7 +107,7 @@ async function flush(
   const pattern =
     options.scope === "all"
       ? `${prefix}*`
-      : `${prefix}${escapeGlob(options.buildId ?? getBuildId())}:*`;
+      : `${prefix}${escapeGlob(options.buildId ?? getCacheScope())}:*`;
   let unlinked: Awaited<ReturnType<typeof unlinkMatching>>;
   try {
     unlinked = await unlinkMatching(connection.client, pattern);
