@@ -36,7 +36,7 @@
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
-import { getBuildId, registerServerDistDir } from "../shared/build-id.js";
+import { getCacheScope, registerServerDistDir } from "../shared/build-id.js";
 import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
 import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
@@ -98,8 +98,9 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
   defaultTTL?: number;
 
   /**
-   * The build ID that scopes entry keys.
-   * @default the app's BUILD_ID, read from `serverDistDir` or the environment on first use
+   * The ID that scopes entry keys. Replaces the default when set.
+   * @default the app's deployment ID when one is set, else its BUILD_ID, read from
+   * `serverDistDir` or the environment on first use
    */
   buildId?: string;
 }
@@ -280,7 +281,7 @@ export class RedisCacheHandler {
   }
 
   private redisKey(cacheKey: string): string {
-    return pageKey(this.runtime.keyPrefix, this.options.buildId ?? getBuildId(), cacheKey);
+    return pageKey(this.runtime.keyPrefix, this.options.buildId ?? getCacheScope(), cacheKey);
   }
 
   /**
@@ -398,7 +399,7 @@ export class RedisCacheHandler {
     const tags = [
       ...getEntryTags(found.value),
       FLUSH_TAG,
-      buildFlushTag(this.options.buildId ?? getBuildId()),
+      buildFlushTag(this.options.buildId ?? getCacheScope()),
     ];
     try {
       await this.runtime.tags.fetch(tags);

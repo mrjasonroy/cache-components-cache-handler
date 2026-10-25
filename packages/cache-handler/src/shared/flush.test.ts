@@ -104,6 +104,20 @@ describe("flushCache", () => {
     expect(await fake.hmget("app:tags", "products")).toEqual(["1,1"]);
   });
 
+  test("scope build defaults to the deployment ID when one is set; buildId still wins", async () => {
+    vi.stubEnv("NEXT_DEPLOYMENT_ID", "b2");
+    try {
+      const fake = new FakeRedis();
+      await seed(fake);
+      expect((await flushCache({ client: asClient(fake), keyPrefix: "app:" })).deleted).toBe(1);
+      expect(entryKeys(fake)).toEqual(["app:b1:data:k", "app:b1:page:/a", "other:b1:page:/a"]);
+      await flushCache({ client: asClient(fake), keyPrefix: "app:", buildId: "b1" });
+      expect(entryKeys(fake)).toEqual(["other:b1:page:/a"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   test("scope all deletes everything under the prefix, tag records included", async () => {
     const fake = new FakeRedis();
     await seed(fake);

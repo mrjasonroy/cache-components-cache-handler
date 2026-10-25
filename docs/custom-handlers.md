@@ -97,7 +97,9 @@ handler file the same `url`, timeouts and `maxConsecutiveTimeouts`: different se
 second connection to the same server, and the package logs a warning when that happens.
 
 `createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
-`BUILD_ID`), the build that scopes entry keys. Both also take `defaultTTL`, in seconds:
+deployment ID when one is set, else its `BUILD_ID`; see
+[skew protection](./how-it-works.md#skew-protection-and-the-deployment-id)), the build that
+scopes entry keys. Both also take `defaultTTL`, in seconds:
 `createRedisCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
 and maximum 365 days), and `createRemoteCacheHandler` keeps an entry whose `expire` is infinite
 that long (default 24 hours, maximum 365 days; anything but a number greater than 0 throws).

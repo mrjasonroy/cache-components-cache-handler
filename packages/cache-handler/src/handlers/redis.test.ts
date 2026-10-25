@@ -14,6 +14,7 @@ vi.mock("../shared/node-require.js", async (importOriginal) => ({
   },
 }));
 
+import { resetBuildIdForTests } from "../shared/build-id.js";
 import { encodeEntry } from "../shared/codec.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
@@ -535,6 +536,57 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       });
       await handler.set("/blog", page("x"), pageCtx);
       expect(await fake.exists("nextjs:abc123:page:/blog")).toBe(1);
+    });
+
+    test("a deployment ID scopes keys instead of Next's constant BUILD_ID", async () => {
+      const fake = new FakeRedis();
+      const deploy = (deploymentId: string) => {
+        const distDir = mkdtempSync(join(tmpdir(), "gn1618-dpl-"));
+        mkdirSync(join(distDir, "server"));
+        writeFileSync(join(distDir, "BUILD_ID"), "build-TfctsWXpff2fKS\n");
+        writeFileSync(
+          join(distDir, "required-server-files.json"),
+          JSON.stringify({ version: 1, config: { deploymentId } }),
+        );
+        return new RedisCacheHandler({
+          client: asClient(fake),
+          serverDistDir: join(distDir, "server"),
+        });
+      };
+
+      await deploy("dpl_1").set("/blog", page("one"), pageCtx);
+      expect(await fake.exists("nextjs:dpl_1:page:/blog")).toBe(1);
+
+      resetBuildIdForTests();
+      const second = deploy("dpl_2");
+      expect(await second.get("/blog", { kind: "APP_PAGE" })).toBeNull();
+      await second.set("/blog", page("two"), pageCtx);
+      expect(await fake.exists("nextjs:dpl_2:page:/blog")).toBe(1);
+      expect(await fake.exists("nextjs:build-TfctsWXpff2fKS:page:/blog")).toBe(0);
+    });
+
+    test("NEXT_DEPLOYMENT_ID scopes keys; an explicit buildId still wins", async () => {
+      vi.stubEnv("NEXT_DEPLOYMENT_ID", "dpl_env");
+      try {
+        const fake = new FakeRedis();
+        await handlerFor(fake).set("/blog", page("x"), pageCtx);
+        expect(await fake.exists("nextjs:dpl_env:page:/blog")).toBe(1);
+        await handlerFor(fake, { buildId: "pinned" }).set("/blog", page("y"), pageCtx);
+        expect(await fake.exists("nextjs:pinned:page:/blog")).toBe(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+
+    test("an empty NEXT_DEPLOYMENT_ID is unset", async () => {
+      vi.stubEnv("NEXT_DEPLOYMENT_ID", "");
+      try {
+        const fake = new FakeRedis();
+        await handlerFor(fake).set("/blog", page("x"), pageCtx);
+        expect(await fake.exists(KEY)).toBe(1);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
     test("entries of another build are not read; tags cross builds", async () => {

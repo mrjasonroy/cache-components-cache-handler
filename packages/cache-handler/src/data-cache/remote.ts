@@ -17,7 +17,7 @@
  * - Errors never throw out of the handler: a cache error is a miss plus a rate-limited log line.
  */
 
-import { getBuildId } from "../shared/build-id.js";
+import { getCacheScope } from "../shared/build-id.js";
 import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored } from "../shared/codec.js";
 import { isEdgeRuntime } from "../shared/env.js";
@@ -49,8 +49,8 @@ import type { DataCacheHandler } from "./types.js";
  */
 export interface RemoteCacheHandlerOptions extends CacheOptions {
   /**
-   * The build ID that scopes entry keys.
-   * @default the app's BUILD_ID, read lazily on first use
+   * The ID that scopes entry keys. Replaces the default when set.
+   * @default the app's deployment ID when one is set, else its BUILD_ID, read lazily on first use
    */
   buildId?: string;
 
@@ -106,7 +106,7 @@ export function createRemoteCacheHandler(
   const log = createDebugLog("[RemoteCache]:", options.debug, options.logger);
   const pendingSets = createPendingSets();
   const keyOf = (cacheKey: string) =>
-    dataKey(currentRuntime().keyPrefix, options.buildId ?? getBuildId(), cacheKey);
+    dataKey(currentRuntime().keyPrefix, options.buildId ?? getCacheScope(), cacheKey);
 
   function fromMemory(runtime: CacheRuntime, cacheKey: string) {
     const found = runtime.stores.dataFallback.get(cacheKey) as InMemoryEntry | undefined;
