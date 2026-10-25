@@ -39,11 +39,28 @@ import { closeCache, getCacheRuntime } from "../shared/runtime.js";
 
 const enabled = process.env.ELASTICACHE_IAM_E2E === "1";
 
-async function until(check: () => boolean, timeoutMs = 20_000): Promise<void> {
+/** Poll `check`; on timeout the error names what was awaited, so a hang shows where it was. */
+async function until(what: string, check: () => boolean, timeoutMs = 20_000): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (!check()) {
-    if (performance.now() > deadline) throw new Error("timed out waiting");
+    if (performance.now() > deadline) throw new Error(`timed out after ${timeoutMs} ms: ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/** `promise`, or an error naming `what` after `timeoutMs`. */
+async function within<T>(what: string, promise: Promise<T>, timeoutMs = 20_000): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${timeoutMs} ms: ${what}`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -64,7 +81,9 @@ async function read(found: DataCacheEntry | undefined): Promise<string | undefin
   return found ? new Response(found.value).text() : undefined;
 }
 
-describe.skipIf(!enabled)("ElastiCache IAM against a real cache", () => {
+// A real cache over TLS, with credential resolution and token signing on first connect: well over
+// vitest's default 5 s per test. Each wait inside names itself when it times out.
+describe.skipIf(!enabled)("ElastiCache IAM against a real cache", { timeout: 60_000 }, () => {
   const errors: string[] = [];
   const logger: CacheLogger = {
     error: (message, meta) => errors.push(`${message} ${String(meta?.error)}`),
@@ -97,7 +116,7 @@ describe.skipIf(!enabled)("ElastiCache IAM against a real cache", () => {
     ownClients.push(client);
     client.on("error", () => {});
     stops.push(attachElastiCacheIamAuth(client, { logger }).stop);
-    await until(() => client.status === "ready");
+    await until("own IAM client ready", () => client.status === "ready");
     iamClients.push(client);
     return client;
   }
@@ -120,7 +139,7 @@ describe.skipIf(!enabled)("ElastiCache IAM against a real cache", () => {
     for (const stop of stops) stop();
     for (const client of ownClients) client.disconnect();
     setCacheLogger(undefined);
-  });
+  }, 60_000);
 
   test("the package's connection from the environment authenticates and serves commands", async () => {
     const options = resolveEnvConnectionOptions();
@@ -150,22 +169,28 @@ describe.skipIf(!enabled)("ElastiCache IAM against a real cache", () => {
     client.on("error", () => {});
     const auth = attachIamAuth(client, iam, { logger: () => logger, connect: true });
     try {
-      await until(() => client.status === "ready");
+      await until("first connect with a token", () => client.status === "ready");
       const first = client.options.password;
 
       // A fresh token on the live connection: the `AUTH` that extends ElastiCache's 12 hours.
       // SigV4 signs to the second, so a token minted in the same second is the same token.
       await sleep(1100);
-      expect(await auth.refresh()).toBe(true);
+      expect(await within("refresh: mint and re-AUTH", auth.refresh())).toBe(true);
       const second = client.options.password;
       expect(second).not.toBe(first);
-      expect(await client.call("ACL", "WHOAMI")).toBe(iam.userId);
+      expect(await within("ACL WHOAMI after re-AUTH", client.call("ACL", "WHOAMI"))).toBe(
+        iam.userId,
+      );
 
-      // Drop the socket: ioredis reconnects with the options' (new) token.
+      // Drop the socket: ioredis reconnects with the options' (new) token. Wait on the events, not
+      // by polling `status`: inside the VPC the reconnect can finish within one poll interval.
+      const closed = new Promise<void>((resolve) => client.once("close", () => resolve()));
+      const ready = new Promise<void>((resolve) => client.once("ready", () => resolve()));
       client.disconnect(true);
-      await until(() => client.status !== "ready", 5_000);
-      await until(() => client.status === "ready");
-      expect(await client.ping()).toBe("PONG");
+      await within("the socket to close after disconnect(true)", closed);
+      await within("the reconnect to be ready", ready);
+      expect(client.options.password).toBe(second);
+      expect(await within("PING after the reconnect", client.ping())).toBe("PONG");
       expect(errors).toEqual([]);
     } finally {
       auth.stop();
