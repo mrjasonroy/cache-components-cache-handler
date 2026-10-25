@@ -24,7 +24,10 @@ the region is `ELASTICACHE_REGION`, `AWS_REGION`, `AWS_DEFAULT_REGION` (endpoint
 abbreviation such as `use1`, not the region); serverless is `ELASTICACHE_SERVERLESS` or a
 `.serverless.` hostname, which is reliable. `CacheOptions.iam` mirrors them for custom handler
 files. `resolveIamOptions` throws at startup, naming every missing piece, when IAM is asked for and
-cannot work (no user, cache name or region; TLS off). The token replaces any password.
+cannot work (no user, cache name or region; TLS off), and when IAM is asked for (the option or
+`ELASTICACHE_IAM_USER`) on a connection given as ioredis options without a url, which it cannot
+apply to: that would otherwise connect without IAM and be refused with `NOAUTH`, with no hint. The
+token replaces any password.
 
 **Token.** As AWS's samples: SigV4-presign `GET http://{cacheName}/?Action=connect&User={userId}`
 (+ `&ResourceType=ServerlessCache`), service `elasticache`, 900 s, and drop `http://`. The signing
@@ -53,7 +56,11 @@ package never needs them.
   `MULTI` in one synchronous write, so the `AUTH` never lands inside a `MULTI`/`EXEC`; it is never
   sent inside a script. A refused `AUTH` keeps the connection authenticated as before (Redis 7).
 - `connection.close()` stops the timer before `quit`; the `connect` wrapper does not reopen a
-  client whose status changed (closed) while it waited for a token.
+  client whose status changed while it waited for a token, nor one marked `manuallyClosing`: a
+  `quit` while the client was `reconnecting` (no socket, no timer) ends in `disconnect()`, which
+  leaves the status as it was, and connecting then would open a socket nothing closes.
+- Making a token is bounded by 10 s. A credentials provider that never answers would otherwise
+  hold the shared in-flight refresh forever, and with it every later refresh and reconnect.
 
 **Errors.** Token failures and refused `AUTH`s are logged through the rate-limited error reporter,
 with a message naming IAM and what to check; an `error` event matching `WRONGPASS`/`NOAUTH`/

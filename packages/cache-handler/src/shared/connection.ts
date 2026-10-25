@@ -175,8 +175,10 @@ export interface RedisConnection {
 
   /**
    * For a one-off operation outside the request path (`flushCache`) that needs Redis rather than
-   * memory: resolves `true` once the client is ready, or `false` when the connection fails or
-   * `operationConnectWaitMs` has passed since it was opened. Settled once per connection. Never
+   * memory: resolves `true` once the client is ready, or `false` once `operationConnectWaitMs`
+   * has passed since it was opened or the client has ended. A longer wait than the request wait
+   * (IAM) keeps waiting through connection errors, since the client retries within it; otherwise
+   * it is the request wait, which ends on the first error. Settled once per connection. Never
    * awaited by the handlers, so a request never waits longer than `initialConnectWaitMs`.
    */
   waitForOperationConnection(): Promise<boolean>;
@@ -611,7 +613,7 @@ export function createRedisConnection(
   // while does not wait again.
   const operationConnection =
     operationConnectWaitMs > initialConnectWaitMs
-      ? waitForReady(client, operationConnectWaitMs)
+      ? waitForReady(client, operationConnectWaitMs, { throughErrors: true })
       : initialConnection;
 
   return {
@@ -635,26 +637,32 @@ export function createRedisConnection(
 }
 
 /**
- * Resolves `true` when `client` is ready, `false` on its first error or after `timeoutMs`.
+ * Resolves `true` when `client` is ready, `false` after `timeoutMs`, when the client ends, or (unless
+ * `throughErrors`) on its first error.
  */
-function waitForReady(client: RedisClientLike, timeoutMs: number): Promise<boolean> {
+function waitForReady(
+  client: RedisClientLike,
+  timeoutMs: number,
+  { throughErrors = false }: { throughErrors?: boolean } = {},
+): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     if (client.status === "ready") {
       resolve(true);
       return;
     }
+    const failOn = throughErrors ? "end" : "error";
     const settle = (ready: boolean) => {
       clearTimeout(timer);
       client.off("ready", onReady);
-      client.off("error", onError);
+      client.off(failOn, onFail);
       resolve(ready);
     };
     const onReady = () => settle(true);
-    const onError = () => settle(false);
+    const onFail = () => settle(false);
     const timer = setTimeout(() => settle(false), timeoutMs);
     timer.unref?.();
     client.once("ready", onReady);
-    client.once("error", onError);
+    client.once(failOn, onFail);
   });
 }
 

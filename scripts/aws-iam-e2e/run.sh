@@ -24,6 +24,15 @@ IAM_USER="${CCH_IAM_USER:-cch-iam-e2e-user}"
 REPO_URL="${CCH_REPO_URL:-https://github.com/mrjasonroy/cache-components-cache-handler}"
 TIMEOUT="${CCH_TIMEOUT_SECONDS:-1800}"
 
+# Everything below is pasted into a script that runs as root on the runner: allow only characters
+# that cannot break out of its quoting.
+[[ "$REF" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "invalid ref: $REF" >&2; exit 2; }
+[[ "$REPO_URL" =~ ^https://[A-Za-z0-9._/-]+$ ]] || { echo "invalid repo url: $REPO_URL" >&2; exit 2; }
+[[ "$CACHE_NAME" =~ ^[A-Za-z0-9-]+$ && "$IAM_USER" =~ ^[A-Za-z0-9-]+$ ]] ||
+  { echo "invalid cache name or IAM user" >&2; exit 2; }
+[[ "$AWS_REGION" =~ ^[a-z0-9-]+$ && "$TIMEOUT" =~ ^[0-9]+$ ]] ||
+  { echo "invalid region or timeout" >&2; exit 2; }
+
 log() { printf '[run.sh] %s\n' "$*" >&2; }
 
 INSTANCE_ID=$(aws ec2 describe-instances \
@@ -34,7 +43,7 @@ INSTANCE_ID=$(aws ec2 describe-instances \
 
 ENDPOINT=$(aws elasticache describe-serverless-caches --serverless-cache-name "$CACHE_NAME" \
   --query 'ServerlessCaches[0].Endpoint.Address' --output text)
-[[ "$ENDPOINT" == *amazonaws.com ]] || { log "no endpoint for $CACHE_NAME"; exit 2; }
+[[ "$ENDPOINT" =~ ^[A-Za-z0-9.-]+\.amazonaws\.com$ ]] || { log "no endpoint for $CACHE_NAME"; exit 2; }
 
 stop_instance() {
   log "stopping $INSTANCE_ID"
@@ -96,10 +105,22 @@ CMD_ID=$(aws ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-
   --comment "cch-iam-e2e $REF" --parameters "$PARAMS" --query Command.CommandId --output text)
 
 status=Pending
+failures=0
 while [[ "$status" == Pending || "$status" == InProgress || "$status" == Delayed ]]; do
   sleep 15
-  status=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
-    --query Status --output text 2>/dev/null || echo Pending)
+  # A failed describe (the invocation not registered yet, a throttle) is retried; several in a row
+  # (expired credentials) end the run rather than polling forever.
+  if next=$(aws ssm get-command-invocation --command-id "$CMD_ID" --instance-id "$INSTANCE_ID" \
+    --query Status --output text 2>/dev/null); then
+    status=$next
+    failures=0
+  else
+    failures=$((failures + 1))
+    if ((failures >= 8)); then
+      log "could not read the command's status $failures times in a row (expired credentials?)"
+      exit 4
+    fi
+  fi
   log "status: $status"
 done
 

@@ -76,10 +76,15 @@ fi
 
 # 5. Security groups (cache SG references the runner SG, so it goes first). The cache's ENIs can
 # linger for a few minutes after it is deleted.
+# Only within the runner's VPC: a group of the same name elsewhere is not ours to delete.
+if [[ "$VPC_ID" != vpc-* ]]; then
+  log "runner security group not found, so its VPC is unknown: skipping the security groups"
+  log "done"
+  exit 0
+fi
 for sg_name in "$NAME-cache" "$NAME-runner"; do
-  filters=("Name=group-name,Values=$sg_name")
-  [[ "$VPC_ID" == vpc-* ]] && filters+=("Name=vpc-id,Values=$VPC_ID")
-  sg=$(aws ec2 describe-security-groups --filters "${filters[@]}" \
+  sg=$(aws ec2 describe-security-groups \
+    --filters "Name=vpc-id,Values=$VPC_ID" "Name=group-name,Values=$sg_name" \
     --query 'SecurityGroups[0].GroupId' --output text)
   [[ "$sg" == sg-* ]] || continue
   log "deleting security group $sg_name ($sg)"

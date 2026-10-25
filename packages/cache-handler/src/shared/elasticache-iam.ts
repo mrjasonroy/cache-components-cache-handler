@@ -44,6 +44,12 @@ export const IAM_TOKEN_EXPIRES_IN_SECONDS = 900;
 export const DEFAULT_IAM_REFRESH_INTERVAL_MS = 10 * 60_000;
 
 /**
+ * Longest a token may take to make (credentials plus signing), in ms. A credentials provider
+ * that never answers would otherwise hold every later refresh and reconnect behind it.
+ */
+export const DEFAULT_IAM_TOKEN_TIMEOUT_MS = 10_000;
+
+/**
  * AWS credentials, as the AWS SDK's credential providers return them.
  */
 export interface AwsCredentials {
@@ -294,6 +300,8 @@ export interface AttachIamAuthOptions {
   refreshIntervalMs?: number;
   /** Makes the tokens; {@link createIamTokenSigner} by default. */
   signer?: IamTokenSigner;
+  /** Longest a token may take to make, in ms. */
+  tokenTimeoutMs?: number;
   /** Connect a client still waiting to (`lazyConnect`) once its first token is in place. */
   connect?: boolean;
 }
@@ -311,6 +319,7 @@ export function attachIamAuth(
 ): IamAuth {
   const signer = options.signer ?? createIamTokenSigner(iam);
   const intervalMs = options.refreshIntervalMs ?? DEFAULT_IAM_REFRESH_INTERVAL_MS;
+  const tokenTimeoutMs = options.tokenTimeoutMs ?? DEFAULT_IAM_TOKEN_TIMEOUT_MS;
   const report = createErrorReporter(
     "[RedisCache]:",
     options.errorLogIntervalMs ?? DEFAULT_ERROR_LOG_INTERVAL_MS,
@@ -340,8 +349,18 @@ export function attachIamAuth(
 
   const mint = async (): Promise<boolean> => {
     let token: string;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      token = await signer();
+      token = await Promise.race([
+        signer(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`timed out after ${tokenTimeoutMs} ms`)),
+            tokenTimeoutMs,
+          );
+          timer.unref?.();
+        }),
+      ]);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       report(
@@ -351,6 +370,8 @@ export function attachIamAuth(
         ),
       );
       return false;
+    } finally {
+      clearTimeout(timer);
     }
     if (stopped) return false;
     mintedAt = nowMs();
@@ -378,8 +399,13 @@ export function attachIamAuth(
   const freshConnect = (async (...args: unknown[]) => {
     const status = client.status;
     if (!stopped && !fresh()) await refresh();
-    // Closed, or connected by another call, while the token was being made.
-    if (client.status !== status) {
+    // Closed, or connected by another call, while the token was being made. A `quit` or
+    // `disconnect` while the client was `reconnecting` (no socket, no timer) leaves the status as
+    // it was but sets `manuallyClosing`: connecting then would open a socket nobody closes.
+    if (
+      client.status !== status ||
+      (client as unknown as { manuallyClosing?: boolean }).manuallyClosing === true
+    ) {
       throw new Error("Connection closed or connecting while the IAM token was made");
     }
     return connect(...args);

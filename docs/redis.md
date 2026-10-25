@@ -108,7 +108,11 @@ minutes, and the app then serves from memory. Instead, the package:
 - logs a refused `AUTH` (`WRONGPASS`, `NOAUTH`) as an error that names IAM as the likely cause,
   and a token it could not make (no credentials, a wrong region) as an error too, both at most once
   a minute, and tries again on the next reconnect or refresh. A cache call never fails because of
-  it. The token itself is never logged.
+  it. The token itself is never logged, and a token that takes over 10 s to make (a credentials
+  provider that does not answer) counts as one it could not make.
+
+ioredis's own debug output (`DEBUG=ioredis:*`) logs each command's arguments, `AUTH` included,
+truncated, so it can print part of a token. Don't turn it on in production with IAM.
 
 **On the AWS side** (see [Authenticating with IAM](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/auth-iam.html)):
 

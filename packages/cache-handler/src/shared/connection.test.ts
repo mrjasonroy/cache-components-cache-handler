@@ -159,6 +159,32 @@ describe("createRedisConnection", () => {
     expect(operation).toHaveBeenCalledWith(true);
   });
 
+  test("a longer waitForOperationConnection waits through connection errors until ready", async () => {
+    vi.useFakeTimers();
+    const client = new FakeClient();
+    const connection = createRedisConnection(asRedis(client), { operationConnectWaitMs: 5000 });
+    const request = vi.fn();
+    const operation = vi.fn();
+    void connection.waitForInitialConnection().then(request);
+    void connection.waitForOperationConnection().then(operation);
+
+    client.emit("error", new Error("WRONGPASS"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(request).toHaveBeenCalledWith(false);
+    expect(operation).not.toHaveBeenCalled();
+    client.becomeReady();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(operation).toHaveBeenCalledWith(true);
+  });
+
+  test("a longer waitForOperationConnection ends when the client ends", async () => {
+    const client = new FakeClient();
+    const connection = createRedisConnection(asRedis(client), { operationConnectWaitMs: 60_000 });
+    const waited = connection.waitForOperationConnection();
+    client.emit("end");
+    expect(await waited).toBe(false);
+  });
+
   test("waitForOperationConnection gives up after operationConnectWaitMs from opening", async () => {
     vi.useFakeTimers();
     const connection = createRedisConnection(asRedis(new FakeClient()), {

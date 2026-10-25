@@ -186,6 +186,23 @@ describe("a connection the package opens with IAM", () => {
     ).toThrow(/attachElastiCacheIamAuth/);
   });
 
+  test("IAM with ioredis options and no url fails at startup instead of connecting without it", () => {
+    const redisOptions = { host: "cache.aws", port: 6379, tls: {} };
+    expect(() =>
+      getCacheRuntime({ redisOptions, iam: { userId: "u", cacheName: "c", region: "r" } }),
+    ).toThrow(/The iam option needs a url/);
+
+    process.env.ELASTICACHE_IAM_USER = "app-user";
+    try {
+      expect(() => getCacheRuntime({ redisOptions })).toThrow(
+        /ELASTICACHE_IAM_USER needs a url or the ELASTICACHE_\* environment/,
+      );
+    } finally {
+      Reflect.deleteProperty(process.env, "ELASTICACHE_IAM_USER");
+    }
+    expect(clients).toHaveLength(0);
+  });
+
   test("ELASTICACHE_IAM_USER with TLS off fails the handler at startup", () => {
     process.env.ELASTICACHE_ENDPOINT = "cache.aws";
     process.env.ELASTICACHE_IAM_USER = "app-user";

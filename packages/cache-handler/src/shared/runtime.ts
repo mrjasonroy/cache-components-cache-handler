@@ -234,9 +234,11 @@ function connectionRequest(
     maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
   });
   if (options.redisOptions && !options.url) {
-    if (options.iam) {
+    // IAM asked for (option or environment) on a connection it cannot apply to: fail at startup,
+    // as for any IAM misconfiguration, rather than connect without it and be refused (NOAUTH).
+    if (options.iam || process.env.ELASTICACHE_IAM_USER) {
       throw new Error(
-        "The iam option needs a url or the ELASTICACHE_* environment, not ioredis options.",
+        `${options.iam ? "The iam option" : "ELASTICACHE_IAM_USER"} needs a url or the ELASTICACHE_* environment, not ioredis options (redisOptions, or createCacheHandler's redis option): pass a url, or create the client yourself and call attachElastiCacheIamAuth(client, ...) on it.`,
       );
     }
     return { options: { ...tuning, redisOptions: options.redisOptions } };

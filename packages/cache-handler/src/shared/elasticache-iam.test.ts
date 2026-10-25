@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   type AwsCredentials,
   DEFAULT_IAM_REFRESH_INTERVAL_MS,
+  DEFAULT_IAM_TOKEN_TIMEOUT_MS,
   type ResolvedIamOptions,
   attachIamAuth,
   createIamTokenSigner,
@@ -366,6 +367,50 @@ describe("attachIamAuth", () => {
     await settle();
 
     expect(client.connects).toEqual([]);
+  });
+
+  test("a client quit while reconnecting, as its token is made, does not open a socket", async () => {
+    const client = new FakeConnection();
+    client.drop();
+    let release: (token: string) => void = () => {};
+    const signer = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const auth = attachIamAuth(asRedis(client), NODE_BASED, { signer });
+    // ioredis's reconnect timer fires: the wrapped connect waits for the token.
+    const reconnect = client.connect();
+    // `closeCache`: stop, then quit, which with no socket ends in `disconnect()`. The status
+    // stays `reconnecting`; only `manuallyClosing` says the client is closed.
+    auth.stop();
+    Object.assign(client, { manuallyClosing: true });
+    release("late-token");
+
+    await expect(reconnect).rejects.toThrow(/closed/);
+    expect(client.connects).toEqual([]);
+  });
+
+  test("a credentials provider that never answers times out, and the next refresh runs", async () => {
+    vi.useFakeTimers();
+    const client = new FakeConnection();
+    client.status = "ready";
+    const signer = vi
+      .fn<() => Promise<string>>()
+      .mockReturnValueOnce(new Promise<string>(() => {}))
+      .mockResolvedValue("good-token");
+    const auth = attachIamAuth(asRedis(client), NODE_BASED, { signer });
+
+    await vi.advanceTimersByTimeAsync(DEFAULT_IAM_TOKEN_TIMEOUT_MS - 1);
+    expect(errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/could not make an IAM auth token \(timed out after 10000 ms\)/);
+
+    expect(await auth.refresh()).toBe(true);
+    expect(client.options.password).toBe("good-token");
+    auth.stop();
   });
 
   test("a token failure is logged and retried on the next tick, never thrown", async () => {
