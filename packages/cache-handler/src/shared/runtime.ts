@@ -26,6 +26,12 @@ import {
 } from "./env.js";
 import { type ErrorReporter, createErrorReporter } from "./error-reporter.js";
 import { type CacheLogger, type LoggerSource, debugWriter, loggerSource } from "./logger.js";
+import {
+  memoryStoreCaps,
+  readHeapLimit,
+  resolveMemoryBudget,
+  warnIfOversized,
+} from "./memory-budget.js";
 import { MemoryStore, type MemoryStoreOptions, clearAllMemoryStores } from "./memory-store.js";
 import {
   type TagStateKey,
@@ -293,7 +299,7 @@ export function getCacheRuntime(options: RuntimeOptions = {}): CacheRuntime {
         ? { client: request.client, keyPrefix }
         : { pooled: connectionKey(request.options), keyPrefix }
       : undefined;
-  const runtime = createRuntime(connection, keyPrefix, loggerSource(options.logger), {
+  const runtime = createRuntime(connection, keyPrefix, loggerSource(options.logger), undefined, {
     stateKey,
     // Once closed, its tag store sends updates to the live runtime of the same options.
     liveStore: () => getCacheRuntime({ ...options, keyPrefix }).tags,
@@ -334,8 +340,10 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
     return { runtime: getCacheRuntime(options), shared: true, release: async () => {} };
   }
   const logger = loggerSource(options.logger);
+  // Before the connection opens, so an invalid `CACHE_MEMORY_*` value cannot leave it open.
+  const caps = resolveMemoryStoreCaps(logger);
   const connection = openRedisConnection(request.options, logger);
-  const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix(), logger);
+  const runtime = createRuntime(connection, options.keyPrefix ?? resolveKeyPrefix(), logger, caps);
   return {
     runtime,
     shared: false,
@@ -346,37 +354,41 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
   };
 }
 
-const MiB = 1024 * 1024;
-
 /**
- * Caps of the in-process stores. Their sum is the most the package keeps in memory per runtime;
- * see the Memory section of docs/operations.md before changing one. With Redis healthy only
- * `local` and `entryTags` fill (plus `page` and `data` for `MEMORY_ONLY_TAG` entries); without
- * Redis `page` and `data` hold everything; the fallbacks fill only during an outage and are
- * emptied on reconnect. An entry larger than its store's cap is not kept in memory.
+ * Caps of the in-process stores for this process's memory budget (see `memory-budget.ts` and the
+ * Memory section of docs/operations.md): a share of the V8 heap, 10% by default, split 16/16/16/16
+ * /32/2 across `page`, `pageFallback`, `data`, `dataFallback`, `local` and `entryTags`. With Redis
+ * healthy only `local` and `entryTags` fill (plus `page` and `data` for `MEMORY_ONLY_TAG` entries);
+ * without Redis `page` and `data` hold everything; the fallbacks fill only during an outage and
+ * are emptied on reconnect. An entry larger than its store's cap is not kept in memory. Throws on
+ * an invalid `CACHE_MEMORY_*` value; warns once per process when the budget is over half the heap
+ * limit.
  */
-export const MEMORY_STORE_CAPS = {
-  page: { maxBytes: 16 * MiB },
-  pageFallback: { maxBytes: 16 * MiB },
-  data: { maxBytes: 16 * MiB },
-  dataFallback: { maxBytes: 16 * MiB },
-  local: { maxEntries: 10_000, maxBytes: 32 * MiB },
-  entryTags: { maxEntries: 10_000, maxBytes: 2 * MiB },
-} as const satisfies Record<keyof RuntimeStores, MemoryStoreOptions>;
+export function resolveMemoryStoreCaps(
+  logger?: LoggerSource,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<keyof RuntimeStores, MemoryStoreOptions & { maxBytes: number }> {
+  const heapLimit = readHeapLimit();
+  const budget = resolveMemoryBudget(env, heapLimit);
+  warnIfOversized(budget, heapLimit, logger);
+  return memoryStoreCaps(budget);
+}
 
 function createRuntime(
   connection: RedisConnection | undefined,
   keyPrefix: string,
   logger: LoggerSource,
+  // The budget is read once, here or by the caller: a runtime's caps never change.
+  caps = resolveMemoryStoreCaps(logger),
   shared?: { stateKey: TagStateKey | undefined; liveStore(): TagStore },
 ): OwnedRuntime {
   const stores: RuntimeStores = {
-    page: new MemoryStore(MEMORY_STORE_CAPS.page),
-    pageFallback: new MemoryStore(MEMORY_STORE_CAPS.pageFallback),
-    data: new MemoryStore(MEMORY_STORE_CAPS.data),
-    dataFallback: new MemoryStore(MEMORY_STORE_CAPS.dataFallback),
-    local: new MemoryStore(MEMORY_STORE_CAPS.local),
-    entryTags: new MemoryStore(MEMORY_STORE_CAPS.entryTags),
+    page: new MemoryStore(caps.page),
+    pageFallback: new MemoryStore(caps.pageFallback),
+    data: new MemoryStore(caps.data),
+    dataFallback: new MemoryStore(caps.dataFallback),
+    local: new MemoryStore(caps.local),
+    entryTags: new MemoryStore(caps.entryTags),
   };
   // Outage entries are never read once Redis is back; dropping them frees the memory.
   const stopListening = connection?.onReady(() => {

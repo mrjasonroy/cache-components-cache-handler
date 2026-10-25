@@ -13,12 +13,14 @@ vi.mock("./node-require.js", async (importOriginal) => ({
 
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
+import { readHeapLimit } from "./memory-budget.js";
 import {
-  MEMORY_STORE_CAPS,
   type RuntimeStores,
+  acquireCacheRuntime,
   bufferToStream,
   getCacheRuntime,
   resolveConnection,
+  resolveMemoryStoreCaps,
   streamToBuffer,
 } from "./runtime.js";
 
@@ -66,10 +68,12 @@ describe("cache runtime", () => {
   });
 
   test("every in-process store stays within its byte cap when filled past it", () => {
+    process.env.CACHE_MEMORY_MAX_MIB = "98";
     const { stores } = getCacheRuntime();
     const MiB = 1024 * 1024;
-    for (const [name, caps] of Object.entries(MEMORY_STORE_CAPS)) {
+    for (const [name, caps] of Object.entries(resolveMemoryStoreCaps())) {
       const store = stores[name as keyof RuntimeStores];
+      expect(store.maxBytes, name).toBe(caps.maxBytes);
       const writes = Math.ceil((2 * caps.maxBytes) / MiB);
       for (let i = 0; i < writes; i++) store.set(`${name}:${i}`, [], MiB, null);
       expect(store.byteSize, name).toBeLessThanOrEqual(caps.maxBytes);
@@ -77,14 +81,42 @@ describe("cache runtime", () => {
     }
   });
 
-  test("in-process caps: under 100 MiB in all, under 40 MiB for what fills with Redis healthy", () => {
-    const MiB = 1024 * 1024;
-    const caps = Object.values(MEMORY_STORE_CAPS).map((cap) => cap.maxBytes);
-    expect(caps.reduce((sum, cap) => sum + cap, 0)).toBeLessThan(100 * MiB);
-    // Without MEMORY_ONLY_TAG entries, only these fill while Redis is up.
-    expect(MEMORY_STORE_CAPS.local.maxBytes + MEMORY_STORE_CAPS.entryTags.maxBytes).toBeLessThan(
-      40 * MiB,
-    );
+  test("the stores share 10% of the heap limit by default, split by ratio, summing to <= it", () => {
+    const { stores } = getCacheRuntime();
+    const budget = Math.floor(((readHeapLimit() ?? 0) * 10) / 100);
+    const caps = Object.values(stores).map((store) => store.maxBytes);
+    expect(caps.reduce((sum, cap) => sum + cap, 0)).toBeLessThanOrEqual(budget);
+    expect(stores.local.maxBytes).toBe(Math.floor((budget * 32) / 98));
+    expect(stores.entryTags.maxBytes).toBe(Math.floor((budget * 2) / 98));
+    expect(stores.page.maxBytes).toBe(Math.floor((budget * 16) / 98));
+    expect(stores.local.maxEntries).toBe(10_000);
+    expect(stores.entryTags.maxEntries).toBe(10_000);
+  });
+
+  test("a budget over half the heap limit is logged once", () => {
+    process.env.CACHE_MEMORY_HEAP_PERCENT = "60";
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    getCacheRuntime();
+    getCacheRuntime({ keyPrefix: "other:" });
+    const oversized = warn.mock.calls.filter((call) => String(call[0]).includes("heap limit"));
+    expect(oversized).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  test("the budget is read once, when the runtime is created", () => {
+    process.env.CACHE_MEMORY_MAX_MIB = "49";
+    const runtime = getCacheRuntime();
+    process.env.CACHE_MEMORY_MAX_MIB = "980";
+    expect(getCacheRuntime()).toBe(runtime);
+    expect(runtime.stores.local.maxBytes).toBe(16 * 1024 * 1024);
+  });
+
+  test("an invalid CACHE_MEMORY_* value fails runtime creation, before a connection opens", () => {
+    process.env.CACHE_MEMORY_HEAP_PERCENT = "150";
+    expect(() => getCacheRuntime()).toThrow("CACHE_MEMORY_HEAP_PERCENT");
+    process.env.REDIS_URL = "redis://cache:6379";
+    expect(() => acquireCacheRuntime()).toThrow("CACHE_MEMORY_HEAP_PERCENT");
+    expect(ioredisMock).not.toHaveBeenCalled();
   });
 
   test("reconnecting drops the outage fallback stores", () => {

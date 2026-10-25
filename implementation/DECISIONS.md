@@ -7,6 +7,66 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-11: The memory budget is a share of the heap (16.4.3)
+
+**Problem.** DEC-9's fixed 98 MiB suits the 605 MB pods it was sized for, but wastes larger pods:
+"if you were running larger pods you might want more". The maintainer overrode DEC-9's "no new
+option or environment variable" rule for this one setting.
+
+**Decision.** One budget per runtime, read once when the runtime is created
+(`shared/memory-budget.ts`, used by `createRuntime` in `shared/runtime.ts`): `heapPercent` (default
+10) of `v8.getHeapStatistics().heap_size_limit`, or `maxMiB`, an absolute budget that wins. It is
+split by DEC-9's ratios, `page`, `pageFallback`, `data` and `dataFallback` 16, `local` 32,
+`entryTags` 2 (of 98), each cap rounded down so they sum to at most the budget; `local` and
+`entryTags` keep their 10,000-entry caps. `heap_size_limit` is a little above `--max-old-space-size`, since it includes the young
+generation (Node 22: 448 → 496 MiB, 768 → 816 MiB), so 10% is about 50 MiB and 82 MiB there, close
+to DEC-9's 98 for the pods it was sized for. The budget is per runtime (connection and key prefix),
+as DEC-9's caps were. A budget above half the heap limit is allowed but warned about once per process.
+
+**Precedence.** `withCache`'s `memory`, then `CACHE_MEMORY_MAX_MIB` / `CACHE_MEMORY_HEAP_PERCENT`,
+then the default. The first level that sets either value decides; within it `maxMiB` wins. We
+considered environment first (operators could retune a pod without a rebuild) but kept the order
+every other setting has: an option in code wins over its variable (`url` over `REDIS_URL`,
+`keyPrefix` over `CACHE_KEY_PREFIX`). Under standalone the environment is the only source anyway.
+
+**How the option reaches the handlers.** `withCache` hands nothing else to the handler files: the
+other options only choose file paths (DEC-7: "`withCache` cannot carry one"). Next keeps only the
+config fields it knows in its runtime config (`getNextConfigRuntime`,
+next/dist/server/config-shared.js; `env` is not among them outside experimental compile mode),
+and a handler path is turned into a file URL, so neither can carry a value. `next dev`, `next
+build` and `next start` load `next.config` in the process that serves (next start:
+server/lib/start-server.js → `getRequestHandlers`, in process), so `withCache` validates `memory`
+and writes it, as JSON, to the private variable `__CACHE_COMPONENTS_MEMORY` of its own process,
+which build workers inherit; without `memory` it removes the variable. A standalone `server.js`
+never loads `next.config`, so there only the `CACHE_MEMORY_*` variables apply; `withCache` warns when
+`output: "standalone"` is set with `memory`. Writing to a file was rejected: Next cleans
+`distDir` after loading the config, standalone packaging may leave a file out (as it may the build
+stamp), and a read-only root file system would make `next start` fail.
+
+**Not on `CacheOptions`.** Every handler of a connection and key prefix shares one runtime and its
+stores (DEC-3, DEC-6). A per-handler `memory` would be decided by whichever handler created the
+runtime first, or would have to split the runtime, which is what DEC-3 and DEC-6 avoid. So the
+budget has one source per process: `withCache`, else the environment. Custom handler files under
+`withCache({ handlers })` still get `withCache`'s `memory`, since it is process-wide.
+
+**Validation.** `heapPercent` must be finite, more than 0 and less than 100; `maxMiB` finite and
+more than 0; any other key in `memory` (`maxMib`, `heapPercentage`) is rejected. `withCache` throws when the config loads. An invalid variable throws when a runtime
+is created, which every cache call attempts until it is fixed; the error names the variable.
+`acquireCacheRuntime` resolves the budget before opening its connection, so the error leaves no
+connection open. An empty variable counts as unset; `Number` parsing rejects `10%` or `64MiB`.
+
+**Without `node:v8`.** The heap limit is read through `process.getBuiltinModule("node:v8")`, never
+imported (the edge-bundle rule of `shared/node-require.ts`). Where it is missing or reports no
+positive limit (Next's edge runtime, where the handlers are no-ops; a runtime without `node:v8`),
+the budget is 98 MiB, DEC-9's, which reproduces its exact caps; `maxMiB` still applies, and
+`heapPercent` is ignored since there is nothing to take a share of.
+
+**Tests.** `shared/memory-budget.test.ts` (default 10% of a mocked heap limit, each variable,
+precedence, the fallback, ratio split summing to at most the budget, invalid values),
+`shared/runtime.test.ts` (the runtime's stores get those caps; read once; invalid variable fails
+before connecting) and `helpers/with-cache.test.ts` (the option reaches the runtime over the
+environment, is removed when dropped, invalid values throw, the standalone warning). DEC-9's "sum
+under 100 MiB" test became "sum at most the budget".
 ## DEC-10: Scope keys by the deployment ID when one is set (16.4.3)
 
 **Problem.** Page and data keys were `<prefix><BUILD_ID>:page|data:`. Next 16 makes `BUILD_ID` a
@@ -45,6 +105,8 @@ across builds; that configuration also defeats Next's own skew protection, so it
 supported.
 
 ## DEC-9: A fixed in-process memory budget (16.4.3)
+
+> Superseded in part by DEC-11: the caps are now shares of a budget sized from the heap.
 
 **Problem.** A consumer's pods (605 MB container limit) ran out of memory. The in-process stores
 added up to about 336 MiB per runtime: `local` 10,000 entries / 50 MiB, `page` and `pageFallback`

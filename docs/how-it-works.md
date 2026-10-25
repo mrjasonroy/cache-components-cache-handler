@@ -66,8 +66,8 @@ it. Invalidation is still shared, following Next's
 [Distributed Tag Coordination](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination)
 pattern:
 
-- **Values live in per-instance memory**: an LRU of up to 10,000 entries and 32 MiB
-  ([Memory](./operations.md#memory)). Like Next's built-in
+- **Values live in per-instance memory**: an LRU of up to 10,000 entries and 32/98 of the
+  memory budget, a share of the heap ([Memory](./operations.md#memory)). Like Next's built-in
   handler, a value is dropped once its `revalidate` period has passed, and the next request
   renders it again.
 - **`updateTags` writes the invalidation to Redis**: one script call (`EVALSHA`) that merges it

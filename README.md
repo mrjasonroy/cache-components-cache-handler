@@ -53,13 +53,14 @@ lifetimes and the outage table.
 
 ### `withCache(nextConfig, options?)`
 
-These options are read when `next.config` loads. Runtime settings come from the environment.
+These options are read when `next.config` loads. Runtime settings come from the environment, except `memory`.
 
 | Option | Default | What it does |
 |---|---|---|
 | `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
 | `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. `false` leaves `cacheHandler` and `cacheMaxMemorySize` as your config has them. |
 | `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](./docs/custom-handlers.md). |
+| `memory` | `{ heapPercent: 10 }` | The in-process cache budget per runtime: `heapPercent` of V8's heap limit (a little above `--max-old-space-size`), or `maxMiB` (an absolute budget, which wins). Wins over the `CACHE_MEMORY_*` variables. Not seen by a standalone `server.js`, which never loads `next.config`: use the variables there. See [Memory](./docs/operations.md#memory). |
 
 ```js
 // Keep plain "use cache" in Redis too (every entry is visible with redis-cli)
@@ -84,6 +85,8 @@ instead. It also accepts a function-form `next.config`.
 | `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes and state changes. It never logs the URL. |
 | `CACHE_COMPRESSION` | `on` | Entries of 16 KB and more are Brotli-compressed. `off` stores them uncompressed. |
+| `CACHE_MEMORY_HEAP_PERCENT` | `10` | In-process cache budget as a share of the V8 heap limit, in percent (more than 0, less than 100). |
+| `CACHE_MEMORY_MAX_MIB` | unset | In-process cache budget in MiB. Wins over `CACHE_MEMORY_HEAP_PERCENT`. `withCache`'s `memory` wins over both. |
 
 There are no tuning variables for timeouts or TTLs. The [installation guide](./docs/installation.md#environment-variables)
 has the full table; for your own client or timeouts, see [Custom handlers](./docs/custom-handlers.md).

@@ -3,11 +3,16 @@
  */
 
 import { processLogger, writeLog } from "../shared/logger.js";
+import {
+  MEMORY_OPTIONS_ENV,
+  type MemoryOptions,
+  validateMemoryOptions,
+} from "../shared/memory-budget.js";
 import { nodeBuiltin } from "../shared/node-require.js";
 
 /**
  * Options of {@link withCache}. They are read when the config loads and decide which handler
- * files Next is pointed at; runtime settings come from the environment.
+ * files Next is pointed at; runtime settings come from the environment, except `memory`.
  */
 export interface WithCacheOptions {
   /**
@@ -30,6 +35,15 @@ export interface WithCacheOptions {
    * the two can differ.
    */
   handlers?: { page?: string; default?: string; remote?: string };
+
+  /**
+   * The in-process memory budget: `heapPercent` of the V8 heap limit, or `maxMiB` (which wins).
+   * Wins over `CACHE_MEMORY_HEAP_PERCENT` and `CACHE_MEMORY_MAX_MIB`. Applies where `next.config`
+   * is loaded by the serving process (`next dev`, `next start`); a standalone `server.js` never
+   * loads it, so set the environment variables there.
+   * @default { heapPercent: 10 }
+   */
+  memory?: MemoryOptions;
 }
 
 /**
@@ -111,7 +125,7 @@ function applyCache<T extends object>(
   options: WithCacheOptions,
 ): T & WithCacheConfig {
   const config = nextConfig as T & Partial<WithCacheConfig>;
-  const { useCache = "memory", pages = true, handlers = {} } = options;
+  const { useCache = "memory", pages = true, handlers = {}, memory } = options;
   // With `pages: false` the page handler is the user's own business, so their cacheHandler stays.
   if ((pages && config.cacheHandler !== undefined) || config.cacheHandlers !== undefined) {
     throw new Error(
@@ -125,6 +139,8 @@ function applyCache<T extends object>(
     : useCache === "redis"
       ? remote
       : entryPath("default");
+
+  handOverMemoryOptions(memory, (config as { output?: unknown }).output);
 
   const userMemorySize = config.cacheMaxMemorySize;
   if (pages && userMemorySize !== undefined && userMemorySize !== 0) {
@@ -145,4 +161,27 @@ function applyCache<T extends object>(
       : {}),
     cacheHandlers: { default: defaultHandler, remote },
   };
+}
+
+/**
+ * Validate `memory` and hand it to the handlers through {@link MEMORY_OPTIONS_ENV}. Next cannot
+ * pass objects from `next.config` to handler files, and its runtime config keeps only the fields
+ * Next knows, so the option travels in this process's environment: `next dev`, `next build` (and
+ * its workers) and `next start` load `next.config` in the process that serves. Without `memory`
+ * the variable is removed, so a reloaded config that drops the option drops it here too.
+ */
+function handOverMemoryOptions(memory: MemoryOptions | undefined, output: unknown): void {
+  if (memory === undefined) {
+    Reflect.deleteProperty(process.env, MEMORY_OPTIONS_ENV);
+    return;
+  }
+  const valid = validateMemoryOptions(memory, "withCache");
+  process.env[MEMORY_OPTIONS_ENV] = JSON.stringify(valid);
+  if (output === "standalone") {
+    writeLog(
+      processLogger,
+      "warn",
+      "withCache: memory applies under next dev and next start. A standalone server.js does not load next.config, so set CACHE_MEMORY_HEAP_PERCENT or CACHE_MEMORY_MAX_MIB in its environment.",
+    );
+  }
 }
