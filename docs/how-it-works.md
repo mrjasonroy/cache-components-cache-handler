@@ -53,6 +53,12 @@ percent-encoded in keys, so `dpl_abc` stays `dpl_abc` and a `:` becomes `%3A`. N
 configuring; give each deploy its own deployment ID, as skew protection already requires. An
 explicit `buildId` option on a handler or `flushCache` still replaces it.
 
+A `flushCache()` run from a separate script (not inside the running app) resolves the scope the
+same way, from its own working directory and environment. With
+`experimental.runtimeServerDeploymentId` the build output holds no ID, so give that script the
+same `NEXT_DEPLOYMENT_ID` as the servers, or pass `buildId`: otherwise it flushes the `BUILD_ID`
+scope, finds nothing, and still succeeds.
+
 ## Distributed tag coordination for `"use cache"`
 
 Plain `"use cache"` keeps its values in each instance's memory, which is what Next intends for

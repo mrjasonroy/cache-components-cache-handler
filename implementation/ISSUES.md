@@ -277,7 +277,7 @@ An extra hash scan could recover these fields, but is not part of this release's
 
 ## ISSUE-9: With a deployment ID, every deploy shared one key namespace
 
-**Status:** ✅ Resolved (DEC-11) · **Severity:** High · **Area:** `shared/build-id.ts`
+**Status:** ✅ Resolved (DEC-10) · **Severity:** High · **Area:** `shared/build-id.ts`
 
 Keys were scoped by `BUILD_ID`. When `deploymentId` (or `NEXT_DEPLOYMENT_ID`) is set without
 `generateBuildId`, Next 16 gives every build the constant `BUILD_ID` `build-TfctsWXpff2fKS`
