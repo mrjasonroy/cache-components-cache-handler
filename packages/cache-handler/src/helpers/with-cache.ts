@@ -130,7 +130,7 @@ function checkOptionKeys(options: WithCacheOptions): void {
     if (OPTION_KEYS.has(key)) continue;
     if (key === "useCache") {
       throw new Error(
-        'withCache: the useCache option was removed in 16.4.3-rc.4. Plain "use cache" always stays in each instance\'s memory; write "use cache: remote" for entries that belong in Redis.',
+        'withCache: the useCache option was removed before 16.4.3. Plain "use cache" always stays in each instance\'s memory; write "use cache: remote" for entries that belong in Redis.',
       );
     }
     throw new Error(

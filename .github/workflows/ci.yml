@@ -43,6 +43,10 @@ jobs:
           node --test scripts/release-version.test.mjs
           node scripts/release-version.mjs check
 
+      # `pnpm lint` checks the npm README is in sync; this tests the sync script itself.
+      - name: npm README sync script
+        run: node --test scripts/sync-package-readme.test.mjs
+
   unit-tests:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
