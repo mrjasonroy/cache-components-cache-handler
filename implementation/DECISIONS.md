@@ -32,7 +32,8 @@ the `v16.4.2` tag, so no aliases):
 - `createRedisCacheHandler` is renamed `createPageCacheHandler`: it builds the `cacheHandler`
   (page) handler, and "Redis" no longer says which one. Its options type is renamed
   `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` was exported by 16.4.2, so it stays as a
-  deprecated alias, as does the `RedisCacheHandler` class (not deprecated: it is the page handler).
+  deprecated alias. The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
+  page handler.
 
 **Memory split.** `MEMORY_STORE_SHARES` (DEC-9, DEC-11) is unchanged. No store is dead: `page` and
 `data` hold every page and remote entry without Redis, which is how dev, CI, previews and
@@ -248,9 +249,10 @@ Redis is down, at most 60 s per entry, and are emptied on reconnect.
 
 **Decision.** Smaller fixed caps, no new option or environment variable (the maintainer's rule):
 `local` 32 MiB / 10,000 entries, `page`, `data` and both fallbacks 16 MiB each, `entryTags` 2 MiB.
-That is 34 MiB with Redis healthy, 64 MiB without Redis and 98 MiB at most during an outage. The
-caps live in one table, `MEMORY_STORE_CAPS` in `shared/runtime.ts`, and a test fails if their
-sum reaches 100 MiB. Sizes are bytes: `entryTags` now counts each tag's characters, and every
+That is 34 MiB with Redis healthy, 64 MiB without Redis and, since DEC-13, 66 MiB at most during
+an outage (98 MiB before it, when memory-only entries could fill `page` and `data` too). The
+shares live in one table, `MEMORY_STORE_SHARES` in `shared/memory-budget.ts` (DEC-11 made them
+shares of a heap-sized budget), and a test checks the caps never sum past the budget. Sizes are bytes: `entryTags` now counts each tag's characters, and every
 store counts keys, since a `"use cache"` key carries the function's encoded arguments. The page
 store no longer has to fit the codec's 64 MiB entry cap: a page larger than 16 MiB is not kept in
 memory, which only matters without Redis, where it is rendered again. We kept the six stores

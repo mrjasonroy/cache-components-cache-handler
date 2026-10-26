@@ -183,7 +183,7 @@ The page handler implements Next 16's singular `cacheHandler` contract:
 | Situation | Reads | Writes | `revalidateTag` |
 |---|---|---|---|
 | `next build` | memory | memory | memory |
-| Redis down at boot | memory (each entry at most 60 s) | memory | applied locally, with a warning: other instances keep their copy until it ages out |
+| Redis down at boot | memory (each entry at most 60 s) | memory | applied locally, with a warning, and queued: sent to Redis, and so to every instance, when the connection is back |
 | Redis lost mid-run | the same; switches within one command timeout | the same | the same |
 | Redis stalled (accepts, never answers) | 1 s timeout per command → miss; after 3 timeouts in a row, drop and redial → memory (a [client you pass in](./custom-handlers.md) is never dropped: memory for 2 s at a time instead) | the same | the same |
 | Redis back | Redis; the outage memory is dropped | Redis | Redis and local |

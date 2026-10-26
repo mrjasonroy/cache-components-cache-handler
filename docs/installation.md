@@ -12,13 +12,16 @@
 
 <!-- rc: drop "@rc" (and the note below) once 16.4.3 is the npm latest release -->
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler@rc ioredis
+npm install @mrjasonroy/cache-components-cache-handler@rc
 ```
 
 `withCache` is new in 16.4.3, currently a release candidate on the `rc` tag. Drop `@rc` once
 16.4.3 is the latest release.
 
-`ioredis` is only loaded when Redis is configured, so a memory-only app can leave it out.
+`ioredis` is an optional dependency, so it is installed with the package unless your package
+manager skips optional dependencies (`npm install --omit=optional`, `pnpm install --no-optional`,
+Yarn's `--ignore-optional`); then add it yourself with `npm install ioredis`. It is only loaded
+when Redis is configured, so a memory-only app can go without it.
 
 ## Configure Next.js
 
@@ -132,7 +135,7 @@ If a dev `.env` file carries `REDIS_URL`, the dev server will use Redis; remove 
    redis-cli --scan --pattern 'nextjs:*' | head
    ```
 
-   Pages sit under `nextjs:<buildId>:page:`, `"use cache: remote"` entries under
+   Pages sit under `nextjs:<buildId>:page:` (`<buildId>` is the deployment ID when one is set), `"use cache: remote"` entries under
    `nextjs:<buildId>:data:`, and tag records in the `nextjs:tags` hash, indexed by
    `nextjs:tag-index` (both appear after the first revalidation). Plain `"use cache"` values stay
    in each instance's memory; use `"use cache: remote"` for an entry you want in Redis.

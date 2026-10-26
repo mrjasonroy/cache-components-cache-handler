@@ -178,7 +178,7 @@ handler is created). Every entry is kept at most 365 days.
 
 For `"use cache"`. Values live in this process's memory (up to 10,000 entries and 32/98 of the
 [memory budget](./operations.md#memory), about 27 MiB at `--max-old-space-size=768` on Node 22; a larger value is not kept) until their `revalidate` period. When Redis is configured, tag invalidations are shared across instances.
-Takes `CacheOptions`; only the connection, `keyPrefix` and `debug` matter.
+Takes `CacheOptions`; only the connection, `keyPrefix`, `debug` and `logger` matter.
 
 ```js
 // cache/default.mjs
@@ -401,7 +401,8 @@ replacements.
 
 ## Types
 
-`WithCacheOptions`, `WithCacheConfig`, `CacheOptions`, `ElastiCacheIamOptions`,
+`WithCacheOptions`, `WithCacheConfig`, `NextConfigFunction`, `MemoryOptions`, `CacheOptions`,
+`ElastiCacheIamOptions`,
 `AttachElastiCacheIamAuthOptions`, `ElastiCacheIamAuth`, `AwsCredentials`,
 `AwsCredentialsProvider`, `PageCacheHandlerOptions`, `RedisCacheHandlerOptions` (deprecated),
 `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `FlushCacheOptions`, `FlushCacheResult`,

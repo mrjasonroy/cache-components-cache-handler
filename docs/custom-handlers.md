@@ -9,8 +9,8 @@ directive's role: `page` for pages, route handlers and cached `fetch`, `remote` 
 invalidation):
 
 ```js
-// cache/redis.mjs: one client for both files, parked on globalThis because Next can load the
-// two handler modules separately
+// cache/redis.mjs: one client for all three files, parked on globalThis because Next can load
+// the three handler modules separately
 import Redis from "ioredis";
 
 const key = Symbol.for("my-app.redis");

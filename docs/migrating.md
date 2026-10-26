@@ -39,7 +39,8 @@ cached can stay stale until its tag is revalidated again or the entry expires (u
 - once the last 16.4.2 instance is gone, revalidate once from a 16.4.3 instance:
   `revalidatePath("/", "layout")`, or the tags that changed during the rollout. That goes through
   the shared tag store, so it reaches every instance, including each one's `"use cache"` memory.
-  `flushCache()` is not a substitute: it empties only the calling process's memory.
+  `flushCache()` is not a substitute: it deletes the Redis keys in its scope and empties the
+  calling process's memory, but other instances' `"use cache"` memory is not cleared.
 
 `createCacheHandler` keeps its 16.4.2 key layout, so its own revalidations are unaffected. Between
 16.4.3 builds, a revalidation reaches every instance, old build and new.

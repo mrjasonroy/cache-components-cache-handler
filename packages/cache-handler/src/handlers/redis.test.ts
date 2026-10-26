@@ -46,6 +46,13 @@ function handlerFor(fake: FakeRedis, options = {}) {
   return new RedisCacheHandler({ client: asClient(fake), ...options });
 }
 
+/** A page handler whose in-process stores a test can look at. */
+class ProbedHandler extends RedisCacheHandler {
+  get stores() {
+    return this.runtime.stores;
+  }
+}
+
 describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
   beforeEach(async () => {
     await resetCacheState();
@@ -426,12 +433,42 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     });
   });
 
-  test("with Redis every entry goes to Redis: no tag keeps one in memory", async () => {
-    // 16.4.3 release candidates had a `cache:memory-only` tag; it is an ordinary tag now.
-    const fake = new FakeRedis();
-    const handler = handlerFor(fake);
-    await handler.set("/health", page("ok", "a,cache:memory-only"), pageCtx);
-    expect(await fake.exists("nextjs:development:page:/health")).toBe(1);
+  describe("with Redis the in-memory page store stays empty", () => {
+    test("every entry goes to Redis: no tag keeps one in memory", async () => {
+      // 16.4.3 release candidates had a `cache:memory-only` tag; it is an ordinary tag now.
+      const fake = new FakeRedis();
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      await handler.set("/health", page("ok", "a,cache:memory-only"), pageCtx);
+      await handler.set("/blog", page("v1"), pageCtx);
+      expect(await fake.exists("nextjs:development:page:/health")).toBe(1);
+      expect(handler.stores.page.size).toBe(0);
+      expect(handler.stores.pageFallback.size).toBe(0);
+    });
+
+    test("a get reads Redis, never the in-memory page store", async () => {
+      const fake = new FakeRedis();
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      const seeded = { entry: { value: page("seeded"), tags: [], lastModified: Date.now() } };
+      handler.stores.page.set("/blog", seeded, 100, null);
+      expect(await handler.get("/blog", { kind: "APP_PAGE" })).toBeNull();
+
+      await handler.set("/blog", page("redis"), pageCtx);
+      handler.stores.page.set("/blog", seeded, 100, null);
+      expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("redis");
+    });
+
+    test("during an outage only the fallback store is written and served", async () => {
+      const fake = new FakeRedis();
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      const seeded = { entry: { value: page("seeded"), tags: [], lastModified: Date.now() } };
+      handler.stores.page.set("/seeded", seeded, 100, null);
+      fake.goDown();
+      await handler.set("/outage", page("during"), pageCtx);
+      expect(handler.stores.pageFallback.size).toBe(1);
+      expect(handler.stores.page.size).toBe(1);
+      expect((await handler.get("/outage", { kind: "APP_PAGE" }))?.value.html).toBe("during");
+      expect(await handler.get("/seeded", { kind: "APP_PAGE" })).toBeNull();
+    });
   });
 
   describe("outage fallback", () => {
@@ -498,6 +535,16 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       const handler = new RedisCacheHandler({});
       await handler.set("/blog", page("mem"), pageCtx);
       expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("mem");
+      expect(ioredisMock).not.toHaveBeenCalled();
+    });
+
+    test("CACHE_REDIS=off with REDIS_URL set: round-trips in memory, never connects", async () => {
+      process.env.CACHE_REDIS = "off";
+      process.env.REDIS_URL = "redis://cache:6379";
+      const handler = new ProbedHandler({});
+      await handler.set("/blog", page("off"), pageCtx);
+      expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("off");
+      expect(handler.stores.page.size).toBe(1);
       expect(ioredisMock).not.toHaveBeenCalled();
     });
 

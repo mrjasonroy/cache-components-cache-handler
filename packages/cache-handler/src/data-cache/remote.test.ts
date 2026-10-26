@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+const ioredisMock = vi.hoisted(() => vi.fn());
+
+// ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
+vi.mock("../shared/node-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/node-require.js")>()),
+  requireModule: (moduleName: string) => {
+    if (moduleName === "ioredis") return ioredisMock;
+    throw new Error(`Unexpected require for module: ${moduleName}`);
+  },
+}));
+
 import { encodeEntry } from "../shared/codec.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
+import { getCacheRuntime } from "../shared/runtime.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import { createRemoteCacheHandler } from "./remote.js";
-import { INFINITE_CACHE } from "./stored-entry.js";
+import { INFINITE_CACHE, type StoredDataEntry } from "./stored-entry.js";
 import type { DataCacheEntry } from "./types.js";
 
 function entry(text: string, overrides: Partial<DataCacheEntry> = {}): Promise<DataCacheEntry> {
@@ -30,6 +43,17 @@ async function read(result: DataCacheEntry | undefined): Promise<string | undefi
 }
 
 const KEY = "nextjs:b1:data:k";
+
+function storedEntry(text: string): StoredDataEntry {
+  return {
+    value: new TextEncoder().encode(text),
+    tags: [],
+    stale: 30,
+    timestamp: Date.now(),
+    expire: 300,
+    revalidate: 60,
+  };
+}
 
 describe("createRemoteCacheHandler", () => {
   beforeEach(async () => {
@@ -180,9 +204,53 @@ describe("createRemoteCacheHandler", () => {
     // 16.4.3 release candidates had a `cache:memory-only` tag; it is an ordinary tag now.
     const fake = new FakeRedis();
     const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    const { stores } = getCacheRuntime({ client: asClient(fake) });
     await handler.set("k", entry("x", { tags: ["cache:memory-only"] }));
     expect(await fake.exists(KEY)).toBe(1);
     expect(await read(await handler.get("k", []))).toBe("x");
+    expect(stores.data.size).toBe(0);
+    expect(stores.dataFallback.size).toBe(0);
+  });
+
+  test("with Redis a get reads Redis, never the in-memory data store", async () => {
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    const { stores } = getCacheRuntime({ client: asClient(fake) });
+    const seeded = { stored: storedEntry("seeded"), until: Date.now() + 60_000 };
+    stores.data.set("k", seeded, 6, null);
+    expect(await handler.get("k", [])).toBeUndefined();
+
+    await handler.set("k", entry("redis"));
+    stores.data.set("k", seeded, 6, null);
+    expect(await read(await handler.get("k", []))).toBe("redis");
+  });
+
+  test("during an outage only the fallback store is written and served", async () => {
+    const fake = new FakeRedis();
+    const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
+    const { stores } = getCacheRuntime({ client: asClient(fake) });
+    stores.data.set(
+      "seeded",
+      { stored: storedEntry("seeded"), until: Date.now() + 60_000 },
+      6,
+      null,
+    );
+    fake.goDown();
+    await handler.set("k", entry("during"));
+    expect(stores.dataFallback.size).toBe(1);
+    expect(stores.data.size).toBe(1);
+    expect(await read(await handler.get("k", []))).toBe("during");
+    expect(await handler.get("seeded", [])).toBeUndefined();
+  });
+
+  test("CACHE_REDIS=off with REDIS_URL set: round-trips in memory, never connects", async () => {
+    process.env.CACHE_REDIS = "off";
+    process.env.REDIS_URL = "redis://cache:6379";
+    const handler = createRemoteCacheHandler({ buildId: "b1" });
+    await handler.set("k", entry("off"));
+    expect(await read(await handler.get("k", []))).toBe("off");
+    expect(getCacheRuntime().stores.data.size).toBe(1);
+    expect(ioredisMock).not.toHaveBeenCalled();
   });
 
   test("outage: memory fallback for at most 60 s, dropped on reconnect", async () => {

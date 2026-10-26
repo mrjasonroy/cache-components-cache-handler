@@ -108,11 +108,35 @@ export function withCache<T extends object>(
 ):
   | (T & WithCacheConfig)
   | ((phase: string, context: { defaultConfig: object }) => Promise<T & WithCacheConfig>) {
+  checkOptionKeys(options);
   if (typeof nextConfig === "function") {
     const configFunction = nextConfig as NextConfigFunction<T>;
     return async (phase, context) => applyCache(await configFunction(phase, context), options);
   }
   return applyCache(nextConfig, options);
+}
+
+const OPTION_KEYS = new Set(["pages", "handlers", "memory"]);
+
+/**
+ * Throw on an option `withCache` does not know, so a leftover from a release candidate (or a typo)
+ * is not silently ignored.
+ */
+function checkOptionKeys(options: WithCacheOptions): void {
+  if (typeof options !== "object" || options === null) {
+    throw new Error("withCache: options must be an object like { pages, handlers, memory }.");
+  }
+  for (const key of Object.keys(options)) {
+    if (OPTION_KEYS.has(key)) continue;
+    if (key === "useCache") {
+      throw new Error(
+        'withCache: the useCache option was removed in 16.4.3-rc.4. Plain "use cache" always stays in each instance\'s memory; write "use cache: remote" for entries that belong in Redis.',
+      );
+    }
+    throw new Error(
+      `withCache: unknown option "${key}"; the options are pages, handlers and memory.`,
+    );
+  }
 }
 
 function applyCache<T extends object>(

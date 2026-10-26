@@ -46,6 +46,17 @@ describe("withCache", () => {
     expect(config.cacheMaxMemorySize).toBe(0);
   });
 
+  test("throws on an unknown option; useCache names its replacement", () => {
+    const removed = { useCache: "redis" } as unknown as Parameters<typeof withCache>[1];
+    expect(() => withCache({}, removed)).toThrow(
+      /useCache option was removed.*"use cache: remote"/,
+    );
+    expect(() => withCache(() => ({}), removed)).toThrow(/useCache option was removed/);
+    const typo = { page: false } as unknown as Parameters<typeof withCache>[1];
+    expect(() => withCache({}, typo)).toThrow(/unknown option "page"/);
+    expect(() => withCache({}, { pages: true, handlers: {}, memory: { maxMiB: 8 } })).not.toThrow();
+  });
+
   test("pages: false leaves cacheHandler and cacheMaxMemorySize alone", () => {
     const config = withCache({}, { pages: false });
     expect(config.cacheHandler).toBeUndefined();

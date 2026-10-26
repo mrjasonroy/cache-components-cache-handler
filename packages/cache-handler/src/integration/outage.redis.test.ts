@@ -188,6 +188,9 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
 
     await a.page.set("/during", page("during"), pageContext);
     expect((await a.page.get("/during", pageGet))?.value.html).toBe("during");
+    // Tagged "other", so only the recovery (not the revalidation of t1 below) can drop it.
+    await a.remote.set("during", entry("during value", ["other"]));
+    expect(await text(await a.remote.get("during", []))).toBe("during value");
     // A revalidation during the outage still applies in this process.
     await sleep(2);
     await a.page.revalidateTag(["t1"]);
@@ -196,6 +199,12 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     docker("start", container as string);
     await waitFor(() => a.connection()?.isReady() === true);
     await a.maintainTags();
+    // Outage memory is never read once Redis is back.
+    expect(await a.page.get("/during", pageGet)).toBeNull();
+    expect(await a.remote.get("during", [])).toBeUndefined();
+    expect(await raw.exists(`${prefix}build-1:page:/during`, `${prefix}build-1:data:during`)).toBe(
+      0,
+    );
     expect(await raw.hget(tagsKey(prefix), "prunable")).toBeNull();
     await a.remote.set("again", entry("again value", ["other"]));
     expect(await text(await a.remote.get("again", []))).toBe("again value");
@@ -301,6 +310,7 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     await a.remote.set("k", entry("build"));
     expect(a.connection()).toBeUndefined();
     expect((await a.page.get("/blog", pageGet))?.value.html).toBe("build");
+    expect(await text(await a.remote.get("k", []))).toBe("build");
     expect(await raw.keys(`${prefix}*`)).toEqual([]);
   }, 30_000);
 

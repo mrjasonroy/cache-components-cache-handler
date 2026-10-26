@@ -105,9 +105,10 @@ export async function renameUser(userId: string, name: string) {
 }
 ```
 
-Either call reaches every instance and every handler. Pages see it on their next read, on any
-instance; `"use cache: remote"` entries and each instance's in-memory `"use cache"` values see it
-from the next request on. [How it works](./how-it-works.md#distributed-tag-coordination-for-use-cache)
+Either call reaches every instance and every handler. Pages and `"use cache: remote"` entries see
+it on their very next read, on any instance, because each read fetches the entry's tag records from
+Redis with the entry; each instance's in-memory `"use cache"` values see it from the next request
+on, after the tag sync. [How it works](./how-it-works.md#distributed-tag-coordination-for-use-cache)
 explains how.
 
 ## Path-based revalidation

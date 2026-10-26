@@ -32,7 +32,8 @@ REDIS_URL=redis://cache:6379   # unset → everything stays in memory (dev, CI, 
 ```
 
 That's it. You keep writing `"use cache"`, `cacheTag` and `revalidateTag` as Next documents them
-([examples](./docs/usage.md)). `ioredis` is installed automatically as an optional dependency.
+([examples](./docs/usage.md)). `ioredis` is installed automatically as an optional dependency
+([unless optionals are skipped](./docs/installation.md#install)).
 
 ## What you get
 

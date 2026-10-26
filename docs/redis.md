@@ -1,10 +1,7 @@
 # Redis Configuration
 
-`withCache` connects to Redis from the environment and needs `ioredis` installed:
-
-```bash
-npm install ioredis
-```
+`withCache` connects to Redis from the environment through `ioredis`, an optional dependency
+installed with the package ([unless your package manager skips optionals](./installation.md#install)).
 
 Most deployments only set `REDIS_URL`. This page covers the other connection forms, running
 Redis, and what operators see in it.
