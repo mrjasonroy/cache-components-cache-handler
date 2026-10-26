@@ -2,6 +2,11 @@
  * Helper functions for configuring Next.js "use cache" handlers
  */
 
+/**
+ * What {@link createCacheConfig} returns.
+ *
+ * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.0.
+ */
 export interface CacheHandlerConfig {
   /**
    * Path to an ISR cache handler (for `cacheHandler` in next.config), only when
@@ -51,10 +56,21 @@ export interface CacheHandlerConfig {
  * };
  * ```
  *
- * @deprecated Use `withCache(nextConfig)`, which points Next at the built-in handler files itself. Still works; removed on the Next 17 line.
+ * @deprecated Use `withCache(nextConfig)`, which points Next at the built-in handler files itself. Still works; removed in 16.5.0.
  */
 export function createCacheConfig(options: {
+  /** Path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath: string;
+  dataCacheHandlerPath: string;
+  disableDefaultMemoryCache?: boolean;
+}): CacheHandlerConfig & { cacheHandler: string };
+export function createCacheConfig(options: {
   /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath?: string;
+  dataCacheHandlerPath: string;
+  disableDefaultMemoryCache?: boolean;
+}): CacheHandlerConfig;
+export function createCacheConfig(options: {
   isrHandlerPath?: string;
   dataCacheHandlerPath: string;
   disableDefaultMemoryCache?: boolean;
@@ -100,8 +116,22 @@ export function createCacheConfig(options: {
  * };
  * ```
  *
- * @deprecated Use `withCache(nextConfig, { handlers })`. Still works; removed on the Next 17 line.
+ * @deprecated Use `withCache(nextConfig, { handlers })`. Still works; removed in 16.5.0.
  */
+export function createCacheConfigWithProfiles(options: {
+  /** Path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath: string;
+  defaultDataCacheHandlerPath: string;
+  remoteDataCacheHandlerPath: string;
+  disableDefaultMemoryCache?: boolean;
+}): CacheHandlerConfig & { cacheHandler: string };
+export function createCacheConfigWithProfiles(options: {
+  /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
+  isrHandlerPath?: string;
+  defaultDataCacheHandlerPath: string;
+  remoteDataCacheHandlerPath: string;
+  disableDefaultMemoryCache?: boolean;
+}): CacheHandlerConfig;
 export function createCacheConfigWithProfiles(options: {
   /** Optional path to your own ISR `cacheHandler` file, passed through unchanged */
   isrHandlerPath?: string;

@@ -6,6 +6,7 @@ import { resetBuildInfoForTests } from "../handlers/build-info.js";
 import { resetBuildOutputForTests } from "../handlers/build-output.js";
 import { resetBuildIdForTests } from "../shared/build-id.js";
 import { closeAllRedisConnections, resetSplitWarningsForTests } from "../shared/connection.js";
+import { resetDeprecationsForTests } from "../shared/deprecation.js";
 import { resetCacheLoggerForTests } from "../shared/logger.js";
 import { resetMemoryBudgetWarningForTests } from "../shared/memory-budget.js";
 import { clearAllMemoryStores } from "../shared/memory-store.js";
@@ -47,6 +48,7 @@ export async function resetCacheState(): Promise<void> {
   resetBuildIdForTests();
   resetBuildOutputForTests();
   resetBuildInfoForTests();
+  resetDeprecationsForTests();
 }
 
 /**

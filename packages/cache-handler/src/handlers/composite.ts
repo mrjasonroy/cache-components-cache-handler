@@ -1,4 +1,5 @@
 import { nowMs } from "../shared/clock.js";
+import { warnDeprecated } from "../shared/deprecation.js";
 import { processLogger, writeLog } from "../shared/logger.js";
 import type {
   CacheHandler,
@@ -13,7 +14,7 @@ import type {
 /**
  * Options for the deprecated `CompositeHandler`.
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
  */
 export interface CompositeHandlerOptions extends CacheHandlerOptions {
   /**
@@ -54,7 +55,7 @@ export interface CompositeHandlerOptions extends CacheHandlerOptions {
  * });
  * ```
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
  */
 export class CompositeHandler implements CacheHandler {
   public readonly name = "composite";
@@ -63,6 +64,10 @@ export class CompositeHandler implements CacheHandler {
   private readonly setStrategy?: (data: CacheHandlerValue) => number;
 
   constructor(options: CompositeHandlerOptions) {
+    warnDeprecated(
+      "CompositeHandler",
+      "Use withCache(nextConfig): every handler has a built-in memory fallback.",
+    );
     if (!options.handlers || options.handlers.length === 0) {
       throw new Error("CompositeHandler requires at least one handler");
     }
@@ -177,7 +182,7 @@ export class CompositeHandler implements CacheHandler {
  * });
  * ```
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed on the Next 17 line.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
  */
 export function createCompositeHandler(options: CompositeHandlerOptions): CompositeHandler {
   return new CompositeHandler(options);

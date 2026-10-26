@@ -6,7 +6,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // The CI lanes pick the backend with env vars only: REDIS_URL / ELASTICACHE_* (unset → memory),
 // and E2E_CUSTOM_HANDLERS=1 to load the hand-written handler files in ./cache instead of the
-// built-in ones.
+// built-in ones. E2E_CONFIG=16.4.2 skips withCache and wires the app the way the 16.4.2 README
+// did (./upgrade-16.4.2).
 const handlers =
   process.env.E2E_CUSTOM_HANDLERS === "1"
     ? {
@@ -36,4 +37,18 @@ const nextConfig = {
   },
 };
 
-export default withCache(nextConfig, { handlers });
+// 16.4.2's documented setup: its handler files in cacheHandler / cacheHandlers, and
+// cacheMaxMemorySize: 0. No withCache.
+const config16_4_2 = {
+  ...nextConfig,
+  cacheHandler: resolve(__dirname, "./upgrade-16.4.2/cache-handler.mjs"),
+  cacheHandlers: {
+    default: resolve(__dirname, "./upgrade-16.4.2/data-cache-handler.mjs"),
+    remote: resolve(__dirname, "./upgrade-16.4.2/data-cache-handler.mjs"),
+  },
+  cacheMaxMemorySize: 0,
+};
+
+export default process.env.E2E_CONFIG === "16.4.2"
+  ? config16_4_2
+  : withCache(nextConfig, { handlers });

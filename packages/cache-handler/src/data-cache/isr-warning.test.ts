@@ -108,7 +108,7 @@ describe("ISR handler warning", () => {
 
       const handler = createCacheHandler({ type: "redis" });
       // Next constructs the page handler per request, after loading cacheHandlers.
-      new RedisCacheHandler({ redis: "redis://localhost:6379" });
+      new RedisCacheHandler({ url: "redis://localhost:6379" });
       void handler.refreshTags();
 
       expect(warn).not.toHaveBeenCalled();

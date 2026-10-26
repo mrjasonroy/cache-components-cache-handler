@@ -283,8 +283,8 @@ refresh; the client keeps its connections.
 
 ## Legacy data cache API
 
-The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.x and is removed, or becomes a shim, on the Next 17
-line. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
+The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.4.x, logs a one-time deprecation warning on first
+use, and is removed in 16.5.0. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
 `nextjs:tags:`) and covers `"use cache"` only, not pages.
 
 ### `createCacheHandler(options)`
@@ -360,8 +360,9 @@ export default createRedisDataCacheHandler({
 
 ## Deprecated
 
-Kept until the Next 17 line, with JSDoc pointing at the replacement. They keep working in 16.x;
-on the Next 17 line they are removed or become a thin shim over the replacement.
+Deprecated in 16.4.3, with JSDoc pointing at the replacement. They keep working in 16.4.x and
+log a one-time deprecation warning (once per process, per API) on first use. They are removed in
+16.5.0.
 
 | Deprecated | Use instead | Why |
 |---|---|---|

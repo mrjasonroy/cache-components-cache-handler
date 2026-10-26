@@ -665,14 +665,49 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(fake.ttlOf("app:development:page:/blog")).toBe(1);
     });
 
-    test("an invalid defaultTTL throws at construction, as for the remote handler", () => {
-      for (const defaultTTL of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "60" as never]) {
+    test("a defaultTTL that never cached in 16.4.2 throws at construction", () => {
+      for (const defaultTTL of [-1, Number.POSITIVE_INFINITY, "abc", "-5", "0", {}] as never[]) {
         expect(
           () => new RedisCacheHandler({ client: asClient(new FakeRedis()), defaultTTL }),
         ).toThrow(
           /RedisCacheHandler: defaultTTL must be a finite number of seconds greater than 0/,
         );
       }
+    });
+
+    test.each([
+      [0, "defaultTTL: 0"],
+      [Number.NaN, "defaultTTL: NaN"],
+      [null, "defaultTTL: null"],
+      ["", 'defaultTTL: ""'],
+      [false, "defaultTTL: false"],
+    ])(
+      "16.4.2's 'no expiry' defaultTTL %s boots with the default lifetime and says so",
+      async (defaultTTL, label) => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const fake = new FakeRedis();
+        const handler = new RedisCacheHandler({
+          client: asClient(fake),
+          keyPrefix: "app:",
+          defaultTTL: defaultTTL as never,
+        });
+        await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
+        expect(fake.ttlOf("app:development:page:/blog")).toBe(MAX_ENTRY_AGE_SECONDS);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`\`${label}\` (no expiry)`));
+      },
+    );
+
+    test("a numeric string defaultTTL (e.g. process.env.CACHE_TTL) is coerced, with a warning", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fake = new FakeRedis();
+      const handler = new RedisCacheHandler({
+        client: asClient(fake),
+        keyPrefix: "app:",
+        defaultTTL: "120" as never,
+      });
+      await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
+      expect(fake.ttlOf("app:development:page:/blog")).toBe(120);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("string `defaultTTL`"));
     });
 
     test("a URL string opens a connection from the URL", () => {
