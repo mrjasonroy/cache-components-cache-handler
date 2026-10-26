@@ -35,7 +35,8 @@ The same goes for a config built with `createCacheConfig`. Then delete `data-cac
 - Pages and route handlers now go through Redis too. Pass `{ pages: false }` to opt out.
 
 The cache starts cold, because the key layout is new. Every deploy starts cold anyway, because
-entries are scoped by build ID, so there is no data to migrate.
+entries are scoped by deployment ID when one is set, else by build ID, so there is no data to
+migrate.
 
 ### Revalidations do not cross the upgrade
 
@@ -72,16 +73,20 @@ delete the subclass and use `withCache`. If you keep it:
   none is set it runs in memory, and a production server logs a one-time warning; in 16.4.2 it
   connected to `localhost:6379`. Set `REDIS_URL=redis://localhost:6379` to keep that.
 - `tagPrefix` is ignored. Tag records live in the `<keyPrefix>tags` hash.
-- `defaultTTL` without a revalidate period now defaults to 365 days (16.4.2: no expiry). A falsy
+- `defaultTTL`, for entries with neither a revalidate period nor `expire`, now defaults to 365
+  days (16.4.2: no expiry). A falsy
   or non-numeric value (`0`, `NaN`, `null`, `"1h"`, ...), which 16.4.2 mostly read as "no expiry",
   is ignored with a warning; a numeric string such as `process.env.CACHE_TTL` is converted with a
   warning. A negative or infinite number throws. A numeric `defaultTTL` or `revalidate` now
   actually caches: 16.4.2's handler skipped those writes (a seconds/milliseconds bug).
 - `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
 
-Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read. Those 16.4.2 wrote with a TTL
-expire on their own; entries without one and the `nextjs:tags:<tag>` revalidation records stay
-until you delete them (for example `redis-cli --scan --pattern 'nextjs:tags:*'`).
+Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read. 16.4.2's page handler stored only
+entries without a TTL, so its `nextjs:cache:*` entries and `nextjs:tags:*` records stay until you
+delete them. List them with `redis-cli --scan --pattern 'nextjs:cache:*'` and
+`redis-cli --scan --pattern 'nextjs:tags:*'`. If your subclass keeps `keyPrefix: "nextjs:cache:"`,
+the first pattern also matches 16.4.3's own keys, and if you still use `createCacheHandler`, the
+second matches its tag records.
 
 ## From `@fortedigital/nextjs-cache-handler` or `@neshca/cache-handler`
 
@@ -92,8 +97,8 @@ until you delete them (for example `redis-cli --scan --pattern 'nextjs:tags:*'`)
 ```
 
 Delete `cache-handler.mjs`. `REDIS_URL` is read directly. neshca's `instrumentation.ts`
-`registerInitialCache` pre-population isn't needed: a miss on a prerendered page renders it once
-and stores it.
+`registerInitialCache` pre-population isn't needed: a miss on a prerendered page is served from
+the build output and stored in Redis.
 
 ## Deprecated exports
 
