@@ -18,9 +18,9 @@ export {
   type RemoteCacheHandlerOptions,
 } from "./data-cache/remote.js";
 export {
-  createRedisCacheHandler,
+  createPageCacheHandler,
+  type PageCacheHandlerOptions,
   RedisCacheHandler,
-  type RedisCacheHandlerOptions,
 } from "./handlers/redis.js";
 export type {
   PageCacheControl,
@@ -53,7 +53,7 @@ export type {
 } from "./shared/elasticache-iam.js";
 export { type CacheLogger, setCacheLogger } from "./shared/logger.js";
 export type { MemoryOptions } from "./shared/memory-budget.js";
-export { type CacheOptions, closeCache, MEMORY_ONLY_TAG } from "./shared/runtime.js";
+export { type CacheOptions, closeCache } from "./shared/runtime.js";
 
 // =============================================================================
 // Deprecated Next 14-era ISR handlers and helpers (kept until the Next 17 line)
@@ -64,6 +64,8 @@ export {
   type CompositeHandlerOptions,
   createCompositeHandler,
 } from "./handlers/composite.js";
+// Renamed PageCacheHandlerOptions
+export type { RedisCacheHandlerOptions } from "./handlers/redis.js";
 export {
   createMemoryCacheHandler,
   MemoryCacheHandler,

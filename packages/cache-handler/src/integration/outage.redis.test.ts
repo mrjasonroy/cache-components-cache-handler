@@ -21,7 +21,7 @@ import { createLocalCacheHandler } from "../data-cache/local.js";
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import type { DataCacheEntry } from "../data-cache/types.js";
 import type { PageCacheValue } from "../handlers/page-types.js";
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 import { flushCache } from "../shared/flush.js";
 import { FLUSH_TAG, tagIndexKey, tagsKey } from "../shared/keys.js";
 import { getCacheRuntime } from "../shared/runtime.js";
@@ -101,7 +101,7 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
    */
   function instance(n: number, buildId = "build-1") {
     const options = { url, keyPrefix: prefix, commandTimeout: 500 + n };
-    const Page = createRedisCacheHandler({ ...options, buildId });
+    const Page = createPageCacheHandler({ ...options, buildId });
     return {
       page: new Page({}),
       remote: createRemoteCacheHandler({ ...options, buildId }),

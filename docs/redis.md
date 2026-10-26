@@ -268,7 +268,7 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 
 ```
 <prefix><buildId>:page:<key>   page, route handler or cached fetch entry
-<prefix><buildId>:data:<key>   "use cache: remote" entry (and "use cache" with useCache: "redis")
+<prefix><buildId>:data:<key>   "use cache: remote" entry
 <prefix>tags                   hash of every tag record: field = tag, value = "<stale>,<expired>" in ms
 <prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```

@@ -6,13 +6,18 @@ are cached, and what happens when Redis goes down. Setup is in the
 
 ## What goes where
 
-`withCache` merges these settings into the config you pass:
+The package maps one to one onto Next's directives: `"use cache"` goes to `cacheHandlers.default`,
+`"use cache: remote"` to `cacheHandlers.remote`, and `"use cache: private"` never reaches a
+handler. There are no other modes. `withCache` merges these settings into the config you pass,
+whichever flag (`cacheComponents`, or Next's deprecated `experimental.useCache`) turned
+`"use cache"` on:
 
 | Next.js setting | Points at | What it does |
 |---|---|---|
 | `cacheHandler` (singular) | the page handler (`RedisCacheHandler`) | Page shells (`APP_PAGE`), route handler responses (`APP_ROUTE`) and cached `fetch` (`FETCH`) are stored in Redis. It honours `x-next-cache-tags`, soft tags, `cacheControl` and `revalidateTag(tag, { expire })`. |
 | `cacheHandlers.remote` | the remote handler (`createRemoteCacheHandler`) | `"use cache: remote"` entries are stored in Redis, shared by every instance. |
 | `cacheHandlers.default` | the local handler (`createLocalCacheHandler`) | `"use cache"` values are kept in each instance's memory. Tag invalidation still reaches every instance ([how](#distributed-tag-coordination-for-use-cache)). |
+| — | — | `"use cache: private"` is request-scoped on the server and kept by the browser's router cache; Next never hands it to a handler. |
 | `cacheMaxMemorySize: 0` | — | Has no effect on caching here. It sizes the memory LRU inside Next's own file-system page cache, which Next does not use once `cacheHandler` is set, and Next's built-in `"use cache"` handler, which `cacheHandlers` replaces. Without `withCache`, `0` in production turns Next's built-in `"use cache"` handler into a no-op. |
 
 What you get without configuring anything:

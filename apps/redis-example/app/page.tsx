@@ -1,9 +1,9 @@
 import { cacheLife, cacheTag } from "next/cache";
 import Link from "next/link";
 
-// Cached function - demonstrates "use cache" directive
+// Cached function - "use cache: remote" stores it in Redis, shared by every instance
 async function getCachedData() {
-  "use cache";
+  "use cache: remote";
   cacheLife("minutes"); // Cache for 15 minutes
   cacheTag("homepage-data");
 

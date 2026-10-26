@@ -6,7 +6,7 @@ import { describe, expectTypeOf, test } from "vitest";
 import type { createCacheHandler } from "../data-cache/factory.js";
 import type { LocalCacheHandlerOptions } from "../data-cache/local.js";
 import type { RemoteCacheHandlerOptions } from "../data-cache/remote.js";
-import type { RedisCacheHandlerOptions } from "../handlers/redis.js";
+import type { PageCacheHandlerOptions } from "../handlers/redis.js";
 import type { CacheOptions, flushCache } from "../index.js";
 
 interface Tuning {
@@ -24,7 +24,7 @@ describe("connection tuning on CacheOptions", () => {
     expectTypeOf<Pick<LocalCacheHandlerOptions, keyof Tuning>>().toEqualTypeOf<
       Pick<CacheOptions, keyof Tuning>
     >();
-    expectTypeOf<Pick<RedisCacheHandlerOptions, keyof Tuning>>().toEqualTypeOf<
+    expectTypeOf<Pick<PageCacheHandlerOptions, keyof Tuning>>().toEqualTypeOf<
       Pick<CacheOptions, keyof Tuning>
     >();
     expectTypeOf<NonNullable<Parameters<typeof flushCache>[0]>>().toMatchTypeOf<Tuning>();

@@ -42,7 +42,7 @@ vi.mock("./node-require.js", async (importOriginal) => {
 
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import { CompositeHandler } from "../handlers/composite.js";
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 import { withCache } from "../helpers/with-cache.js";
 import { setCacheLogger } from "../index.js";
 import { resetCacheState } from "../testing/env.js";
@@ -241,7 +241,7 @@ describe("the cache logger", () => {
     const own = recorder();
     const process = recorder();
     setCacheLogger(process.logger);
-    const Handler = createRedisCacheHandler({ url, keyPrefix: "app:", logger: own.logger });
+    const Handler = createPageCacheHandler({ url, keyPrefix: "app:", logger: own.logger });
     const handler = new Handler();
     await handler.get("/a", { kind: "APP_PAGE" } as never);
     redis.created[0]?.goDown();

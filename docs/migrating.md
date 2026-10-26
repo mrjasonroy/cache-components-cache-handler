@@ -19,8 +19,9 @@
 The same goes for a config built with `createCacheConfig`. Then delete `data-cache-handler.mjs`
 (and `cache-handler.mjs`). Two things change:
 
-- `"use cache"` now goes to memory and `"use cache: remote"` to Redis. Pass `{ useCache: "redis" }`
-  to keep both in Redis.
+- `"use cache"` now goes to each instance's memory (tag invalidation is still shared through
+  Redis) and `"use cache: remote"` to Redis, as Next's directives intend. If you relied on plain
+  `"use cache"` being shared through Redis, change those functions to `"use cache: remote"`.
 - Pages and route handlers now go through Redis too. Pass `{ pages: false }` to opt out.
 
 The cache starts cold, because the key layout is new. Every deploy starts cold anyway, because

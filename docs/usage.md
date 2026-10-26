@@ -1,15 +1,19 @@
 # Usage Examples
 
-With [`withCache`](./installation.md) in place, you write cached code with Next's own APIs. This
-page shows which cache each one lands in.
+With [`withCache`](./installation.md) in place, you write cached code with Next's own APIs. The
+package maps one to one onto Next's directives; there are no extra modes or options. This page
+shows which cache each one lands in.
 
-| You write | Stored in | Shared across instances |
-|---|---|---|
-| A page or route handler that Next prerenders or caches | Redis (the page handler) | yes |
-| `fetch(url, { cache: "force-cache" })` or `{ next: { revalidate } }` | Redis (the page handler) | yes |
-| `"use cache: remote"` | Redis | yes |
-| `"use cache"` | each instance's memory (Redis with `useCache: "redis"`) | values no, invalidation yes |
-| `"use cache: private"` | not this package: request-scoped on the server, then the browser's router cache | no |
+| You write | Next's handler | Stored in | Shared across instances |
+|---|---|---|---|
+| `"use cache"` | `cacheHandlers.default` | each instance's memory | values no, invalidation yes |
+| `"use cache: remote"` | `cacheHandlers.remote` | Redis | yes |
+| `"use cache: private"` | none: Next's own | request-scoped on the server, then the browser's router cache | no |
+| A page or route handler that Next prerenders or caches | `cacheHandler` | Redis (the page handler) | yes |
+| `fetch(url, { cache: "force-cache" })` or `{ next: { revalidate } }` | `cacheHandler` | Redis (the page handler) | yes |
+
+Without `REDIS_URL` everything stays in each instance's memory. To put an entry in Redis, use
+`"use cache: remote"`; to keep it per instance, use `"use cache"`.
 
 ## Basic caching
 
@@ -143,22 +147,6 @@ entries are shared by every user. When the output only varies by a few values (a
 tier), read the cookie outside the cached function and pass that value in: arguments are part of
 the cache key, so each value gets its own shared entry.
 See Next's [`"use cache: private"` docs](https://nextjs.org/docs/app/api-reference/directives/use-cache-private).
-
-## Keeping an entry out of Redis
-
-Some data is per instance by nature, such as a health check or the build info. Tag it with
-`MEMORY_ONLY_TAG` and it stays in that instance's memory:
-
-```tsx
-import { cacheTag } from "next/cache";
-import { MEMORY_ONLY_TAG } from "@mrjasonroy/cache-components-cache-handler";
-
-async function InstanceInfo() {
-  "use cache: remote";
-  cacheTag(MEMORY_ONLY_TAG);
-  return <pre>{process.env.HOSTNAME}</pre>;
-}
-```
 
 ## Flushing everything
 

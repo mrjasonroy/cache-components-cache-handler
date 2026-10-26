@@ -4,7 +4,7 @@ function newStamp(kind: string, id: string): string {
   return `${kind}:${id}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
-/** `"use cache"`: per-instance memory by default, Redis when E2E_USE_CACHE=redis. */
+/** `"use cache"`: per-instance memory, tag invalidation shared through Redis when configured. */
 export async function getLocalStamp(id: string): Promise<string> {
   "use cache";
   cacheLife({ stale: 60, revalidate: 300, expire: 3600 });

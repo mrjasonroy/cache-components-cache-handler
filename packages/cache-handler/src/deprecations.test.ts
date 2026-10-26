@@ -1,5 +1,6 @@
 /**
- * The legacy data cache stack, the Next 14 handlers' types and `RedisCacheHandler.close()` are
+ * The legacy data cache stack, the Next 14 handlers' types, `RedisCacheHandler.close()` and
+ * `RedisCacheHandlerOptions` are
  * deprecated in 16.4.3: each keeps
  * working in 16.x, and its JSDoc says so and names the replacement, so editors strike it through.
  */
@@ -40,6 +41,7 @@ describe("deprecations", () => {
       "createRemoteCacheHandler",
     ],
     ["handlers/redis.ts", "  async close(): Promise<void>", "closeCache"],
+    ["handlers/redis.ts", "export type RedisCacheHandlerOptions =", "PageCacheHandlerOptions"],
     // The Next 14 types, used only by the deprecated memory and composite handlers.
     ["types.ts", "export type CacheValue =", "PageCacheValue"],
     ["types.ts", "export interface LifespanParameters {", "no replacement"],

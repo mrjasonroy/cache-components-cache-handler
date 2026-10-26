@@ -16,13 +16,6 @@ import { nodeBuiltin } from "../shared/node-require.js";
  */
 export interface WithCacheOptions {
   /**
-   * Where `"use cache"` (no suffix) stores entries: `"memory"` keeps values per instance with
-   * shared tag invalidation, `"redis"` uses the same Redis handler as `"use cache: remote"`.
-   * @default "memory"
-   */
-  useCache?: "memory" | "redis";
-
-  /**
    * Set `cacheHandler` (pages, route handlers and cached `fetch`) and `cacheMaxMemorySize: 0`.
    * With `false`, a `cacheHandler` already in your config is kept.
    * @default true
@@ -80,9 +73,11 @@ export type NextConfigFunction<T extends object> = (
 
 /**
  * Configure the app's cache: pages and route handlers (`cacheHandler`), `"use cache"`
- * (`cacheHandlers.default`) and `"use cache: remote"` (`cacheHandlers.remote`), and
- * `cacheMaxMemorySize: 0`. Set `REDIS_URL` to share them across instances; without it everything
- * stays in memory.
+ * (`cacheHandlers.default`: per-instance memory, tag invalidation shared through Redis) and
+ * `"use cache: remote"` (`cacheHandlers.remote`: Redis), and `cacheMaxMemorySize: 0`.
+ * `"use cache: private"` is Next's own and never reaches a handler. Set `REDIS_URL` to share
+ * entries and tags across instances; without it everything stays in memory. Works with
+ * `cacheComponents: true` and with Next's deprecated `experimental.useCache` alike.
  *
  * Accepts a config object or a config function; a function is wrapped in an async one that
  * applies `withCache` to its result. An explicit `cacheMaxMemorySize` is kept, with a warning
@@ -125,7 +120,7 @@ function applyCache<T extends object>(
   options: WithCacheOptions,
 ): T & WithCacheConfig {
   const config = nextConfig as T & Partial<WithCacheConfig>;
-  const { useCache = "memory", pages = true, handlers = {}, memory } = options;
+  const { pages = true, handlers = {}, memory } = options;
   // With `pages: false` the page handler is the user's own business, so their cacheHandler stays.
   if ((pages && config.cacheHandler !== undefined) || config.cacheHandlers !== undefined) {
     throw new Error(
@@ -134,11 +129,7 @@ function applyCache<T extends object>(
   }
 
   const remote = handlers.remote ? resolvePath(handlers.remote) : entryPath("remote");
-  const defaultHandler = handlers.default
-    ? resolvePath(handlers.default)
-    : useCache === "redis"
-      ? remote
-      : entryPath("default");
+  const defaultHandler = handlers.default ? resolvePath(handlers.default) : entryPath("default");
 
   handOverMemoryOptions(memory, (config as { output?: unknown }).output);
 

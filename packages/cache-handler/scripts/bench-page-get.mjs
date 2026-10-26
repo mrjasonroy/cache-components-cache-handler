@@ -15,16 +15,16 @@ import Redis from "ioredis";
 const url = process.env.BENCH_REDIS_URL ?? "redis://127.0.0.1:6379";
 const rounds = Number(process.env.BENCH_ROUNDS ?? 3000);
 const dist = resolve(process.env.BENCH_DIST ?? new URL("../dist", import.meta.url).pathname);
-const { createRedisCacheHandler, flushCache } = await import(
+const { createPageCacheHandler, flushCache } = await import(
   pathToFileURL(resolve(dist, "index.js")).href
 );
 
 const prefix = `bench:${randomUUID()}:`;
 const raw = new Redis(url);
-const Handler = createRedisCacheHandler({ url, keyPrefix: prefix, buildId: "bench" });
+const Handler = createPageCacheHandler({ url, keyPrefix: prefix, buildId: "bench" });
 const handler = new Handler({});
 // A second instance (its own connection and process state) that has never read the entries.
-const ColdHandler = createRedisCacheHandler({
+const ColdHandler = createPageCacheHandler({
   url,
   keyPrefix: prefix,
   buildId: "bench",

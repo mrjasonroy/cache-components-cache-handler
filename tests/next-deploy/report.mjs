@@ -326,7 +326,6 @@ const json = {
   commit: process.env.GITHUB_SHA ?? null,
   options: {
     shards,
-    useCache: process.env.NEXT_DEPLOY_USE_CACHE ?? "memory",
     instances: Number(process.env.NEXT_DEPLOY_INSTANCES ?? 2),
   },
   variants: totals,

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { encodeEntry } from "../shared/codec.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
-import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
@@ -177,11 +176,12 @@ describe("createRemoteCacheHandler", () => {
     expect(await b.get("k", [])).toBeUndefined();
   });
 
-  test("MEMORY_ONLY_TAG keeps the entry in process memory", async () => {
+  test("with Redis every entry goes to Redis: no tag keeps one in memory", async () => {
+    // 16.4.3 release candidates had a `cache:memory-only` tag; it is an ordinary tag now.
     const fake = new FakeRedis();
     const handler = createRemoteCacheHandler({ client: asClient(fake), buildId: "b1" });
-    await handler.set("k", entry("x", { tags: [MEMORY_ONLY_TAG] }));
-    expect(await fake.exists(KEY)).toBe(0);
+    await handler.set("k", entry("x", { tags: ["cache:memory-only"] }));
+    expect(await fake.exists(KEY)).toBe(1);
     expect(await read(await handler.get("k", []))).toBe("x");
   });
 

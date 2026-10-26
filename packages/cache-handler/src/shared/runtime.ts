@@ -43,12 +43,6 @@ import {
 import { TagStore } from "./tag-store.js";
 
 /**
- * Tag an entry with this (`cacheTag(MEMORY_ONLY_TAG)`, or in a page's tags) to keep it out of
- * Redis, for per-instance data such as health checks or build info.
- */
-export const MEMORY_ONLY_TAG = "cache:memory-only";
-
-/**
  * Longest time an entry written while Redis is down is served, in seconds.
  */
 export const FALLBACK_TTL_SECONDS = 60;
@@ -150,11 +144,11 @@ export interface RuntimeOptions extends CacheOptions {
  * The in-process stores.
  */
 export interface RuntimeStores {
-  /** Page entries kept in memory: memory-only ones, or all of them without Redis. */
+  /** Page entries kept in memory without Redis. */
   page: MemoryStore<unknown>;
   /** Page entries written while Redis is down. Emptied on reconnect. */
   pageFallback: MemoryStore<unknown>;
-  /** Remote data entries kept in memory: memory-only ones, or all of them without Redis. */
+  /** Remote data entries kept in memory without Redis. */
   data: MemoryStore<unknown>;
   /** Remote data entries written while Redis is down. Emptied on reconnect. */
   dataFallback: MemoryStore<unknown>;
@@ -388,8 +382,8 @@ export function acquireCacheRuntime(options: RuntimeOptions = {}): {
  * Caps of the in-process stores for this process's memory budget (see `memory-budget.ts` and the
  * Memory section of docs/operations.md): a share of the V8 heap, 10% by default, split 16/16/16/16
  * /32/2 across `page`, `pageFallback`, `data`, `dataFallback`, `local` and `entryTags`. With Redis
- * healthy only `local` and `entryTags` fill (plus `page` and `data` for `MEMORY_ONLY_TAG` entries);
- * without Redis `page` and `data` hold everything; the fallbacks fill only during an outage and
+ * configured only `local` and `entryTags` fill; without Redis (no URL, `next build`,
+ * `CACHE_REDIS=off`) `page` and `data` hold every entry; the fallbacks fill only during an outage and
  * are emptied on reconnect. An entry larger than its store's cap is not kept in memory. Throws on
  * an invalid `CACHE_MEMORY_*` value; warns once per process when the budget is over half the heap
  * limit.

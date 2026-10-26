@@ -3,7 +3,8 @@
 ## Prerequisites
 
 - Node.js 22.3+
-- Next.js 16+ with `cacheComponents: true`
+- Next.js 16+ with `cacheComponents: true` (Next's deprecated `experimental.useCache` flag works
+  too: `withCache` never checks which flag turned `"use cache"` on)
 - Redis 7+ (6.2 at the least, with scripting allowed), Valkey or AWS ElastiCache for
   multi-instance deployments. Nothing is needed for dev or a single instance.
 
@@ -32,13 +33,15 @@ export default withCache({
 ```
 
 That one call sets `cacheHandler` (pages, route handlers, cached `fetch`), `cacheHandlers.default`
-(`"use cache"`), `cacheHandlers.remote` (`"use cache: remote"`) and `cacheMaxMemorySize: 0`. Don't
+(`"use cache"`: each instance's memory, tag invalidation shared through Redis),
+`cacheHandlers.remote` (`"use cache: remote"`: Redis) and `cacheMaxMemorySize: 0`.
+`"use cache: private"` is Next's own and needs nothing. Don't
 set any of those yourself: `withCache` throws if the config already has `cacheHandlers`, or
 `cacheHandler` unless you pass `pages: false`. The [What goes where](./how-it-works.md#what-goes-where) table says what each one does.
 
 `nextConfig` can also be a config function, `(phase, { defaultConfig }) => config`, sync or
 async. `withCache` then returns an async function that applies the same settings to its result.
-The options (`useCache`, `pages`, `handlers`, `memory`) are in the [README](../README.md#withcachenextconfig-options)
+The options (`pages`, `handlers`, `memory`) are in the [README](../README.md#withcachenextconfig-options)
 and the [API reference](./api-reference.md#withcachenextconfig-options).
 
 The handler files ship inside the package, so there are no handler files to write. For your own
@@ -132,7 +135,7 @@ If a dev `.env` file carries `REDIS_URL`, the dev server will use Redis; remove 
    Pages sit under `nextjs:<buildId>:page:`, `"use cache: remote"` entries under
    `nextjs:<buildId>:data:`, and tag records in the `nextjs:tags` hash, indexed by
    `nextjs:tag-index` (both appear after the first revalidation). Plain `"use cache"` values stay
-   in memory unless you pass `{ useCache: "redis" }`.
+   in each instance's memory; use `"use cache: remote"` for an entry you want in Redis.
 
 A local Redis for this is one command away: `pnpm docker:up` in this repo, or
 `docker run -d -p 6379:6379 redis:7-alpine`.

@@ -94,14 +94,15 @@ or connections have one each, and each gets the full budget.
 |---|---|---|---|
 | `"use cache"` values (the local handler) | 32/98, and at most 10,000 entries | 27 MiB | Always |
 | Tag lists of entries read or written | 2/98, and at most 10,000 entries | 1.7 MiB | With Redis |
-| Page entries kept in memory | 16/98 | 13 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
-| `"use cache: remote"` entries kept in memory | 16/98 | 13 MiB | Without Redis, or `MEMORY_ONLY_TAG` entries |
+| Page entries kept in memory | 16/98 | 13 MiB | Without Redis (no URL, `next build`, `CACHE_REDIS=off`) |
+| `"use cache: remote"` entries kept in memory | 16/98 | 13 MiB | Without Redis (no URL, `next build`, `CACHE_REDIS=off`) |
 | Page entries written during an outage | 16/98 | 13 MiB | Redis down; emptied on reconnect |
 | `"use cache: remote"` entries written during an outage | 16/98 | 13 MiB | Redis down; emptied on reconnect |
 | Tag records | about 150 bytes per tag, outside the budget | | Always |
 
-So about 35% of the budget at most while Redis is healthy (67% if you use `MEMORY_ONLY_TAG`),
-65% without Redis, and all of it during an outage. An entry larger than its store's cap is not
+So about 35% of the budget at most while Redis is healthy, 67% during an outage and 65% without
+Redis. The in-memory page and remote stores fill only without Redis and the outage stores only
+with it, so the two pairs never fill at the same time. An entry larger than its store's cap is not
 kept in memory. Sizes count values and keys, not JavaScript object overhead, so heap use runs
 somewhat higher.
 
@@ -175,7 +176,7 @@ setCacheLogger({ error: log("error"), warn: log("warn"), info: log("info"), debu
 ```
 
 In a [custom handler file](./custom-handlers.md), `createRemoteCacheHandler`,
-`createLocalCacheHandler` and `createRedisCacheHandler` also take `logger`, which wins over
+`createLocalCacheHandler` and `createPageCacheHandler` also take `logger`, which wins over
 `setCacheLogger` for that handler. The Redis connection and tag state that handlers share log
 through the logger of the handler that opened them, so give every handler the same one, or use
 `setCacheLogger`.

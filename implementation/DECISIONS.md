@@ -7,6 +7,43 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-13: The package maps one to one onto Next's directives (16.4.3)
+
+**Rule (the maintainer's).** `"use cache"` → `cacheHandlers.default`: per-instance memory with tag
+invalidation shared through Redis. `"use cache: remote"` → `cacheHandlers.remote`: Redis.
+`"use cache: private"` is Next's and never reaches a handler. Pages, route handlers and cached
+`fetch` go to the singular `cacheHandler`. No custom directives, modes, magic tags or extra options:
+which cache an entry lands in is decided by the directive the app wrote, as Next documents it.
+
+**Removed before release** (each existed only in the 16.4.3 release candidates, checked against
+the `v16.4.2` tag, so no aliases):
+
+- `withCache`'s `useCache: "memory" | "redis"`. It made plain `"use cache"` mean Redis, a second
+  name for `"use cache: remote"`. `withCache` options are now `pages`, `handlers` and `memory`;
+  `handlers.default` remains the escape hatch for a custom file. The e2e matrix's `use_cache`
+  column and the deploy-test `use_cache` input went with it; `"use cache: remote"` on Redis stays
+  covered by every Redis lane (`getRemoteStamp`, the cross-instance specs) and the deploy suites.
+- `MEMORY_ONLY_TAG` (`"cache:memory-only"`), a tag that kept a page or remote entry out of Redis.
+  A magic tag is a mode under another name; per-instance data is what `"use cache"` is for. The tag
+  is now ordinary. With it gone, the page and remote handlers write to Redis whenever a connection
+  exists, so their in-memory `page` and `data` stores fill only without Redis (no URL,
+  `next build`, `CACHE_REDIS=off`), and their `get` reads those stores only then; `readWithTags`
+  lost its `inMemory` argument, which was only ever set for memory-only entries.
+- `createRedisCacheHandler` is renamed `createPageCacheHandler`: it builds the `cacheHandler`
+  (page) handler, and "Redis" no longer says which one. Its options type is renamed
+  `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` was exported by 16.4.2, so it stays as a
+  deprecated alias, as does the `RedisCacheHandler` class (not deprecated: it is the page handler).
+
+**Memory split.** `MEMORY_STORE_SHARES` (DEC-9, DEC-11) is unchanged. No store is dead: `page` and
+`data` hold every page and remote entry without Redis, which is how dev, CI, previews and
+`next build` run; `pageFallback` and `dataFallback` fill only during an outage. The two pairs are
+now mutually exclusive in a runtime (one has a connection or it does not), so at most about 35% of
+the budget fills with Redis healthy, 67% during an outage and 65% without Redis; no state fills
+all of it. Rebalancing for that is possible but was left alone.
+
+**`experimental.useCache`.** Next's deprecated flag still turns `"use cache"` on. `withCache`
+never looks at which flag is set, so it works with either; a unit test covers it.
+
 ## DEC-12: ElastiCache IAM authentication, built in (16.4.3)
 
 **Why.** The docs said "for IAM auth, build your own client", with no example, and the obvious
@@ -205,8 +242,8 @@ added up to about 336 MiB per runtime: `local` 10,000 entries / 50 MiB, `page` a
 records were never pruned, and the deprecated handlers' tag maps were unbounded.
 
 **What fills when.** With Redis healthy only `local` (every `"use cache"` value) and `entryTags`
-fill; `page` and `data` hold only `MEMORY_ONLY_TAG` entries. Without Redis, `page` and `data`
-hold everything and `entryTags` is unused. `pageFallback` and `dataFallback` fill only while
+fill; `page` and `data` stay empty (until DEC-13 they held `MEMORY_ONLY_TAG` entries). Without
+Redis, `page` and `data` hold everything and `entryTags` is unused. `pageFallback` and `dataFallback` fill only while
 Redis is down, at most 60 s per entry, and are emptied on reconnect.
 
 **Decision.** Smaller fixed caps, no new option or environment variable (the maintainer's rule):
@@ -263,8 +300,8 @@ sets 0, which is harmless, and its warning for another value now says it has no 
 days. Page `lifetimeOf` caps `1.5 × revalidate`, `expire`, and the default (including
 `revalidate: false`). Page reads also reject `lastModified` older than that bound. The remote
 handler caps finite `cacheLife.expire`, substitutes its bounded `defaultTTL` for infinite
-expire, caps Redis EX on write, and checks age on read. Memory-only remote entries and the
-local handler's `timestamp + revalidate` are capped too. Outage memory lasts at most 60 seconds.
+expire, caps Redis EX on write, and checks age on read. Remote entries kept in memory without Redis and
+the local handler's `timestamp + revalidate` are capped too. Outage memory lasts at most 60 seconds.
 Thus stale-while-revalidate never extends a stored value beyond 365 days. Legacy
 `createCacheHandler` uses separate per-tag keys with its own `tagTTL`; it does not read this hash.
 
@@ -334,7 +371,7 @@ lines straight to the console.
   every module graph sees it, from `instrumentation.ts` or a handler file. `logger` on
   `CacheOptions` serves custom handler files, where options are passed in process
   (`createRemoteCacheHandler`, `createLocalCacheHandler`, `RedisCacheHandler` /
-  `createRedisCacheHandler`; `flushCache` takes it too). Precedence: the option, then the process
+  `createPageCacheHandler`; `flushCache` takes it too). Precedence: the option, then the process
   logger, then the console, decided for each line, so a logger set after the handlers were
   created still applies. The connection and tag state are shared by every handler of a
   connection and key prefix (DEC-3, DEC-6); they log through the logger of the handler that opened them,
@@ -506,7 +543,7 @@ Wired into `"use cache: remote"` (`data-cache/remote.ts`) and the page handler
 ### Connection tuning (ISSUE-3)
 
 `connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts` are honoured on the 16.5 path
-only: `createCacheHandler` options, and `RedisCacheHandler` / `createRedisCacheHandler` options
+only: `createCacheHandler` options, and `RedisCacheHandler` / `createPageCacheHandler` options
 including the `redis: RedisOptions` form, through `RuntimeOptions` → `resolveConnection` →
 `shared/connection.ts`. With a `client`, only `maxConsecutiveTimeouts` applies (the client's own
 options are never changed). `withCache` stays environment-only: there is no environment variable for them.

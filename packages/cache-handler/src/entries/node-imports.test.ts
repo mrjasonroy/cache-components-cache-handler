@@ -68,7 +68,7 @@ describe("handler entries' import graph (bundled into the edge middleware)", () 
   );
 
   test("the package root loads no Node built-in or package at import time", () => {
-    // A custom handler file imports `createRedisCacheHandler` from the root, and Next bundles that
+    // A custom handler file imports `createPageCacheHandler` from the root, and Next bundles that
     // file into the edge middleware too.
     expect(Object.fromEntries(externalImports(join(src, "index.ts")))).toEqual({});
   });
