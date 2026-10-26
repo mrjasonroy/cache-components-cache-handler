@@ -159,7 +159,7 @@ jobs:
             found { print }
           ' CHANGELOG.md)
           if [ -n "$CHANGELOG_SECTION" ]; then
-            CHANGELOG_SECTION=$(printf '%s\n\n---\n' "$CHANGELOG_SECTION")
+            CHANGELOG_SECTION=$(printf '## Release notes\n\n%s\n\n---\n' "$CHANGELOG_SECTION")
           fi
 
           # Create release notes with installation instructions, the CHANGELOG section and
