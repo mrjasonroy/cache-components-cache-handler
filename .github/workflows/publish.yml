@@ -148,9 +148,24 @@ jobs:
             -f tag_name="$TAG" \
             --jq '.body')
 
-          # Create release notes with installation instructions + auto-generated notes.
-          # The generated notes include a "New Contributors" section that @-mentions
-          # first-time contributors; the thank-you below makes the acknowledgement explicit.
+          # The CHANGELOG.md section for this version (a release candidate uses its final
+          # version's section, e.g. 16.4.3-rc.4 -> "## [16.4.3]"), without its heading.
+          # Empty when CHANGELOG.md has no such section; the release then carries only the
+          # generated notes, as before.
+          BASE_VERSION="${VERSION%%-*}"
+          CHANGELOG_SECTION=$(awk -v heading="## [$BASE_VERSION]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md)
+          if [ -n "$CHANGELOG_SECTION" ]; then
+            CHANGELOG_SECTION=$(printf '%s\n\n---\n' "$CHANGELOG_SECTION")
+          fi
+
+          # Create release notes with installation instructions, the CHANGELOG section and
+          # the auto-generated notes. The generated notes include a "New Contributors" section
+          # that @-mentions first-time contributors; the thank-you below makes the
+          # acknowledgement explicit.
           RELEASE_NOTES=$(cat <<EOF
           ## Installation
 
@@ -162,6 +177,7 @@ jobs:
 
           ---
 
+          $CHANGELOG_SECTION
           $GENERATED_NOTES
 
           ---
