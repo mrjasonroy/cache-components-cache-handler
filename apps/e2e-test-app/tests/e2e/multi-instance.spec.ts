@@ -35,6 +35,22 @@ test.describe("Two instances sharing Redis", () => {
     await waitForChange(INSTANCE_B, path, "remote", onA);
   });
 
+  test('plain "use cache" is per instance, "use cache: remote" is shared', async () => {
+    const id = uniqueId("multi-split");
+    const path = `/e2e/data?id=${id}`;
+
+    // Each instance renders and keeps its own "use cache" value: the stamps differ.
+    const localA = await waitForStable(INSTANCE_A, path, "local");
+    const localB = await waitForStable(INSTANCE_B, path, "local");
+    expect(localB, '"use cache" must not be shared through Redis').not.toBe(localA);
+
+    // The remote value from the same page is one copy in Redis for both.
+    const remoteA = await waitForStable(INSTANCE_A, path, "remote");
+    await expect(async () => {
+      expect(await readStamp(INSTANCE_B, path, "remote")).toBe(remoteA);
+    }).toPass({ timeout: 15_000 });
+  });
+
   test('"use cache" on B is invalidated by revalidateTag on A (distributed tags)', async () => {
     const id = uniqueId("multi-local");
     const path = `/e2e/data?id=${id}`;

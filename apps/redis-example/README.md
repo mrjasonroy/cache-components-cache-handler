@@ -1,6 +1,6 @@
 # Redis Cache Example
 
-Minimal example demonstrating Next.js 16 "use cache" directive with Redis.
+Minimal example demonstrating Next.js 16 `"use cache: remote"` with Redis.
 
 ## Quick Start
 
@@ -18,9 +18,10 @@ Then open [http://localhost:3000](http://localhost:3000)
 
 ### 1. One line of config
 
-`next.config.mjs` is `withCache({ cacheComponents: true }, { useCache: "redis" })`. There are no
-handler files to write. Pages, `"use cache"` and `"use cache: remote"` all go to Redis when
-`REDIS_URL` is set, and stay in memory when it is not.
+`next.config.mjs` is `withCache({ cacheComponents: true })`. There are no handler files to
+write. Pages and `"use cache: remote"` go to Redis when `REDIS_URL` is set, and stay in memory when
+it is not. Plain `"use cache"` would keep values in each instance's memory, with tag invalidation
+shared through Redis; this example uses `"use cache: remote"` so every entry shows up in Redis.
 
 ### 2. Cache Usage During Serve
 
@@ -82,7 +83,7 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 
 ## How It Works
 
-1. **`"use cache"` directive** - Marks functions for caching
+1. **`"use cache: remote"` directive** - Marks functions for caching in Redis
 2. **`cacheLife()`** - Sets cache duration (minutes, hours, days, etc.)
 3. **`cacheTag()`** - Tags cache entries for selective invalidation
 4. **`revalidateTag()`** - Invalidates specific cache tags
@@ -93,7 +94,7 @@ docker exec -it redis-example-redis-1 redis-cli FLUSHDB
 ```
 ┌──────────────────┐
 │   Next.js App    │
-│  (use cache)     │
+│(use cache:remote)│
 └────────┬─────────┘
          │
          ├─ Build time: Pre-renders pages in memory, never touches Redis

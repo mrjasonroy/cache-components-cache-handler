@@ -30,9 +30,31 @@ describe("withCache", () => {
     }
   });
 
-  test('useCache: "redis" points the default handler at the remote one', () => {
-    const config = withCache({}, { useCache: "redis" });
-    expect(config.cacheHandlers.default).toBe(config.cacheHandlers.remote);
+  test('"use cache" always gets the local handler, "use cache: remote" the Redis one', () => {
+    const config = withCache({ cacheComponents: true });
+    expect(config.cacheHandlers.default).not.toBe(config.cacheHandlers.remote);
+    expect(basename(config.cacheHandlers.default)).toBe("default.js");
+  });
+
+  test("works with Next's deprecated experimental.useCache flag too", () => {
+    // withCache never checks which flag turned "use cache" on.
+    const config = withCache({ experimental: { useCache: true } });
+    expect(config.experimental).toEqual({ useCache: true });
+    expect(basename(config.cacheHandler ?? "")).toBe("page.js");
+    expect(basename(config.cacheHandlers.default)).toBe("default.js");
+    expect(basename(config.cacheHandlers.remote)).toBe("remote.js");
+    expect(config.cacheMaxMemorySize).toBe(0);
+  });
+
+  test("throws on an unknown option; useCache names its replacement", () => {
+    const removed = { useCache: "redis" } as unknown as Parameters<typeof withCache>[1];
+    expect(() => withCache({}, removed)).toThrow(
+      /useCache option was removed.*"use cache: remote"/,
+    );
+    expect(() => withCache(() => ({}), removed)).toThrow(/useCache option was removed/);
+    const typo = { page: false } as unknown as Parameters<typeof withCache>[1];
+    expect(() => withCache({}, typo)).toThrow(/unknown option "page"/);
+    expect(() => withCache({}, { pages: true, handlers: {}, memory: { maxMiB: 8 } })).not.toThrow();
   });
 
   test("pages: false leaves cacheHandler and cacheMaxMemorySize alone", () => {
@@ -72,13 +94,11 @@ describe("withCache", () => {
   });
 
   test("a function-form config is wrapped: the user's config is kept, sync or async", async () => {
-    const sync = withCache((phase: string) => ({ cacheComponents: true, env: { phase } }), {
-      useCache: "redis",
-    });
+    const sync = withCache((phase: string) => ({ cacheComponents: true, env: { phase } }));
     const fromSync = await sync("phase-production-server", { defaultConfig: {} });
     expect(fromSync.env).toEqual({ phase: "phase-production-server" });
     expect(fromSync.cacheComponents).toBe(true);
-    expect(fromSync.cacheHandlers.default).toBe(fromSync.cacheHandlers.remote);
+    expect(basename(fromSync.cacheHandlers.remote)).toBe("remote.js");
 
     const asyncConfig = withCache(async () => ({ basePath: "/docs" }));
     const fromAsync = await asyncConfig("phase-development-server", { defaultConfig: {} });

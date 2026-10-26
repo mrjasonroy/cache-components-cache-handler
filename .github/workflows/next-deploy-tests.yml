@@ -29,11 +29,6 @@ on:
         description: "Extended regex over tests/next-deploy/suites.txt lines (empty = all)"
         type: string
         default: ""
-      use_cache:
-        description: "withCache useCache option for the branch variant"
-        type: choice
-        options: [memory, redis]
-        default: memory
       instances:
         description: "next start instances behind the proxy (pkg-16.4.2 and branch)"
         type: choice
@@ -50,7 +45,6 @@ concurrency:
 
 env:
   SUITE_FILTER: ${{ inputs.suite_filter || '' }}
-  NEXT_DEPLOY_USE_CACHE: ${{ inputs.use_cache || 'memory' }}
   NEXT_DEPLOY_INSTANCES: ${{ inputs.instances || '2' }}
   CACHE_DEBUG: ${{ inputs.debug && '1' || '' }}
   NEXT_PRIVATE_DEBUG_CACHE: ${{ inputs.debug && '1' || '' }}

@@ -1,10 +1,7 @@
 # Redis Configuration
 
-`withCache` connects to Redis from the environment and needs `ioredis` installed:
-
-```bash
-npm install ioredis
-```
+`withCache` connects to Redis from the environment through `ioredis`, an optional dependency
+installed with the package ([unless your package manager skips optionals](./installation.md#install)).
 
 Most deployments only set `REDIS_URL`. This page covers the other connection forms, running
 Redis, and what operators see in it.
@@ -268,7 +265,7 @@ In this repo, `pnpm docker:up` starts Redis on 6379, Valkey on 6380 and Redis Co
 
 ```
 <prefix><buildId>:page:<key>   page, route handler or cached fetch entry
-<prefix><buildId>:data:<key>   "use cache: remote" entry (and "use cache" with useCache: "redis")
+<prefix><buildId>:data:<key>   "use cache: remote" entry
 <prefix>tags                   hash of every tag record: field = tag, value = "<stale>,<expired>" in ms
 <prefix>tag-index              sorted set of the same tags, scored by last update (ms)
 ```

@@ -1,7 +1,8 @@
 # Cache Components Cache Handler
 
-One Redis-backed cache for a Next.js 16+ app: pages, route handlers, `"use cache"` and
-`"use cache: remote"`, shared across every instance and safe through a Redis outage.
+One Redis-backed cache for a Next.js 16+ app, safe through a Redis outage: pages, route handlers
+and `"use cache: remote"` shared across every instance, and `"use cache"` in each instance's
+memory with revalidation shared across all of them.
 
 [![npm version](https://badge.fury.io/js/@mrjasonroy%2Fcache-components-cache-handler.svg)](https://www.npmjs.com/package/@mrjasonroy/cache-components-cache-handler)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -31,14 +32,18 @@ REDIS_URL=redis://cache:6379   # unset → everything stays in memory (dev, CI, 
 ```
 
 That's it. You keep writing `"use cache"`, `cacheTag` and `revalidateTag` as Next documents them
-([examples](./docs/usage.md)). `ioredis` is installed automatically as an optional dependency.
+([examples](./docs/usage.md)). `ioredis` is installed automatically as an optional dependency
+([unless optionals are skipped](./docs/installation.md#install)).
 
 ## What you get
 
 - **Pages and route handlers** (and cached `fetch`) stored in Redis, shared by every instance.
   Prerendered pages are served from the build output after a restart.
-- **`"use cache"` and `"use cache: remote"`.** Remote entries live in Redis; plain `"use cache"`
-  stays in each instance's memory (or Redis, with `useCache: "redis"`).
+- **Next's directives, one to one.** `"use cache: remote"` entries live in Redis, shared by every
+  instance; plain `"use cache"` stays in each instance's memory, with tag invalidation shared
+  through Redis. `"use cache: private"` is Next's own and never reaches a handler. There are no
+  extra modes: pick the directive. Next's deprecated `experimental.useCache` flag works as well as
+  `cacheComponents`.
 - **Revalidation across instances.** `revalidateTag`, `updateTag` and `revalidatePath` reach
   every instance and every handler, including each instance's in-memory `"use cache"` values.
 - **Redis outage safety.** A request never fails because of the cache. Commands time out after
@@ -57,15 +62,11 @@ These options are read when `next.config` loads. Runtime settings come from the 
 
 | Option | Default | What it does |
 |---|---|---|
-| `useCache` | `"memory"` | Where plain `"use cache"` stores entries. `"memory"` keeps values per instance with shared tag invalidation. `"redis"` uses the same Redis handler as `"use cache: remote"`. |
 | `pages` | `true` | Set `cacheHandler` (pages, route handlers, cached `fetch`) and `cacheMaxMemorySize: 0`. A `cacheMaxMemorySize` you set yourself is kept, with a warning if it is not `0`. `false` leaves `cacheHandler` and `cacheMaxMemorySize` as your config has them. |
 | `handlers` | built-in files | `{ page?, default?, remote? }`: paths to [your own handler files](./docs/custom-handlers.md). |
 | `memory` | `{ heapPercent: 10 }` | The in-process cache budget per runtime: `heapPercent` of V8's heap limit (a little above `--max-old-space-size`), or `maxMiB` (an absolute budget, which wins). Wins over the `CACHE_MEMORY_*` variables. Not seen by a standalone `server.js`, which never loads `next.config`: use the variables there. See [Memory](./docs/operations.md#memory). |
 
 ```js
-// Keep plain "use cache" in Redis too (every entry is visible with redis-cli)
-export default withCache({ cacheComponents: true }, { useCache: "redis" });
-
 // "use cache" only; leave pages to Next's default cache
 export default withCache({ cacheComponents: true }, { pages: false });
 ```
@@ -150,7 +151,8 @@ script, so the server must allow `EVAL`/`EVALSHA`. CI runs Redis 7 and Valkey 8.
 
 From 16.4.2, replace your handler files and `cacheHandlers` config with
 `withCache({ cacheComponents: true })` and delete the files. `"use cache"` then goes to memory and
-`"use cache: remote"` to Redis, and pages go through Redis too. The cache starts cold, and
+`"use cache: remote"` to Redis (use `"use cache: remote"` for anything that must be shared), and
+pages go through Redis too. The cache starts cold, and
 revalidations do not cross between 16.4.2 and 16.4.3 instances during a rolling deploy: deploy
 with recreate, or revalidate once afterwards. `RedisCacheHandler` subclasses keep working.
 

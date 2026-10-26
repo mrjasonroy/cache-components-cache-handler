@@ -3,6 +3,6 @@
  * from the environment.
  */
 
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 
-export default createRedisCacheHandler();
+export default createPageCacheHandler();

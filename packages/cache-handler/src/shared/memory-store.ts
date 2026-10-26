@@ -1,6 +1,6 @@
 /**
  * A size- and count-bounded LRU of entries with an optional expiry, used for every in-process
- * store: memory-only entries, the no-Redis mode, the outage fallback and `"use cache"` values.
+ * store: the no-Redis mode, the outage fallback and `"use cache"` values.
  *
  * Every store registers itself on a `globalThis` registry so `flushCache` can empty all of them.
  */

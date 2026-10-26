@@ -19,8 +19,9 @@
 The same goes for a config built with `createCacheConfig`. Then delete `data-cache-handler.mjs`
 (and `cache-handler.mjs`). Two things change:
 
-- `"use cache"` now goes to memory and `"use cache: remote"` to Redis. Pass `{ useCache: "redis" }`
-  to keep both in Redis.
+- `"use cache"` now goes to each instance's memory (tag invalidation is still shared through
+  Redis) and `"use cache: remote"` to Redis, as Next's directives intend. If you relied on plain
+  `"use cache"` being shared through Redis, change those functions to `"use cache: remote"`.
 - Pages and route handlers now go through Redis too. Pass `{ pages: false }` to opt out.
 
 The cache starts cold, because the key layout is new. Every deploy starts cold anyway, because
@@ -38,7 +39,8 @@ cached can stay stale until its tag is revalidated again or the entry expires (u
 - once the last 16.4.2 instance is gone, revalidate once from a 16.4.3 instance:
   `revalidatePath("/", "layout")`, or the tags that changed during the rollout. That goes through
   the shared tag store, so it reaches every instance, including each one's `"use cache"` memory.
-  `flushCache()` is not a substitute: it empties only the calling process's memory.
+  `flushCache()` is not a substitute: it deletes the Redis keys in its scope and empties the
+  calling process's memory, but other instances' `"use cache"` memory is not cleared.
 
 `createCacheHandler` keeps its 16.4.2 key layout, so its own revalidations are unaffected. Between
 16.4.3 builds, a revalidation reaches every instance, old build and new.

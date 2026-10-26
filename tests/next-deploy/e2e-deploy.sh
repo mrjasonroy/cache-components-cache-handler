@@ -78,7 +78,6 @@ if [ "$VARIANT" != "baseline" ]; then
   if [ "$VARIANT" = "branch" ]; then
     : "${CACHE_HANDLER_TARBALL:?CACHE_HANDLER_TARBALL must point at the packed package}"
     node "$HERE/inject-handlers.mjs" "$APP_DIR" branch "$CACHE_HANDLER_TARBALL"
-    export NEXT_DEPLOY_WITH_CACHE_OPTIONS="{\"useCache\":\"${NEXT_DEPLOY_USE_CACHE:-memory}\"}"
   else
     node "$HERE/inject-handlers.mjs" "$APP_DIR" pkg-16.4.2
   fi

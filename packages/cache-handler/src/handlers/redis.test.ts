@@ -17,13 +17,12 @@ vi.mock("../shared/node-require.js", async (importOriginal) => ({
 import { resetBuildIdForTests } from "../shared/build-id.js";
 import { encodeEntry } from "../shared/codec.js";
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
-import { MEMORY_ONLY_TAG } from "../shared/runtime.js";
 import { asClient, resetCacheState } from "../testing/env.js";
 import { FakeRedis } from "../testing/fake-redis.js";
 import type { PageCacheValue } from "./page-types.js";
 import {
   RedisCacheHandler,
-  createRedisCacheHandler,
+  createPageCacheHandler,
   getEntryLifetime,
   getEntryTags,
 } from "./redis.js";
@@ -45,6 +44,13 @@ const KEY = "nextjs:development:page:/blog";
 
 function handlerFor(fake: FakeRedis, options = {}) {
   return new RedisCacheHandler({ client: asClient(fake), ...options });
+}
+
+/** A page handler whose in-process stores a test can look at. */
+class ProbedHandler extends RedisCacheHandler {
+  get stores() {
+    return this.runtime.stores;
+  }
 }
 
 describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
@@ -323,16 +329,6 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(fake.commands).toEqual(["getBuffer", "hmget"]);
     });
 
-    test("a memory-only entry still has its tags checked against Redis", async () => {
-      const instanceA = new FakeRedis();
-      const a = handlerFor(instanceA);
-      const b = handlerFor(new FakeRedis(instanceA.items));
-      await b.set("/health", page("ok", `t1,${MEMORY_ONLY_TAG}`), pageCtx);
-      await new Promise((r) => setTimeout(r, 2));
-      await a.revalidateTag(["t1"]);
-      expect(await b.get("/health", { kind: "APP_PAGE" })).toBeNull();
-    });
-
     test("a Redis error reading tag records is a miss", async () => {
       const fake = new FakeRedis();
       const handler = handlerFor(fake);
@@ -414,7 +410,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       vi.setSystemTime(Date.now() + 1_000);
       expect(await handler.get("/blog", ctx)).toBeNull();
 
-      // A memory-only entry is capped the same way.
+      // An entry kept in memory (no Redis) is capped the same way.
       const memory = new RedisCacheHandler();
       await memory.set("/m", page("m"), { cacheControl: { revalidate: false } });
       vi.setSystemTime(Date.now() + MAX_ENTRY_AGE_SECONDS * 1000);
@@ -437,13 +433,41 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     });
   });
 
-  describe("MEMORY_ONLY_TAG", () => {
-    test("entries tagged memory-only never reach Redis but are served", async () => {
+  describe("with Redis the in-memory page store stays empty", () => {
+    test("every entry goes to Redis: no tag keeps one in memory", async () => {
+      // 16.4.3 release candidates had a `cache:memory-only` tag; it is an ordinary tag now.
       const fake = new FakeRedis();
-      const handler = handlerFor(fake);
-      await handler.set("/health", page("ok", `a,${MEMORY_ONLY_TAG}`), pageCtx);
-      expect(await fake.exists("nextjs:development:page:/health")).toBe(0);
-      expect((await handler.get("/health", { kind: "APP_PAGE" }))?.value.html).toBe("ok");
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      await handler.set("/health", page("ok", "a,cache:memory-only"), pageCtx);
+      await handler.set("/blog", page("v1"), pageCtx);
+      expect(await fake.exists("nextjs:development:page:/health")).toBe(1);
+      expect(handler.stores.page.size).toBe(0);
+      expect(handler.stores.pageFallback.size).toBe(0);
+    });
+
+    test("a get reads Redis, never the in-memory page store", async () => {
+      const fake = new FakeRedis();
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      const seeded = { entry: { value: page("seeded"), tags: [], lastModified: Date.now() } };
+      handler.stores.page.set("/blog", seeded, 100, null);
+      expect(await handler.get("/blog", { kind: "APP_PAGE" })).toBeNull();
+
+      await handler.set("/blog", page("redis"), pageCtx);
+      handler.stores.page.set("/blog", seeded, 100, null);
+      expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("redis");
+    });
+
+    test("during an outage only the fallback store is written and served", async () => {
+      const fake = new FakeRedis();
+      const handler = new ProbedHandler({ client: asClient(fake) });
+      const seeded = { entry: { value: page("seeded"), tags: [], lastModified: Date.now() } };
+      handler.stores.page.set("/seeded", seeded, 100, null);
+      fake.goDown();
+      await handler.set("/outage", page("during"), pageCtx);
+      expect(handler.stores.pageFallback.size).toBe(1);
+      expect(handler.stores.page.size).toBe(1);
+      expect((await handler.get("/outage", { kind: "APP_PAGE" }))?.value.html).toBe("during");
+      expect(await handler.get("/seeded", { kind: "APP_PAGE" })).toBeNull();
     });
   });
 
@@ -511,6 +535,16 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       const handler = new RedisCacheHandler({});
       await handler.set("/blog", page("mem"), pageCtx);
       expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("mem");
+      expect(ioredisMock).not.toHaveBeenCalled();
+    });
+
+    test("CACHE_REDIS=off with REDIS_URL set: round-trips in memory, never connects", async () => {
+      process.env.CACHE_REDIS = "off";
+      process.env.REDIS_URL = "redis://cache:6379";
+      const handler = new ProbedHandler({});
+      await handler.set("/blog", page("off"), pageCtx);
+      expect((await handler.get("/blog", { kind: "APP_PAGE" }))?.value.html).toBe("off");
+      expect(handler.stores.page.size).toBe(1);
       expect(ioredisMock).not.toHaveBeenCalled();
     });
 
@@ -660,7 +694,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
 
     test("connectTimeout and socketTimeout reach the ioredis client opened from a URL", () => {
       ioredisMock.mockImplementation(() => new FakeRedis());
-      const Handler = createRedisCacheHandler({
+      const Handler = createPageCacheHandler({
         url: "redis://timeouts:6379",
         connectTimeout: 1234,
         socketTimeout: 2345,
@@ -674,7 +708,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
 
     test("connectTimeout and socketTimeout reach the ioredis client opened from options", () => {
       ioredisMock.mockImplementation(() => new FakeRedis());
-      const Handler = createRedisCacheHandler({
+      const Handler = createPageCacheHandler({
         redis: { host: "h" },
         connectTimeout: 1234,
         socketTimeout: 2345,
@@ -701,10 +735,10 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     });
   });
 
-  describe("createRedisCacheHandler", () => {
+  describe("createPageCacheHandler", () => {
     test("returns a subclass Next can construct with its ctx", async () => {
       const fake = new FakeRedis();
-      const Handler = createRedisCacheHandler({ client: asClient(fake), keyPrefix: "p:" });
+      const Handler = createPageCacheHandler({ client: asClient(fake), keyPrefix: "p:" });
       const handler = new Handler({ serverDistDir: "/nonexistent/server", dev: false });
       expect(handler).toBeInstanceOf(RedisCacheHandler);
       await handler.set("/blog", page("x"), pageCtx);
@@ -713,7 +747,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
 
     test("instances constructed per request share one runtime and tag state", async () => {
       const fake = new FakeRedis();
-      const Handler = createRedisCacheHandler({ client: asClient(fake) });
+      const Handler = createPageCacheHandler({ client: asClient(fake) });
       await new Handler({}).set("/blog", page("x"), pageCtx);
       await new Promise((r) => setTimeout(r, 2));
       await new Handler({}).revalidateTag(["t1"]);

@@ -21,7 +21,7 @@ import { createLocalCacheHandler } from "../data-cache/local.js";
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import type { DataCacheEntry } from "../data-cache/types.js";
 import type { PageCacheValue } from "../handlers/page-types.js";
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 import { flushCache } from "../shared/flush.js";
 import { FLUSH_TAG, tagIndexKey, tagsKey } from "../shared/keys.js";
 import { getCacheRuntime } from "../shared/runtime.js";
@@ -101,7 +101,7 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
    */
   function instance(n: number, buildId = "build-1") {
     const options = { url, keyPrefix: prefix, commandTimeout: 500 + n };
-    const Page = createRedisCacheHandler({ ...options, buildId });
+    const Page = createPageCacheHandler({ ...options, buildId });
     return {
       page: new Page({}),
       remote: createRemoteCacheHandler({ ...options, buildId }),
@@ -188,6 +188,9 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
 
     await a.page.set("/during", page("during"), pageContext);
     expect((await a.page.get("/during", pageGet))?.value.html).toBe("during");
+    // Tagged "other", so only the recovery (not the revalidation of t1 below) can drop it.
+    await a.remote.set("during", entry("during value", ["other"]));
+    expect(await text(await a.remote.get("during", []))).toBe("during value");
     // A revalidation during the outage still applies in this process.
     await sleep(2);
     await a.page.revalidateTag(["t1"]);
@@ -196,6 +199,12 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     docker("start", container as string);
     await waitFor(() => a.connection()?.isReady() === true);
     await a.maintainTags();
+    // Outage memory is never read once Redis is back.
+    expect(await a.page.get("/during", pageGet)).toBeNull();
+    expect(await a.remote.get("during", [])).toBeUndefined();
+    expect(await raw.exists(`${prefix}build-1:page:/during`, `${prefix}build-1:data:during`)).toBe(
+      0,
+    );
     expect(await raw.hget(tagsKey(prefix), "prunable")).toBeNull();
     await a.remote.set("again", entry("again value", ["other"]));
     expect(await text(await a.remote.get("again", []))).toBe("again value");
@@ -301,6 +310,7 @@ describe.runIf(enabled)("page, remote and local handlers (real Redis)", () => {
     await a.remote.set("k", entry("build"));
     expect(a.connection()).toBeUndefined();
     expect((await a.page.get("/blog", pageGet))?.value.html).toBe("build");
+    expect(await text(await a.remote.get("k", []))).toBe("build");
     expect(await raw.keys(`${prefix}*`)).toEqual([]);
   }, 30_000);
 

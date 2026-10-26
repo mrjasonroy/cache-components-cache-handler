@@ -8,8 +8,7 @@ import { stringListBytes } from "./memory-store.js";
 import type { CacheRuntime } from "./runtime.js";
 
 /**
- * Read the entry under `redisKey` (unless `inMemory` holds it) and the tag records that apply,
- * merging them into the tag store:
+ * Read the entry under `redisKey` and the tag records that apply, merging them into the tag store:
  *
  * 1. The entry and the records of `requestTags` plus the entry's tags as last seen by this
  *    process, all sent at once (one round trip).
@@ -22,25 +21,18 @@ import type { CacheRuntime } from "./runtime.js";
 export async function readWithTags<T extends { tags: string[] }>(
   runtime: CacheRuntime,
   redisKey: string,
-  inMemory: T | undefined,
   requestTags: string[],
   read: () => Promise<T | undefined>,
 ): Promise<T | undefined> {
   const { stores, tags } = runtime;
-  const known = inMemory?.tags ?? stores.entryTags.get(redisKey) ?? [];
+  const known = stores.entryTags.get(redisKey) ?? [];
   const fetched = new Set([...requestTags, ...known]);
 
-  let entry = inMemory;
-  if (inMemory) {
-    await tags.fetch(fetched);
-  } else {
-    const [found] = await Promise.all([read(), tags.fetch(fetched)]);
-    entry = found;
-  }
+  const [entry] = await Promise.all([read(), tags.fetch(fetched)]);
   if (!entry) return undefined;
 
   const missing = entry.tags.filter((tag) => !fetched.has(tag));
   if (missing.length > 0) await tags.fetch(missing);
-  if (!inMemory) stores.entryTags.set(redisKey, entry.tags, stringListBytes(entry.tags), null);
+  stores.entryTags.set(redisKey, entry.tags, stringListBytes(entry.tags), null);
   return entry;
 }

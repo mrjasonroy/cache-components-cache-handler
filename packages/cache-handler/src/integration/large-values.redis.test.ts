@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vite
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
 import type { DataCacheEntry } from "../data-cache/types.js";
 import type { PageCacheValue } from "../handlers/page-types.js";
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 import { DEFAULT_COMMAND_TIMEOUT_MS } from "../shared/connection.js";
 import { getCacheRuntime } from "../shared/runtime.js";
 import { resetCacheState } from "../testing/env.js";
@@ -130,7 +130,7 @@ describe.runIf(enabled)("large values (real Redis)", () => {
       keyPrefix: prefix,
       ...(n === 1 ? {} : { commandTimeout: DEFAULT_COMMAND_TIMEOUT_MS + 1 + n }),
     };
-    const Page = createRedisCacheHandler({ ...options, buildId: "build-1" });
+    const Page = createPageCacheHandler({ ...options, buildId: "build-1" });
     return {
       page: new Page({}),
       remote: createRemoteCacheHandler({ ...options, buildId: "build-1" }),

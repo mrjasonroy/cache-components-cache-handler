@@ -2,7 +2,7 @@ import { cacheLife, cacheTag, revalidateTag } from "next/cache";
 import Link from "next/link";
 
 async function getProducts() {
-  "use cache";
+  "use cache: remote";
   cacheLife("hours"); // Cache for 1 hour
   cacheTag("products");
 

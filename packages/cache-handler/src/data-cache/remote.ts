@@ -12,7 +12,6 @@
  *   having synced; a tag-read error is a miss. `getExpiration` reads local state only.
  * - While Redis is down, entries go to process memory for at most 60 s and that memory is never
  *   read, and is emptied, once Redis is back. `memoryFallback: false` misses instead.
- * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
  * - Without Redis (no URL, `next build`, `CACHE_REDIS=off`) everything is kept in memory.
  * - Errors never throw out of the handler: a cache error is a miss plus a rate-limited log line.
  */
@@ -28,7 +27,6 @@ import {
   type CacheOptions,
   type CacheRuntime,
   FALLBACK_TTL_SECONDS,
-  MEMORY_ONLY_TAG,
   createDebugLog,
   isRedisReady,
   liveCacheRuntime,
@@ -118,9 +116,8 @@ export function createRemoteCacheHandler(
       await pendingSets.wait(cacheKey);
       const runtime = currentRuntime();
       const { connection, tags, stores } = runtime;
-      const inMemory = stores.data.get(cacheKey) as InMemoryEntry | undefined;
-
       if (!connection) {
+        const inMemory = stores.data.get(cacheKey) as InMemoryEntry | undefined;
         const entry = inMemory
           ? toDataCacheEntry(inMemory.stored, tags, inMemory.until)
           : undefined;
@@ -130,7 +127,6 @@ export function createRemoteCacheHandler(
 
       if (!(await isRedisReady(runtime))) {
         log?.("get", cacheKey, "Redis down");
-        if (inMemory) return toDataCacheEntry(inMemory.stored, tags, inMemory.until);
         return memoryFallback ? fromMemory(runtime, cacheKey) : undefined;
       }
 
@@ -139,7 +135,7 @@ export function createRemoteCacheHandler(
       try {
         const key = keyOf(cacheKey);
         let encodedBytes = 0;
-        const stored = await readWithTags(runtime, key, inMemory?.stored, softTags, async () => {
+        const stored = await readWithTags(runtime, key, softTags, async () => {
           const raw = await connection.client.getBuffer(key);
           encodedBytes = raw?.byteLength ?? 0;
           const found = await decodeStored<StoredDataEntry>(raw);
@@ -149,11 +145,10 @@ export function createRemoteCacheHandler(
           log?.("get", cacheKey, "miss");
           return undefined;
         }
-        const until = inMemory ? inMemory.until : stored.timestamp + stored.expire * 1000;
-        const entry = toDataCacheEntry(stored, tags, until);
+        const entry = toDataCacheEntry(stored, tags, stored.timestamp + stored.expire * 1000);
         log?.("get", cacheKey, entry ? "hit" : "invalidated", {
           bytes: stored.value.byteLength,
-          encodedBytes: encodedBytes || encodeEntry(stored).byteLength,
+          encodedBytes,
         });
         return entry;
       } catch (error) {
@@ -173,7 +168,7 @@ export function createRemoteCacheHandler(
         if (ttl <= 0) return;
         const now = nowMs();
 
-        if (!connection || stored.tags.includes(MEMORY_ONLY_TAG)) {
+        if (!connection) {
           stores.data.set(
             cacheKey,
             { stored, until: now + ttl * 1000 },

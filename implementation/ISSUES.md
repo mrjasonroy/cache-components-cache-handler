@@ -108,7 +108,7 @@ These are documented in `docs/how-it-works.md` and `docs/operations.md`; they ar
 
 **Status:** Resolved (DEC-4 for the 16.5 path; public on `CacheOptions` since DEC-6, approved by Jason on 2026-10-20) · **Severity:** Low · **Area:** `shared/runtime.ts`, `shared/connection.ts`
 
-Resolution: `createCacheHandler` and `RedisCacheHandler` / `createRedisCacheHandler` (including
+Resolution: `createCacheHandler` and `RedisCacheHandler` / `createPageCacheHandler` (including
 `redis: RedisOptions`) now take `connectTimeout`, `socketTimeout` and `maxConsecutiveTimeouts`
 and pass them to the connection. DEC-6 then made them `CacheOptions`, so every factory and
 `flushCache` take them; `withCache` stays environment-only.

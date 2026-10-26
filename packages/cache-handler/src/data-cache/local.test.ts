@@ -1,4 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+
+const ioredisMock = vi.hoisted(() => vi.fn());
+
+// ioredis is loaded with `requireModule` (Node's `require`), which `vi.mock("ioredis")` cannot reach.
+vi.mock("../shared/node-require.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../shared/node-require.js")>()),
+  requireModule: (moduleName: string) => {
+    if (moduleName === "ioredis") return ioredisMock;
+    throw new Error(`Unexpected require for module: ${moduleName}`);
+  },
+}));
+
 import { MAX_ENTRY_AGE_SECONDS } from "../shared/keys.js";
 import { REFRESH_TAGS_INTERVAL_MS } from "../shared/tag-store.js";
 import { asClient, resetCacheState } from "../testing/env.js";
@@ -37,6 +49,16 @@ describe("createLocalCacheHandler", () => {
     await handler.set("k", entry("hello"));
     expect(await read(await handler.get("k", []))).toBe("hello");
     expect(fake.commands.filter((c) => c === "set")).toHaveLength(0);
+  });
+
+  test("CACHE_REDIS=off with REDIS_URL set: round-trips in memory, never connects", async () => {
+    process.env.CACHE_REDIS = "off";
+    process.env.REDIS_URL = "redis://cache:6379";
+    const handler = createLocalCacheHandler();
+    await handler.refreshTags();
+    await handler.set("k", entry("off"));
+    expect(await read(await handler.get("k", []))).toBe("off");
+    expect(ioredisMock).not.toHaveBeenCalled();
   });
 
   test("drops a value once its revalidate period has passed", async () => {

@@ -108,7 +108,6 @@ The workflow is `.github/workflows/next-deploy-tests.yml`. It runs in two cases:
     package's `next` dev dependency, the version its unit tests run against. The Next update
     workflows bump that, so the harness follows each Next release.
   - `suite_filter`: an extended regex over the lines in `suites.txt`.
-  - `use_cache`: passed to `withCache` as `useCache` in the `branch` variant.
   - `instances`: `2` or `1`.
 
 The jobs run in this order:
@@ -185,7 +184,6 @@ These are ours. The workflow sets them:
 | `CACHE_HANDLER_TARBALL` | The output of `pnpm pack` for this branch. `branch` only. |
 | `NEXT_DEPLOY_REDIS_URL` | The job's Redis. Each deployment gets its own `CACHE_KEY_PREFIX`, because two run at once. |
 | `NEXT_DEPLOY_INSTANCES` | The number of `next start` processes for the handler variants. Default 2. |
-| `NEXT_DEPLOY_USE_CACHE` | `useCache` for `withCache`. Default `memory`. |
 | `NEXT_DEPLOY_FIXTURE_HANDLERS` | `keep` (default) or `replace`. See above. |
 | `NEXT_DEPLOY_SERVER_LOGS_DIR` | Set per suite part by `run-suites.sh`; where `e2e-cleanup.sh` saves log tails. |
 | `NEXT_REPO_DIR`, `RESULTS_DIR`, `SUITE_FILTER`, `SUITE_TIMEOUT`, `RETRIES`, `CONCURRENCY` | Settings for `run-suites.sh`. |

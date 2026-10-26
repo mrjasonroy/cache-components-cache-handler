@@ -5,9 +5,8 @@ import { withCache } from "@mrjasonroy/cache-components-cache-handler";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // The CI lanes pick the backend with env vars only: REDIS_URL / ELASTICACHE_* (unset → memory),
-// E2E_USE_CACHE=redis to put plain "use cache" in Redis too, and E2E_CUSTOM_HANDLERS=1 to load
-// the hand-written handler files in ./cache instead of the built-in ones.
-const useCache = process.env.E2E_USE_CACHE === "redis" ? "redis" : "memory";
+// and E2E_CUSTOM_HANDLERS=1 to load the hand-written handler files in ./cache instead of the
+// built-in ones.
 const handlers =
   process.env.E2E_CUSTOM_HANDLERS === "1"
     ? {
@@ -37,4 +36,4 @@ const nextConfig = {
   },
 };
 
-export default withCache(nextConfig, { useCache, handlers });
+export default withCache(nextConfig, { handlers });

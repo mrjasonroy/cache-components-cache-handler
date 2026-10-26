@@ -83,9 +83,8 @@ const userImport = userFile
 const variants = {
   branch: {
     imports: `import { withCache } from "${PACKAGE_NAME}";`,
-    apply: `const options = JSON.parse(process.env.NEXT_DEPLOY_WITH_CACHE_OPTIONS || "{}");
-function applyPackage(config) {
-  return withCache(config, options);
+    apply: `function applyPackage(config) {
+  return withCache(config);
 }`,
   },
   // 16.4.2's documented setup (its README's quick start): one data-cache handler file for

@@ -10,7 +10,7 @@ coordination) is described in [How it works](./how-it-works.md), and the key lay
 | Export | Kind | Purpose |
 |---|---|---|
 | `withCache(nextConfig, options?)` | function | Configures the whole cache. [Below](#withcachenextconfig-options). |
-| `createRedisCacheHandler(options?)` | function → class | The page handler with code-level options, for a custom `cacheHandler` file. |
+| `createPageCacheHandler(options?)` | function → class | The page handler with code-level options, for a custom `cacheHandler` file. |
 | `RedisCacheHandler` | class | The page handler. Same constructor as 16.4.2, so subclasses still work. |
 | `createRemoteCacheHandler(options?)` | function → `DataCacheHandler` | Redis data handler plus memory fallback, for `"use cache: remote"`. |
 | `createLocalCacheHandler(options?)` | function → `DataCacheHandler` | Memory data handler with shared tag invalidation, for `"use cache"`. |
@@ -18,10 +18,9 @@ coordination) is described in [How it works](./how-it-works.md), and the key lay
 | `closeCache()` | async function | Closes the package's Redis connections so a test run or script can exit. [Closing](./operations.md#closing-the-cache). |
 | `setCacheLogger(logger)` | function | Sends the package's log lines to your logger. [Logging](./operations.md#logging). |
 | `attachElastiCacheIamAuth(client, options?)` | function | Keeps your own `Redis` or `Cluster` authenticated to ElastiCache with refreshed IAM tokens. [Below](#attachelasticacheiamauthclient-options). |
-| `MEMORY_ONLY_TAG` | `"cache:memory-only"` | `cacheTag(MEMORY_ONLY_TAG)` keeps an entry, and a page that carries the tag, out of Redis. Use it for per-instance data such as health or build info. |
 | `createCacheHandler({ type })` | function → `DataCacheHandler` | Deprecated: the original data handler factory ([legacy data cache API](#legacy-data-cache-api)). |
 | `createRedisDataCacheHandler`, `createMemoryDataCacheHandler`, `createIoredisAdapter` | functions | Deprecated: the original building blocks behind `createCacheHandler`. |
-| `CacheOptions`, `CacheLogger`, `ElastiCacheIamOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `RedisCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
+| `CacheOptions`, `CacheLogger`, `ElastiCacheIamOptions`, `WithCacheOptions`, `FlushCacheOptions`, `FlushCacheResult`, `PageCacheHandlerOptions`, `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `DataCacheHandler`, `DataCacheEntry`, `PageCache*` | types | |
 
 The [deprecated exports](#deprecated) are still exported.
 
@@ -38,8 +37,6 @@ function withCache<T extends object>(
 ): (phase: string, context: { defaultConfig: object }) => Promise<T & WithCacheConfig>;
 
 interface WithCacheOptions {
-  /** Where plain "use cache" stores entries. @default "memory" */
-  useCache?: "memory" | "redis";
   /** Set cacheHandler and cacheMaxMemorySize: 0. @default true */
   pages?: boolean;
   /** Your own handler files. Relative paths resolve against process.cwd(). */
@@ -52,13 +49,18 @@ interface WithCacheOptions {
 }
 ```
 
+`"use cache"` always goes to `cacheHandlers.default` and `"use cache: remote"` to
+`cacheHandlers.remote`, as Next routes them; `"use cache: private"` never reaches a handler.
+`withCache` does not check which flag turned `"use cache"` on, so `cacheComponents: true` and
+Next's deprecated `experimental.useCache: true` both work.
+
 Returns `nextConfig` plus:
 
 | Key | Value |
 |---|---|
 | `cacheHandler` | `handlers.page`, or the built-in page handler. Omitted with `pages: false`. |
 | `cacheHandlers.remote` | `handlers.remote`, or the built-in remote handler. |
-| `cacheHandlers.default` | `handlers.default`; else the remote handler with `useCache: "redis"`; else the built-in local handler. |
+| `cacheHandlers.default` | `handlers.default`, or the built-in local handler. |
 | `cacheMaxMemorySize` | `0`, unless `nextConfig` sets it: then that value is kept, with a warning if it is not `0` (it has no effect once `withCache` sets the handlers). Omitted with `pages: false`. |
 
 Throws if `nextConfig` already sets `cacheHandlers`, or `cacheHandler` unless `pages: false`
@@ -120,10 +122,10 @@ logs a warning when that happens, so give every handler the same settings.
 
 ## Page handler
 
-### `createRedisCacheHandler(options?)`
+### `createPageCacheHandler(options?)`
 
 ```ts
-function createRedisCacheHandler(options?: RedisCacheHandlerOptions): typeof RedisCacheHandler;
+function createPageCacheHandler(options?: PageCacheHandlerOptions): typeof RedisCacheHandler;
 ```
 
 Returns a `RedisCacheHandler` subclass with `options` applied. Export it as the default of a
@@ -131,10 +133,10 @@ custom `cacheHandler` file:
 
 ```js
 // cache/page.mjs
-import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { createPageCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 import { client } from "./redis.mjs";
 
-export default createRedisCacheHandler({ client });
+export default createPageCacheHandler({ client });
 ```
 
 ### `RedisCacheHandler`
@@ -146,7 +148,8 @@ revalidation on any instance is seen by the next read. The first read of an entr
 that did not write it takes one more `HMGET`, for the tags it learns from the entry. See
 [Sizing](./redis.md#sizing).
 
-`RedisCacheHandlerOptions` is Next's constructor context plus `CacheOptions` and:
+`PageCacheHandlerOptions` (16.4.2's `RedisCacheHandlerOptions`, still exported as a deprecated
+alias) is Next's constructor context plus `CacheOptions` and:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -165,7 +168,7 @@ Both return a Next `DataCacheHandler` (`get`, `set`, `refreshTags`, `getExpirati
 
 ### `createRemoteCacheHandler(options?)`
 
-For `"use cache: remote"`, and for `"use cache"` with `useCache: "redis"`. Entries are stored in
+For `"use cache: remote"`. Entries are stored in
 Redis under `<prefix><buildId>:data:<key>` until their `expire`, with the memory fallback during
 an outage. Takes `CacheOptions` plus `buildId` and `defaultTTL`: the seconds to keep an entry whose
 `expire` is infinite (default `86400`, 24 hours; anything but a finite number greater than 0 throws when the
@@ -175,7 +178,7 @@ handler is created). Every entry is kept at most 365 days.
 
 For `"use cache"`. Values live in this process's memory (up to 10,000 entries and 32/98 of the
 [memory budget](./operations.md#memory), about 27 MiB at `--max-old-space-size=768` on Node 22; a larger value is not kept) until their `revalidate` period. When Redis is configured, tag invalidations are shared across instances.
-Takes `CacheOptions`; only the connection, `keyPrefix` and `debug` matter.
+Takes `CacheOptions`; only the connection, `keyPrefix`, `debug` and `logger` matter.
 
 ```js
 // cache/default.mjs
@@ -254,7 +257,7 @@ function setCacheLogger(logger: CacheLogger | undefined): void;
 Sends the package's warnings, errors and `CACHE_DEBUG` lines to `logger` for the whole process
 (every module graph), or back to the console with `undefined`. Call it in `instrumentation.ts`'s
 `register()` or a custom handler file. The `logger` option of `createRemoteCacheHandler`,
-`createLocalCacheHandler` and `createRedisCacheHandler` wins over it for that handler; the shared
+`createLocalCacheHandler` and `createPageCacheHandler` wins over it for that handler; the shared
 connection and tag state use the logger of the handler that opened them. `message` is what the
 console would print; `meta` holds the details (`error`, `operation`). Without `info` or `debug`
 those lines are dropped. Errors stay rate-limited. No line carries a Redis URL or connection
@@ -277,11 +280,6 @@ on a `Cluster`) and sends `AUTH` with it on every connected node. Options left o
 environment, as in [IAM authentication](./redis.md#iam-authentication). Throws when IAM cannot work
 (TLS off, no user, cache name or region) or the AWS packages are not installed. `stop()` ends the
 refresh; the client keeps its connections.
-
-## `MEMORY_ONLY_TAG`
-
-`"cache:memory-only"`. An entry tagged with it (`cacheTag(MEMORY_ONLY_TAG)`), and a page that
-carries it, is kept in process memory and never written to Redis.
 
 ## Legacy data cache API
 
@@ -371,6 +369,7 @@ on the Next 17 line they are removed or become a thin shim over the replacement.
 | `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
 | `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
 | `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
+| `RedisCacheHandlerOptions` | `PageCacheHandlerOptions` | Renamed with `createPageCacheHandler`; the same type. |
 | `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. They keep working. |
 | `CompositeHandler`, `createCompositeHandler` | built in | The memory fallback is now inside every handler. |
 | `MemoryCacheHandler`, `createMemoryCacheHandler` | `withCache` without `REDIS_URL` | Memory only is the no-URL mode. |
@@ -402,9 +401,10 @@ replacements.
 
 ## Types
 
-`WithCacheOptions`, `WithCacheConfig`, `CacheOptions`, `ElastiCacheIamOptions`,
+`WithCacheOptions`, `WithCacheConfig`, `NextConfigFunction`, `MemoryOptions`, `CacheOptions`,
+`ElastiCacheIamOptions`,
 `AttachElastiCacheIamAuthOptions`, `ElastiCacheIamAuth`, `AwsCredentials`,
-`AwsCredentialsProvider`, `RedisCacheHandlerOptions`,
+`AwsCredentialsProvider`, `PageCacheHandlerOptions`, `RedisCacheHandlerOptions` (deprecated),
 `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `FlushCacheOptions`, `FlushCacheResult`,
 `PageCacheControl`, `PageCacheGetContext`, `PageCacheHandlerContext`, `PageCacheHandlerValue`,
 `PageCacheSetContext`, `PageCacheValue`, `DataCacheHandler`, `DataCacheEntry`, `Timestamp`,
@@ -413,7 +413,8 @@ replacements.
 
 ## Next.js APIs
 
-The package sits behind Next's own caching APIs: `"use cache"`, `"use cache: remote"`,
+The package sits behind Next's own caching APIs: `"use cache"`, `"use cache: remote"`
+(`"use cache: private"` never reaches it),
 `cacheLife`, `cacheTag`, `revalidateTag`, `updateTag` and `revalidatePath`. See
 [Usage Examples](./usage.md) and Next's
 [Caching and Revalidating](https://nextjs.org/docs/app/getting-started/caching-and-revalidating).

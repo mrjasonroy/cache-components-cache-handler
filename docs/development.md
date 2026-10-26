@@ -32,7 +32,8 @@ pnpm test             # Run all tests
 pnpm test:e2e         # Run Playwright e2e tests
 
 # Code Quality
-pnpm lint             # Check for linting issues
+pnpm lint             # Check for linting issues, and that the npm README matches README.md
+pnpm readme:sync      # Regenerate packages/cache-handler/README.md from README.md
 pnpm format           # Format all code
 pnpm typecheck        # TypeScript type checking
 
@@ -78,8 +79,8 @@ docker exec nextjs-cache-redis redis-cli FLUSHALL
 pnpm --filter e2e-test-app build
 pnpm --filter e2e-test-app test:e2e:redis
 
-# Valkey, with plain "use cache" stored in Redis too
-REDIS_URL=redis://localhost:6380 E2E_REDIS_CONTAINER=nextjs-cache-valkey E2E_USE_CACHE=redis \
+# Valkey
+REDIS_URL=redis://localhost:6380 E2E_REDIS_CONTAINER=nextjs-cache-valkey \
   sh -c 'pnpm --filter e2e-test-app build && pnpm --filter e2e-test-app test:e2e'
 
 # Custom handler files (apps/e2e-test-app/cache/*.mjs) instead of the built-in ones

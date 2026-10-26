@@ -3,11 +3,14 @@
 Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster)
 or different timeouts. ElastiCache IAM authentication needs neither: the environment turns it on
 (see [IAM authentication](./redis.md#iam-authentication)), and the `iam` option sets it in a
-handler file. Write one file per handler and give the paths to `withCache`:
+handler file. Write one file per handler and give the paths to `withCache`. Each file keeps its
+directive's role: `page` for pages, route handlers and cached `fetch`, `remote` for
+`"use cache: remote"` (Redis), `default` for `"use cache"` (per-instance memory, shared tag
+invalidation):
 
 ```js
-// cache/redis.mjs: one client for both files, parked on globalThis because Next can load the
-// two handler modules separately
+// cache/redis.mjs: one client for all three files, parked on globalThis because Next can load
+// the three handler modules separately
 import Redis from "ioredis";
 
 const key = Symbol.for("my-app.redis");
@@ -17,10 +20,10 @@ export const client = globalThis[key];
 
 ```js
 // cache/page.mjs
-import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { createPageCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 import { client } from "./redis.mjs";
 
-export default createRedisCacheHandler({ client });
+export default createPageCacheHandler({ client });
 ```
 
 ```js
@@ -127,11 +130,11 @@ Handlers given the same connection settings share one connection and one tag sta
 handler file the same `url`, timeouts and `maxConsecutiveTimeouts`: different settings open a
 second connection to the same server, and the package logs a warning when that happens.
 
-`createRedisCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
+`createPageCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
 deployment ID when one is set, else its `BUILD_ID`; see
 [skew protection](./how-it-works.md#skew-protection-and-the-deployment-id)), the build that
 scopes entry keys. Both also take `defaultTTL`, in seconds:
-`createRedisCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
+`createPageCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
 and maximum 365 days), and `createRemoteCacheHandler` keeps an entry whose `expire` is infinite
 that long (default 24 hours, maximum 365 days; anything but a number greater than 0 throws).
 

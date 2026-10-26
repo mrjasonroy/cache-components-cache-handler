@@ -27,7 +27,6 @@
  *   its tags was ever revalidated, and never for a time-based route (see `./build-info.ts`).
  * - On the edge runtime (Next bundles this handler into the middleware) every read is a miss and
  *   writes and revalidations do nothing.
- * - Entries tagged {@link MEMORY_ONLY_TAG} stay in process memory.
  * - While Redis is down, entries go to process memory for at most 60 s, never read and dropped
  *   once Redis is back. Without Redis (no URL, `next build`, `CACHE_REDIS=off`) everything is in
  *   memory.
@@ -47,7 +46,6 @@ import {
   type CacheOptions,
   type CacheRuntime,
   FALLBACK_TTL_SECONDS,
-  MEMORY_ONLY_TAG,
   type RuntimeOptions,
   closeCache,
   createDebugLog,
@@ -78,7 +76,7 @@ export const EXPIRE_FACTOR = 1.5;
 /**
  * Options of {@link RedisCacheHandler}: Next's constructor context plus the code-level options.
  */
-export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, CacheOptions {
+export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheOptions {
   /**
    * 16.4.2 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
    */
@@ -104,6 +102,11 @@ export interface RedisCacheHandlerOptions extends PageCacheHandlerContext, Cache
    */
   buildId?: string;
 }
+
+/**
+ * @deprecated Renamed {@link PageCacheHandlerOptions}. Still works; removed on the Next 17 line.
+ */
+export type RedisCacheHandlerOptions = PageCacheHandlerOptions;
 
 interface StoredPageEntry {
   value: PageCacheValue;
@@ -135,7 +138,7 @@ function isRedisClient(value: unknown): value is Redis | Cluster {
 /**
  * Map the constructor options (16.4.3 and 16.4.2 forms) to runtime options.
  */
-function toRuntimeOptions(options: RedisCacheHandlerOptions): RuntimeOptions {
+function toRuntimeOptions(options: PageCacheHandlerOptions): RuntimeOptions {
   const { redis } = options;
   return {
     url: options.url ?? (typeof redis === "string" ? redis : undefined),
@@ -242,21 +245,21 @@ function staleAfterSeconds(
  * @example
  * ```js
  * // cache/page.mjs — a custom handler file for withCache({ handlers: { page } })
- * import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+ * import { createPageCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
  * import { client } from "./redis.mjs";
- * export default createRedisCacheHandler({ client });
+ * export default createPageCacheHandler({ client });
  * ```
  */
 export class RedisCacheHandler {
   public readonly name = "redis";
 
   private readonly currentRuntime: () => CacheRuntime;
-  private readonly options: RedisCacheHandlerOptions;
+  private readonly options: PageCacheHandlerOptions;
   private readonly memoryFallback: boolean;
   private readonly log: ((...args: unknown[]) => void) | undefined;
   private readonly edge = isEdgeRuntime();
 
-  constructor(options: RedisCacheHandlerOptions = {}) {
+  constructor(options: PageCacheHandlerOptions = {}) {
     const { defaultTTL } = options;
     if (
       defaultTTL !== undefined &&
@@ -301,22 +304,22 @@ export class RedisCacheHandler {
     const softTags = ctx?.softTags ?? ctx?.implicitTags ?? [];
     const fetchTags = ctx?.kind === "FETCH" ? (ctx.tags ?? []) : [];
 
-    let entry = (stores.page.get(cacheKey) as InMemoryPage | undefined)?.entry;
+    let entry: StoredPageEntry | undefined;
     // Whether the tag records that apply are current: always without Redis, and with Redis only
     // once they have been read from it.
     let tagsCurrent = !connection;
-    if (connection) {
-      if (await isRedisReady(this.runtime)) {
-        try {
-          entry = await this.readWithTags(cacheKey, entry, [...softTags, ...fetchTags]);
-          tagsCurrent = true;
-        } catch (error) {
-          this.runtime.reportError("get", error);
-          return null;
-        }
-      } else if (!entry && this.memoryFallback) {
-        entry = (stores.pageFallback.get(cacheKey) as InMemoryPage | undefined)?.entry;
+    if (!connection) {
+      entry = (stores.page.get(cacheKey) as InMemoryPage | undefined)?.entry;
+    } else if (await isRedisReady(this.runtime)) {
+      try {
+        entry = await this.readWithTags(cacheKey, [...softTags, ...fetchTags]);
+        tagsCurrent = true;
+      } catch (error) {
+        this.runtime.reportError("get", error);
+        return null;
       }
+    } else if (this.memoryFallback) {
+      entry = (stores.pageFallback.get(cacheKey) as InMemoryPage | undefined)?.entry;
     }
     let built: BuildOutputEntry | undefined;
     if (!entry?.value && tagsCurrent) {
@@ -338,18 +341,17 @@ export class RedisCacheHandler {
   }
 
   /**
-   * Read the entry from Redis (unless it is held in memory) together with the tag records that
-   * apply to it, merging them into the tag store.
+   * Read the entry from Redis together with the tag records that apply to it, merging them into
+   * the tag store.
    */
   private readWithTags(
     cacheKey: string,
-    inMemory: StoredPageEntry | undefined,
     requestTags: string[],
   ): Promise<StoredPageEntry | undefined> {
     const { connection } = this.runtime;
-    if (!connection) return Promise.resolve(inMemory);
+    if (!connection) return Promise.resolve(undefined);
     const key = this.redisKey(cacheKey);
-    return readWithTags(this.runtime, key, inMemory, requestTags, async () => {
+    return readWithTags(this.runtime, key, requestTags, async () => {
       const entry = await decodeStored<StoredPageEntry>(await connection.client.getBuffer(key));
       return entry?.value ? entry : undefined;
     });
@@ -509,7 +511,7 @@ export class RedisCacheHandler {
     // revalidates it on the page's own schedule.
     if (!ctx?.fetchCache && ctx?.cacheControl) entry.cacheControl = ctx.cacheControl;
 
-    if (!connection || tags.includes(MEMORY_ONLY_TAG)) {
+    if (!connection) {
       const bytes = encodeEntry(entry).byteLength;
       stores.page.set(cacheKey, { entry }, bytes, entry.lastModified + lifetime * 1000);
       this.log?.("set", cacheKey, "memory", { lifetime, bytes });
@@ -591,16 +593,16 @@ export class RedisCacheHandler {
  * @example
  * ```js
  * // cache/page.mjs
- * import { createRedisCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+ * import { createPageCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
  * import { client } from "./redis.mjs";
- * export default createRedisCacheHandler({ client });
+ * export default createPageCacheHandler({ client });
  * ```
  */
-export function createRedisCacheHandler(
-  options: RedisCacheHandlerOptions = {},
+export function createPageCacheHandler(
+  options: PageCacheHandlerOptions = {},
 ): typeof RedisCacheHandler {
-  return class ConfiguredRedisCacheHandler extends RedisCacheHandler {
-    constructor(ctx: RedisCacheHandlerOptions = {}) {
+  return class ConfiguredPageCacheHandler extends RedisCacheHandler {
+    constructor(ctx: PageCacheHandlerOptions = {}) {
       super({ ...ctx, ...options });
     }
   };

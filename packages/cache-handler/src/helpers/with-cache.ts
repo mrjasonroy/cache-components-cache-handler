@@ -16,13 +16,6 @@ import { nodeBuiltin } from "../shared/node-require.js";
  */
 export interface WithCacheOptions {
   /**
-   * Where `"use cache"` (no suffix) stores entries: `"memory"` keeps values per instance with
-   * shared tag invalidation, `"redis"` uses the same Redis handler as `"use cache: remote"`.
-   * @default "memory"
-   */
-  useCache?: "memory" | "redis";
-
-  /**
    * Set `cacheHandler` (pages, route handlers and cached `fetch`) and `cacheMaxMemorySize: 0`.
    * With `false`, a `cacheHandler` already in your config is kept.
    * @default true
@@ -80,9 +73,11 @@ export type NextConfigFunction<T extends object> = (
 
 /**
  * Configure the app's cache: pages and route handlers (`cacheHandler`), `"use cache"`
- * (`cacheHandlers.default`) and `"use cache: remote"` (`cacheHandlers.remote`), and
- * `cacheMaxMemorySize: 0`. Set `REDIS_URL` to share them across instances; without it everything
- * stays in memory.
+ * (`cacheHandlers.default`: per-instance memory, tag invalidation shared through Redis) and
+ * `"use cache: remote"` (`cacheHandlers.remote`: Redis), and `cacheMaxMemorySize: 0`.
+ * `"use cache: private"` is Next's own and never reaches a handler. Set `REDIS_URL` to share
+ * entries and tags across instances; without it everything stays in memory. Works with
+ * `cacheComponents: true` and with Next's deprecated `experimental.useCache` alike.
  *
  * Accepts a config object or a config function; a function is wrapped in an async one that
  * applies `withCache` to its result. An explicit `cacheMaxMemorySize` is kept, with a warning
@@ -113,6 +108,7 @@ export function withCache<T extends object>(
 ):
   | (T & WithCacheConfig)
   | ((phase: string, context: { defaultConfig: object }) => Promise<T & WithCacheConfig>) {
+  checkOptionKeys(options);
   if (typeof nextConfig === "function") {
     const configFunction = nextConfig as NextConfigFunction<T>;
     return async (phase, context) => applyCache(await configFunction(phase, context), options);
@@ -120,12 +116,35 @@ export function withCache<T extends object>(
   return applyCache(nextConfig, options);
 }
 
+const OPTION_KEYS = new Set(["pages", "handlers", "memory"]);
+
+/**
+ * Throw on an option `withCache` does not know, so a leftover from a release candidate (or a typo)
+ * is not silently ignored.
+ */
+function checkOptionKeys(options: WithCacheOptions): void {
+  if (typeof options !== "object" || options === null) {
+    throw new Error("withCache: options must be an object like { pages, handlers, memory }.");
+  }
+  for (const key of Object.keys(options)) {
+    if (OPTION_KEYS.has(key)) continue;
+    if (key === "useCache") {
+      throw new Error(
+        'withCache: the useCache option was removed before 16.4.3. Plain "use cache" always stays in each instance\'s memory; write "use cache: remote" for entries that belong in Redis.',
+      );
+    }
+    throw new Error(
+      `withCache: unknown option "${key}"; the options are pages, handlers and memory.`,
+    );
+  }
+}
+
 function applyCache<T extends object>(
   nextConfig: T,
   options: WithCacheOptions,
 ): T & WithCacheConfig {
   const config = nextConfig as T & Partial<WithCacheConfig>;
-  const { useCache = "memory", pages = true, handlers = {}, memory } = options;
+  const { pages = true, handlers = {}, memory } = options;
   // With `pages: false` the page handler is the user's own business, so their cacheHandler stays.
   if ((pages && config.cacheHandler !== undefined) || config.cacheHandlers !== undefined) {
     throw new Error(
@@ -134,11 +153,7 @@ function applyCache<T extends object>(
   }
 
   const remote = handlers.remote ? resolvePath(handlers.remote) : entryPath("remote");
-  const defaultHandler = handlers.default
-    ? resolvePath(handlers.default)
-    : useCache === "redis"
-      ? remote
-      : entryPath("default");
+  const defaultHandler = handlers.default ? resolvePath(handlers.default) : entryPath("default");
 
   handOverMemoryOptions(memory, (config as { output?: unknown }).output);
 

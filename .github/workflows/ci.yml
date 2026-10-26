@@ -43,6 +43,10 @@ jobs:
           node --test scripts/release-version.test.mjs
           node scripts/release-version.mjs check
 
+      # `pnpm lint` checks the npm README is in sync; this tests the sync script itself.
+      - name: npm README sync script
+        run: node --test scripts/sync-package-readme.test.mjs
+
   unit-tests:
     runs-on: ubuntu-latest
     needs: lint-and-typecheck
@@ -133,28 +137,22 @@ jobs:
         include:
           - backend: memory
             image: ""
-            use_cache: memory
             custom_handlers: "0"
 
           - backend: redis
             image: redis:7-alpine
-            use_cache: memory
             custom_handlers: "0"
 
-          # Valkey also covers `useCache: "redis"` (plain "use cache" stored in Redis).
           - backend: valkey
             image: valkey/valkey:8-alpine
-            use_cache: redis
             custom_handlers: "0"
 
           # The escape hatch: withCache({ handlers }) pointing at apps/e2e-test-app/cache/*.mjs.
           - backend: redis-custom-handlers
             image: redis:7-alpine
-            use_cache: memory
             custom_handlers: "1"
 
     env:
-      E2E_USE_CACHE: ${{ matrix.use_cache }}
       E2E_CUSTOM_HANDLERS: ${{ matrix.custom_handlers }}
       E2E_FLUSH_TOKEN: ci-e2e-flush-token
 

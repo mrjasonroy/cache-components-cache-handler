@@ -4,7 +4,7 @@ import { Redis } from "ioredis";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { createLocalCacheHandler } from "../data-cache/local.js";
 import { createRemoteCacheHandler } from "../data-cache/remote.js";
-import { createRedisCacheHandler } from "../handlers/redis.js";
+import { createPageCacheHandler } from "../handlers/redis.js";
 import { getClientConnection } from "../shared/connection.js";
 import {
   FLUSH_TAG,
@@ -264,7 +264,7 @@ describe.runIf(Boolean(url))("tag retention (real Redis)", () => {
     const options = { client: raw, keyPrefix: prefix, buildId: "test" };
     const remote = createRemoteCacheHandler(options);
     const local = createLocalCacheHandler(options);
-    const Page = createRedisCacheHandler(options);
+    const Page = createPageCacheHandler(options);
     const page = new Page({});
     for (const handler of [remote, local]) {
       await handler.set(
