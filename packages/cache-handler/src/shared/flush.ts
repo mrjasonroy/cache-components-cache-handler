@@ -6,12 +6,7 @@ import { getCacheScope } from "./build-id.js";
 import { FLUSH_TAG, buildFlushTag } from "./keys.js";
 import { loggerSource, writeLog } from "./logger.js";
 import { clearAllMemoryStores } from "./memory-store.js";
-import {
-  type CacheOptions,
-  type CacheRuntime,
-  acquireCacheRuntime,
-  isRedisReady,
-} from "./runtime.js";
+import { type CacheOptions, type CacheRuntime, acquireCacheRuntime } from "./runtime.js";
 import { escapeGlob, unlinkMatching } from "./scan.js";
 
 /**
@@ -99,7 +94,10 @@ async function flush(
       'flushCache: refusing scope "all" with an empty keyPrefix, which would delete every key in the database',
     );
   }
-  if (!(await isRedisReady(runtime))) {
+  // A flush needs Redis rather than memory, so it may wait longer than a request for the first
+  // connection: 5 s with IAM, whose first connect waits for credentials and a signed token.
+  await connection.waitForOperationConnection();
+  if (!connection.isReady()) {
     throw new Error("flushCache: Redis is unavailable, nothing was deleted");
   }
 

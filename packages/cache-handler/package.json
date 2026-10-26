@@ -36,9 +36,21 @@
     "valkey"
   ],
   "peerDependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-provider-node": "^3.0.0",
+    "@smithy/signature-v4": "^5.0.0",
     "next": "^16.0.0"
   },
   "peerDependenciesMeta": {
+    "@aws-crypto/sha256-js": {
+      "optional": true
+    },
+    "@aws-sdk/credential-provider-node": {
+      "optional": true
+    },
+    "@smithy/signature-v4": {
+      "optional": true
+    },
     "ioredis": {
       "optional": true
     }
@@ -47,6 +59,9 @@
     "ioredis": "^5.4.1"
   },
   "devDependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/credential-provider-node": "^3.972.87",
+    "@smithy/signature-v4": "^5.7.4",
     "@types/node": "^22.10.2",
     "next": "16.4.3",
     "typescript": "^5.7.2",

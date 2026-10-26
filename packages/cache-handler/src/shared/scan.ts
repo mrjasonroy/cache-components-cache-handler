@@ -65,7 +65,8 @@ function isRedirection(error: unknown): boolean {
 }
 
 /**
- * Delete every key matching `pattern` with UNLINK. On a Cluster, keys of one node can sit in
+ * Delete every key matching `pattern` with UNLINK, one command per SCAN batch; on a single endpoint
+ * that answers that with CROSSSLOT (ElastiCache Serverless), one per key. On a Cluster, keys of one node can sit in
  * different slots, so they are unlinked one per command, pipelined; a key answered with `-MOVED`
  * or `-ASK` (its slot is migrating) is retried once through the Cluster client, which follows
  * the redirection (bounded by its `maxRedirections`). A key that still fails is counted in
@@ -78,10 +79,19 @@ export async function unlinkMatching(
   const cluster = isCluster(client);
   let deleted = 0;
   let failed = 0;
+  // A single endpoint that is sharded behind a proxy (ElastiCache Serverless reached with a plain
+  // `Redis` client) refuses a multi-key UNLINK across slots with CROSSSLOT: from then on, one key
+  // per command, pipelined.
+  let crossSlot = false;
   await scanKeys(client, pattern, async (node, keys) => {
-    if (!cluster) {
-      deleted += await node.unlink(...keys);
-      return;
+    if (!cluster && !crossSlot) {
+      try {
+        deleted += await node.unlink(...keys);
+        return;
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.startsWith("CROSSSLOT")) throw error;
+        crossSlot = true;
+      }
     }
     const pipeline = node.pipeline();
     for (const key of keys) pipeline.unlink(key);
@@ -91,7 +101,7 @@ export async function unlinkMatching(
         deleted += Number(count);
         continue;
       }
-      if (!isRedirection(error)) throw error;
+      if (!cluster || !isRedirection(error)) throw error;
       try {
         deleted += await (client as Redis).unlink(keys[index]);
       } catch {

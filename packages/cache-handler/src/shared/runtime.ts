@@ -18,6 +18,7 @@ import {
   getRedisConnection,
   openRedisConnection,
 } from "./connection.js";
+import type { ElastiCacheIamOptions } from "./elasticache-iam.js";
 import {
   isDebugEnabled,
   resolveEnvConnectionOptions,
@@ -109,6 +110,17 @@ export interface CacheOptions {
    * @default 3
    */
   maxConsecutiveTimeouts?: number;
+
+  /**
+   * Authenticate to AWS ElastiCache with IAM instead of a password: the package mints a token,
+   * refreshes it every 10 minutes and re-authenticates its connection before ElastiCache's
+   * 12-hour limit. Unset fields come from the environment (`ELASTICACHE_IAM_USER`,
+   * `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION`, ...), and `ELASTICACHE_IAM_USER` alone turns
+   * it on. Needs TLS and the optional AWS packages; throws at startup without them. For a `client`
+   * you pass in, call `attachElastiCacheIamAuth` on the client instead.
+   * @default IAM when `ELASTICACHE_IAM_USER` is set
+   */
+  iam?: ElastiCacheIamOptions;
 
   /**
    * Log hits, misses and state changes. Never logs the URL.
@@ -206,7 +218,14 @@ function connectionRequest(
   options: RuntimeOptions,
 ): { client: RedisClientLike } | { options: RedisConnectionOptions } | undefined {
   if (!shouldUseRedis()) return undefined;
-  if (options.client) return { client: options.client };
+  if (options.client) {
+    if (options.iam) {
+      throw new Error(
+        "The iam option applies to connections the package opens, not to a client you pass in: call attachElastiCacheIamAuth(client, ...) on your client instead.",
+      );
+    }
+    return { client: options.client };
+  }
 
   const tuning = definedOnly({
     commandTimeout: options.commandTimeout,
@@ -215,9 +234,20 @@ function connectionRequest(
     maxConsecutiveTimeouts: options.maxConsecutiveTimeouts,
   });
   if (options.redisOptions && !options.url) {
+    // IAM asked for (option or environment) on a connection it cannot apply to: fail at startup,
+    // as for any IAM misconfiguration, rather than connect without it and be refused (NOAUTH).
+    if (options.iam || process.env.ELASTICACHE_IAM_USER) {
+      throw new Error(
+        `${options.iam ? "The iam option" : "ELASTICACHE_IAM_USER"} needs a url or the ELASTICACHE_* environment, not ioredis options (redisOptions, or createCacheHandler's redis option): pass a url, or create the client yourself and call attachElastiCacheIamAuth(client, ...) on it.`,
+      );
+    }
     return { options: { ...tuning, redisOptions: options.redisOptions } };
   }
-  const connectionOptions = resolveEnvConnectionOptions({ url: options.url, ...tuning });
+  const connectionOptions = resolveEnvConnectionOptions({
+    url: options.url,
+    ...tuning,
+    ...definedOnly({ iam: options.iam }),
+  });
   return connectionOptions ? { options: connectionOptions } : undefined;
 }
 

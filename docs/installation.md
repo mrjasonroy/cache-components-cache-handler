@@ -73,6 +73,10 @@ ELASTICACHE_AUTH_TOKEN=...
 # ELASTICACHE_TLS=false   (TLS is on by default)
 ```
 
+For IAM authentication instead of an auth token, set `ELASTICACHE_IAM_USER`,
+`ELASTICACHE_CACHE_NAME` and `ELASTICACHE_REGION` (see
+[IAM authentication](./redis.md#iam-authentication)).
+
 A URL takes precedence over the endpoint when both are set. For cluster-mode-enabled ElastiCache,
 see [Redis Cluster](./redis.md#redis-cluster).
 
@@ -90,6 +94,10 @@ from the environment, the same under `next start`, standalone and Docker. The on
 | `REDIS_PASSWORD` | — | Password when the URL has none. |
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN` | port `6379` | Host form, used when no URL is set. TLS is on. |
 | `ELASTICACHE_TLS` | `true` | `false` turns TLS off for the host form. |
+| `ELASTICACHE_IAM_USER` | unset | IAM authentication as this ElastiCache user id, instead of an auth token. Needs TLS, `ELASTICACHE_CACHE_NAME` and a region, and the optional AWS packages ([IAM authentication](./redis.md#iam-authentication)). |
+| `ELASTICACHE_CACHE_NAME` | — | With IAM: the replication group id or serverless cache name. |
+| `ELASTICACHE_REGION` | `AWS_REGION` / `AWS_DEFAULT_REGION` | With IAM: the cache's region. |
+| `ELASTICACHE_SERVERLESS` | from the hostname | With IAM: `true` for ElastiCache Serverless; unset, on for a `.serverless.` endpoint. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` (or `0`, `false`, `no`) forces memory everywhere, even with a URL set. A kill switch for every backend: it turns off Valkey and ElastiCache too, whatever variable set the URL. |
 | `CACHE_DEBUG` | unset | `1` (or `true`) logs hits, misses, writes (with each value's size in bytes) and state changes. It never logs the URL. |

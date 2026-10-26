@@ -185,7 +185,11 @@ logs is scrubbed on the way out: an error (and each error in its `cause` chain) 
 name, message, stack, `code`, `errno`, `syscall`, `address` and `port`, so the failed command
 ioredis attaches to an error (a rejected `AUTH` carries the password it tried) is dropped; objects
 lose `command`, `password` and similar keys; other values (a `Buffer`, a class instance) are logged
-as a placeholder such as `[Buffer 12 bytes]`; and URLs in any text lose their user information.
+as a placeholder such as `[Buffer 12 bytes]`; and URLs in any text lose their user information. With ElastiCache IAM the token is never logged,
+and the signature, credential and session token of a presigned AWS query
+(`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`) are removed from any text. A
+refused IAM token (`WRONGPASS`, `NOAUTH`, `NOPERM`) or one that cannot be made is logged as an
+error naming IAM and what to check.
 Other free text in a message is not scrubbed: a credential an error message spells out some other
 way reaches the log. A logger that throws never fails a cache call: the line goes to the console
 instead, with one note that the logger threw.

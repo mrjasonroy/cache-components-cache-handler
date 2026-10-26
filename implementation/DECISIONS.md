@@ -7,6 +7,97 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-12: ElastiCache IAM authentication, built in (16.4.3)
+
+**Why.** The docs said "for IAM auth, build your own client", with no example, and the obvious
+client (a token generated once, passed as `password`) fails silently: a token is valid 15 minutes,
+so every reconnect after that is refused and ioredis retries forever with the dead token, and
+ElastiCache closes IAM-authenticated connections after 12 hours unless they re-`AUTH`. The
+handlers then serve from per-instance memory, and nothing looks wrong. The maintainer chose to
+build it in rather than document a recipe.
+
+**Configuration.** `ELASTICACHE_IAM_USER` turns it on for whichever connection the environment
+describes (the `ELASTICACHE_*` host form or a `rediss://` URL); `ELASTICACHE_CACHE_NAME` is
+required rather than parsed from the endpoint (node-based endpoints carry the replication group id
+in a position that differs by endpoint type, so parsing would sometimes sign for the wrong name);
+the region is `ELASTICACHE_REGION`, `AWS_REGION`, `AWS_DEFAULT_REGION` (endpoints carry an
+abbreviation such as `use1`, not the region); serverless is `ELASTICACHE_SERVERLESS` or a
+`.serverless.` hostname, which is reliable. `CacheOptions.iam` mirrors them for custom handler
+files. `resolveIamOptions` throws at startup, naming every missing piece, when IAM is asked for and
+cannot work (no user, cache name or region; TLS off), and when IAM is asked for (the option or
+`ELASTICACHE_IAM_USER`) on a connection given as ioredis options without a url, which it cannot
+apply to: that would otherwise connect without IAM and be refused with `NOAUTH`, with no hint. The
+token replaces any password.
+
+**Token.** As AWS's samples: SigV4-presign `GET http://{cacheName}/?Action=connect&User={userId}`
+(+ `&ResourceType=ServerlessCache`), service `elasticache`, 900 s, and drop `http://`. The signing
+test checks the signature against an independent SigV4 implementation in node:crypto. The AWS
+packages are optional peer dependencies, not `optionalDependencies` (which npm installs by
+default): most users do not use IAM, and the credential chain pulls in a large tree. They are
+loaded with `requireModule` like ioredis, when a connection with IAM is opened, so importing the
+package never needs them.
+
+**Refresh, and how it hooks into ioredis 5** (checked in `ioredis/built`):
+
+- `Redis.connect()` builds `condition.auth` from `this.options.username/password` on every call,
+  and every reconnect goes through `this.connect()` (the close handler's retry timer). So writing a
+  new token into `client.options` is enough for every later reconnect. The owned client is created
+  with `lazyConnect: true` and connected once the first token is in its options; `connect` is
+  wrapped so a (re)connect first mints a token when the last is older than the refresh interval.
+  If no token can be made it still connects, the server refuses it, and the reconnect backoff
+  paces the next try: a loop that heals itself without a second retry scheduler.
+- `Cluster`: the `ConnectionPool` keeps a reference to `options.redisOptions` and copies it into
+  each node `Redis` it creates; node clients have `retryStrategy: null` and are recreated, not
+  reconnected. So the token goes into `redisOptions` (created, and handed to the pool, if the
+  cluster had none) and into each existing node's `options` (the slots refresher duplicates a
+  node's options). The cluster's own `connect` is wrapped the same way.
+- Every 10 minutes (unref'd `setInterval`) a new token is minted and a standalone `AUTH user token`
+  is sent on each ready connection (each ready node of a Cluster). ioredis writes a pipeline or
+  `MULTI` in one synchronous write, so the `AUTH` never lands inside a `MULTI`/`EXEC`; it is never
+  sent inside a script. A refused `AUTH` keeps the connection authenticated as before (Redis 7).
+- `connection.close()` stops the timer before `quit`; the `connect` wrapper does not reopen a
+  client whose status changed while it waited for a token, nor one marked `manuallyClosing`: a
+  `quit` while the client was `reconnecting` (no socket, no timer) ends in `disconnect()`, which
+  leaves the status as it was, and connecting then would open a socket nothing closes.
+- Making a token is bounded by 10 s. A credentials provider that never answers would otherwise
+  hold the shared in-flight refresh forever, and with it every later refresh and reconnect.
+
+**Errors.** Token failures and refused `AUTH`s are logged through the rate-limited error reporter,
+with a message naming IAM and what to check; an `error` event matching `WRONGPASS`/`NOAUTH`/
+`NOPERM` gets the same. Nothing throws into a request. The logger already drops `error.command`
+(where ioredis puts `AUTH`'s arguments); it now also scrubs `X-Amz-Signature`, `X-Amz-Credential`
+and `X-Amz-Security-Token` values from any text.
+
+**Own clients.** `CacheOptions.iam` with `client` throws: a passed client is never reconfigured
+(DEC-6). `attachElastiCacheIamAuth(client, options)` is the explicit opt-in for one, and the only
+way to IAM-authenticate a `Cluster` (cluster-mode-enabled ElastiCache).
+
+**Startup wait.** The first connection waits for credentials (web identity, IMDS) and a signed
+token before it even dials, which can take seconds on a cold pod, and the 500 ms
+`initialConnectWaitMs` runs from when the connection opens. Requests keep 500 ms: every request path
+(`isRedisReady`, the `"use cache"` fallback, the tag sync and send) awaits that one promise, then
+serves from memory or misses, so raising it would make the first requests on a cold pod wait for
+the token. A one-off operation that needs Redis rather than memory (`flushCache`, which otherwise
+threw "Redis is unavailable" from a script on a cold pod) awaits a second promise,
+`waitForOperationConnection`, on the same connection: 5 s with IAM (as the `ELASTICACHE_*` host
+form already raises `connectTimeout` to 10 s), the request wait without. Both are timed from when
+the connection opens, so a flush in a process that has been up a while does not wait again, and
+both end at once on a connection error. It is not part of the connection's identity: a flush and
+the handlers still share one connection.
+
+**Serverless.** ElastiCache Serverless is reached with the environment's plain `Redis` client; it is
+sharded behind its proxy, so keys of different slots in one command are refused with `CROSSSLOT`.
+The handlers' commands are single-key; the tag pruning script (two keys) already stopped on
+`CROSSSLOT` with a warning. `flushCache`'s batched `UNLINK` did not: it now falls back to one
+`UNLINK` per key, pipelined, for the rest of the flush. No hash tags: they would change the key
+layout for every user to suit one deployment type.
+
+**Not covered.** The ioredis Cluster pub/sub subscriber connection is not re-`AUTH`ed (the package
+does not use pub/sub); it picks up a fresh token when ioredis recreates it. A real-cache e2e
+(`src/integration/elasticache-iam.e2e.test.ts`, `ELASTICACHE_IAM_E2E=1`: connect, re-`AUTH`,
+reconnect, a tag revalidation across two connections, `flushCache({ scope: "build" })`) runs by
+hand against a serverless Valkey cache; it is not in CI.
+
 ## DEC-11: The memory budget is a share of the heap (16.4.3)
 
 **Problem.** DEC-9's fixed 98 MiB suits the 605 MB pods it was sized for, but wastes larger pods:

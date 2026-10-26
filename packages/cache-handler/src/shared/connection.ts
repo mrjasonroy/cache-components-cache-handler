@@ -27,6 +27,7 @@
 
 import type { Cluster, Redis, RedisOptions } from "ioredis";
 import { nowMs } from "./clock.js";
+import { type ResolvedIamOptions, attachIamAuth } from "./elasticache-iam.js";
 import { DEFAULT_ERROR_LOG_INTERVAL_MS, createErrorReporter } from "./error-reporter.js";
 import { type LoggerSource, processLogger, writeLog } from "./logger.js";
 import { requireModule } from "./node-require.js";
@@ -39,6 +40,13 @@ export const DEFAULT_CONNECT_TIMEOUT_MS = 2000;
 export const DEFAULT_SOCKET_TIMEOUT_MS = 2000;
 export const DEFAULT_KEEP_ALIVE_MS = 10_000;
 export const DEFAULT_INITIAL_CONNECT_WAIT_MS = 500;
+/**
+ * How long a one-off operation (`flushCache`) waits for the first connection when it is
+ * IAM-authenticated, in ms: the first connect waits for AWS credentials and a signed token, which
+ * on a cold pod (web identity, IMDS) can take seconds. Request paths keep
+ * `initialConnectWaitMs`.
+ */
+export const DEFAULT_IAM_OPERATION_CONNECT_WAIT_MS = 5000;
 export const DEFAULT_MAX_CONSECUTIVE_TIMEOUTS = 3;
 /** How long an application client stays marked not ready after repeated timeouts, in ms. */
 export const DEFAULT_UNOWNED_COOLDOWN_MS = 2000;
@@ -106,6 +114,14 @@ export interface RedisConnectionOptions {
   initialConnectWaitMs?: number;
 
   /**
+   * How long a one-off operation outside the request path (`flushCache`) waits for the first
+   * connection, in ms. It needs Redis rather than memory, so it can wait longer than a request.
+   * Not a connection setting: it is not part of the connection's identity.
+   * @default `initialConnectWaitMs`, or 5000 with `iam`
+   */
+  operationConnectWaitMs?: number;
+
+  /**
    * Drop and rebuild the connection after this many command timeouts in a row: a half-open or
    * stalled server keeps the client `ready` while every command waits out its timeout.
    * @default 3
@@ -122,6 +138,12 @@ export interface RedisConnectionOptions {
    * Extra ioredis options, applied last.
    */
   redisOptions?: RedisOptions;
+
+  /**
+   * Authenticate to ElastiCache with IAM tokens, minted and refreshed by the package
+   * (`shared/elasticache-iam.ts`). Replaces `password`.
+   */
+  iam?: ResolvedIamOptions;
 }
 
 /**
@@ -150,6 +172,16 @@ export interface RedisConnection {
    * `initialConnectWaitMs` (`false`). Settled once per connection.
    */
   waitForInitialConnection(): Promise<boolean>;
+
+  /**
+   * For a one-off operation outside the request path (`flushCache`) that needs Redis rather than
+   * memory: resolves `true` once the client is ready, or `false` once `operationConnectWaitMs`
+   * has passed since it was opened or the client has ended. A longer wait than the request wait
+   * (IAM) keeps waiting through connection errors, since the client retries within it; otherwise
+   * it is the request wait, which ends on the first error. Settled once per connection. Never
+   * awaited by the handlers, so a request never waits longer than `initialConnectWaitMs`.
+   */
+  waitForOperationConnection(): Promise<boolean>;
 
   /**
    * Call `listener` every time the client becomes ready, including after a reconnect.
@@ -238,7 +270,7 @@ function loadIoredis(): typeof import("ioredis").default {
  * interval share one connection.
  */
 export function connectionKey(options: RedisConnectionOptions): string {
-  const { errorLogIntervalMs: _ignored, ...rest } = options;
+  const { errorLogIntervalMs: _ignored, operationConnectWaitMs: _wait, ...rest } = options;
   return stableStringify(rest);
 }
 
@@ -377,6 +409,8 @@ function buildClient(options: RedisConnectionOptions): Redis {
     ...(options.password ? { password: options.password } : {}),
     ...(options.tls ? { tls: {} } : {}),
     ...options.redisOptions,
+    // With IAM the first connect waits for the first token (see `attachIamAuth`).
+    ...(options.iam ? { lazyConnect: true } : {}),
   };
 
   if (options.host) {
@@ -504,7 +538,11 @@ export function createRedisConnection(
   client: RedisClientLike,
   options: Pick<
     RedisConnectionOptions,
-    "initialConnectWaitMs" | "maxConsecutiveTimeouts" | "errorLogIntervalMs" | "commandTimeout"
+    | "initialConnectWaitMs"
+    | "operationConnectWaitMs"
+    | "maxConsecutiveTimeouts"
+    | "errorLogIntervalMs"
+    | "commandTimeout"
   > & { owned?: boolean; unownedCooldownMs?: number; logger?: LoggerSource } = {},
 ): RedisConnection {
   const owned = options.owned ?? true;
@@ -569,30 +607,21 @@ export function createRedisConnection(
     health = watched.health;
   }
 
-  const initialConnection = new Promise<boolean>((resolve) => {
-    if (client.status === "ready") {
-      resolve(true);
-      return;
-    }
-    const settle = (ready: boolean) => {
-      clearTimeout(timer);
-      client.off("ready", onReady);
-      client.off("error", onError);
-      resolve(ready);
-    };
-    const onReady = () => settle(true);
-    const onError = () => settle(false);
-    const timer = setTimeout(() => settle(false), initialConnectWaitMs);
-    timer.unref?.();
-    client.once("ready", onReady);
-    client.once("error", onError);
-  });
+  const initialConnection = waitForReady(client, initialConnectWaitMs);
+  const operationConnectWaitMs = options.operationConnectWaitMs ?? initialConnectWaitMs;
+  // Timed from the same start as the request wait, so a flush made once the process has been up a
+  // while does not wait again.
+  const operationConnection =
+    operationConnectWaitMs > initialConnectWaitMs
+      ? waitForReady(client, operationConnectWaitMs, { throughErrors: true })
+      : initialConnection;
 
   return {
     client: commandClient,
     owned,
     isReady: () => client.status === "ready" && health.healthy(),
     waitForInitialConnection: () => initialConnection,
+    waitForOperationConnection: () => operationConnection,
     onReady(listener) {
       readyListeners.add(listener);
       return () => {
@@ -605,6 +634,36 @@ export function createRedisConnection(
     },
     stats: () => ({ ...stats }),
   };
+}
+
+/**
+ * Resolves `true` when `client` is ready, `false` after `timeoutMs`, when the client ends, or (unless
+ * `throughErrors`) on its first error.
+ */
+function waitForReady(
+  client: RedisClientLike,
+  timeoutMs: number,
+  { throughErrors = false }: { throughErrors?: boolean } = {},
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (client.status === "ready") {
+      resolve(true);
+      return;
+    }
+    const failOn = throughErrors ? "end" : "error";
+    const settle = (ready: boolean) => {
+      clearTimeout(timer);
+      client.off("ready", onReady);
+      client.off(failOn, onFail);
+      resolve(ready);
+    };
+    const onReady = () => settle(true);
+    const onFail = () => settle(false);
+    const timer = setTimeout(() => settle(false), timeoutMs);
+    timer.unref?.();
+    client.once("ready", onReady);
+    client.once(failOn, onFail);
+  });
 }
 
 /**
@@ -648,7 +707,36 @@ export function openRedisConnection(
   options: RedisConnectionOptions = {},
   logger: LoggerSource = processLogger,
 ): RedisConnection {
-  return createRedisConnection(buildClient(options), { ...options, logger });
+  const client = buildClient(options);
+  const connection = createRedisConnection(client, {
+    ...options,
+    logger,
+    ...(options.iam && options.operationConnectWaitMs === undefined
+      ? { operationConnectWaitMs: DEFAULT_IAM_OPERATION_CONNECT_WAIT_MS }
+      : {}),
+  });
+  if (!options.iam) return connection;
+  let iam: ReturnType<typeof attachIamAuth>;
+  try {
+    iam = attachIamAuth(client, options.iam, {
+      logger,
+      ...(options.errorLogIntervalMs === undefined
+        ? {}
+        : { errorLogIntervalMs: options.errorLogIntervalMs }),
+      connect: true,
+    });
+  } catch (error) {
+    // The AWS packages are missing: nothing may keep this client around.
+    client.disconnect();
+    throw error;
+  }
+  return {
+    ...connection,
+    async close() {
+      iam.stop();
+      await connection.close();
+    },
+  };
 }
 
 /**

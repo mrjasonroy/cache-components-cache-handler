@@ -81,6 +81,10 @@ instead. It also accepts a function-form `next.config`.
 | `REDIS_URL` (or `VALKEY_URL`) | unset → memory only | `redis://` or `rediss://` URL, password included. |
 | `REDIS_PASSWORD` | — | Password when the URL has none. |
 | `ELASTICACHE_ENDPOINT`, `ELASTICACHE_PORT`, `ELASTICACHE_AUTH_TOKEN`, `ELASTICACHE_TLS` | port `6379`, TLS on | Host form, used when no URL is set. `ELASTICACHE_TLS=false` turns TLS off. |
+| `ELASTICACHE_IAM_USER` | unset | ElastiCache IAM authentication as this user id, instead of an auth token, with tokens refreshed by the package ([details](./docs/redis.md#iam-authentication)). Needs TLS. |
+| `ELASTICACHE_CACHE_NAME` | — | With IAM: the replication group id or serverless cache name the token is signed for. Required. |
+| `ELASTICACHE_REGION` | `AWS_REGION`, then `AWS_DEFAULT_REGION` | With IAM: the cache's region. |
+| `ELASTICACHE_SERVERLESS` | from the hostname | With IAM: `true` for ElastiCache Serverless; unset, on for a `.serverless.` endpoint. |
 | `CACHE_KEY_PREFIX` | `nextjs:` | Prefix for every key. Use it to share one Redis between apps. |
 | `CACHE_REDIS` | `on` | `off` forces memory everywhere, even with a URL set. |
 | `CACHE_DEBUG` | unset | `1` logs hits, misses, writes and state changes. It never logs the URL. |
@@ -117,6 +121,13 @@ The package's own tests add an e2e matrix on production builds (memory, Redis, V
 ElastiCache host form: Redis with TLS and an auth token), including two instances sharing Redis
 and Redis stopped mid-run, and an outage suite on real Redis 7 and Valkey 8 (down at boot, lost
 mid-run, stalled, back).
+
+ElastiCache IAM authentication is tested against a real ElastiCache Serverless cache (Valkey 8.1):
+connecting with a token, re-authenticating the live connection, reconnecting, a tag revalidation
+across two connections and `flushCache`. That needs an AWS account and a runner in the cache's
+VPC, so it is not in per-PR CI: it is a manual gate before a release
+(`scripts/aws-iam-e2e/run.sh`, see [development](./docs/development.md#elasticache-iam-against-a-real-cache)).
+The token signing and refresh are unit-tested on every PR.
 See [the harness README](./tests/next-deploy/README.md) and
 [how it's tested](./docs/development.md#how-its-tested).
 
@@ -128,6 +139,7 @@ See [the harness README](./tests/next-deploy/README.md) and
 | **Redis 6.2+** | `REDIS_URL=redis://…` or `rediss://…` |
 | **Valkey** | `VALKEY_URL` or `REDIS_URL`, same URL format |
 | **AWS ElastiCache** | `ELASTICACHE_ENDPOINT` + `ELASTICACHE_AUTH_TOKEN`, TLS on (`ELASTICACHE_TLS=false` turns it off) |
+| **AWS ElastiCache, IAM auth** | `ELASTICACHE_ENDPOINT` (or a `rediss://` `REDIS_URL`) + `ELASTICACHE_IAM_USER`, `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION`. TLS required; Valkey 7.2+ or Redis OSS 7.0+; node-based or serverless (detected from a `.serverless.` endpoint, or `ELASTICACHE_SERVERLESS`). Needs the optional peer dependencies `@smithy/signature-v4`, `@aws-crypto/sha256-js` and `@aws-sdk/credential-provider-node`. [Details](./docs/redis.md#iam-authentication) |
 | **Redis Cluster, Sentinel** | Your own ioredis client through a [custom handler](./docs/custom-handlers.md). `flushCache` scans every master. |
 
 The minimum is Redis 6.2 (or any Valkey): revalidations use `ZADD GT` and a single-key Lua

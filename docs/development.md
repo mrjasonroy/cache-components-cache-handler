@@ -95,6 +95,31 @@ pnpm docker:down
 `.github/workflows/ci.yml` is the reference for each lane's exact environment, including the
 ElastiCache lane (TLS and an auth token).
 
+### ElastiCache IAM against a real cache
+
+`packages/cache-handler/src/integration/elasticache-iam.e2e.test.ts` runs against a real
+IAM-enabled ElastiCache cache and is skipped unless `ELASTICACHE_IAM_E2E=1`. It needs a network
+path into the cache's VPC and AWS credentials allowed `elasticache:Connect`, so it is not in
+per-PR CI; run it before a release that touches the connection or IAM code.
+
+`scripts/aws-iam-e2e/run.sh <ref>` (a branch such as `origin/feat/x`, a SHA, or `pr/84`)
+starts the runner instance (EC2, tagged `Name=cch-iam-e2e-runner`, in the cache's VPC), waits for
+SSM, checks out the ref, builds, runs the test against the serverless cache `cch-iam-e2e`, prints
+the output and stops the instance again. Its exit code is the test's. It needs the AWS CLI, `jq`
+and an AWS profile for the account that holds the cache: set `AWS_PROFILE` and `AWS_REGION`
+(else the profile's region). The instance and the cache endpoint are looked up by name at run
+time; `CCH_INSTANCE_NAME`, `CCH_CACHE_NAME` and `CCH_IAM_USER` override the names.
+`scripts/aws-iam-e2e/teardown.sh` deletes the runner, its role, the cache, the user group, the
+user and the security groups, and is safe to run twice.
+
+To run it from a machine that can reach a cache directly:
+
+```bash
+ELASTICACHE_IAM_E2E=1 ELASTICACHE_ENDPOINT=<endpoint> ELASTICACHE_IAM_USER=<user id> \
+ELASTICACHE_CACHE_NAME=<cache name> ELASTICACHE_REGION=<region> \
+  pnpm --filter @mrjasonroy/cache-components-cache-handler exec vitest run src/integration/elasticache-iam
+```
+
 ### Next.js's own caching suites
 
 `tests/next-deploy/` runs Next.js's caching e2e suites in deploy mode against the package. It runs
@@ -115,6 +140,10 @@ in CI; see [tests/next-deploy/README.md](../tests/next-deploy/README.md).
   plain `next start` baseline and against the package with two instances behind a proxy, and a
   suite that passes on the baseline must pass with the package. See
   [tests/next-deploy/README.md](../tests/next-deploy/README.md).
+- **ElastiCache IAM against a real ElastiCache Serverless cache** (Valkey 8.1), by hand before a
+  release: token auth, re-authentication, reconnect, a revalidation across two connections and
+  `flushCache` ([above](#elasticache-iam-against-a-real-cache)). Signing and refresh are
+  unit-tested in CI.
 
 | Workflow | What it verifies |
 |---|---|
