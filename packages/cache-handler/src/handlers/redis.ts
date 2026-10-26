@@ -93,7 +93,9 @@ export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheO
 
   /**
    * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 365 days,
-   * rounded up to whole seconds). A finite number greater than 0; anything else throws.
+   * rounded up to whole seconds). Only a negative or infinite number throws. A falsy or
+   * non-numeric value (16.4.2 forms) is dropped (365-day default) and a numeric string converted,
+   * each with a one-time warning.
    * @default 31536000 (365 days)
    */
   defaultTTL?: number;

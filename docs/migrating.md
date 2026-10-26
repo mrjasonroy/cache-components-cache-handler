@@ -72,8 +72,8 @@ delete the subclass and use `withCache`. If you keep it:
   none is set it runs in memory, and a production server logs a one-time warning; in 16.4.2 it
   connected to `localhost:6379`. Set `REDIS_URL=redis://localhost:6379` to keep that.
 - `tagPrefix` is ignored. Tag records live in the `<keyPrefix>tags` hash.
-- `defaultTTL` without a revalidate period now defaults to 365 days (16.4.2: no expiry). A value
-  that is not a number (`0`, `NaN`, `null`, `"1h"`, ...), which 16.4.2 mostly read as "no expiry",
+- `defaultTTL` without a revalidate period now defaults to 365 days (16.4.2: no expiry). A falsy
+  or non-numeric value (`0`, `NaN`, `null`, `"1h"`, ...), which 16.4.2 mostly read as "no expiry",
   is ignored with a warning; a numeric string such as `process.env.CACHE_TTL` is converted with a
   warning. A negative or infinite number throws. A numeric `defaultTTL` or `revalidate` now
   actually caches: 16.4.2's handler skipped those writes (a seconds/milliseconds bug).
