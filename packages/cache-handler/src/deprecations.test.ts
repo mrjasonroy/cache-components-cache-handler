@@ -2,7 +2,8 @@
  * The legacy data cache stack, the Next 14 handlers' types, `RedisCacheHandler.close()` and
  * `RedisCacheHandlerOptions` are
  * deprecated in 16.4.3: each keeps
- * working in 16.x, and its JSDoc says so and names the replacement, so editors strike it through.
+ * working in 16.4.x (removed in 16.5.0), and its JSDoc says so and names the replacement, so
+ * editors strike it through.
  */
 
 import { readFileSync } from "node:fs";

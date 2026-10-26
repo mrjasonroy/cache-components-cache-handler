@@ -1,5 +1,15 @@
 # Migrating
 
+## Upgrading from 16.4.2: what to check first
+
+- **Node.js 22.3 or later.** 16.4.3 needs `process.getBuiltinModule` (`engines.node` is
+  `>=22.3.0`, was `>=22.0.0`). On Node 22.0–22.2 the first cache call throws
+  `Cannot load node:…: this package needs Node.js 22.3 or later`, and Yarn 1 refuses to install.
+  Upgrade Node before upgrading the package.
+- **Deprecation warnings.** Your 16.4.2 setup keeps working in 16.4.x, but each 16.4.2 API it uses
+  logs one warning per process naming its replacement. They are removed in 16.5.0: move to
+  `withCache` (below) before then.
+
 ## From 16.4.2 (handler files in `next.config`)
 
 ```diff
@@ -58,12 +68,20 @@ implement the Next 16 contract. Revalidations made by 16.4.2 instances do not re
 during the rollout ([above](#revalidations-do-not-cross-the-upgrade) has what to do). You can
 delete the subclass and use `withCache`. If you keep it:
 
-- With no `redis` option, the handler reads `REDIS_URL`. If that is unset it runs in memory; in
-  16.4.2 it connected to `localhost:6379`.
+- With no `redis` option, the handler reads `REDIS_URL` (or `VALKEY_URL`, `ELASTICACHE_*`). If
+  none is set it runs in memory, and a production server logs a one-time warning; in 16.4.2 it
+  connected to `localhost:6379`. Set `REDIS_URL=redis://localhost:6379` to keep that.
 - `tagPrefix` is ignored. Tag records live in the `<keyPrefix>tags` hash.
+- `defaultTTL` without a revalidate period now defaults to 365 days (16.4.2: no expiry). A falsy
+  or non-numeric value (`0`, `NaN`, `null`, `"1h"`, ...), which 16.4.2 mostly read as "no expiry",
+  is ignored with a warning; a numeric string such as `process.env.CACHE_TTL` is converted with a
+  warning. A negative or infinite number throws. A numeric `defaultTTL` or `revalidate` now
+  actually caches: 16.4.2's handler skipped those writes (a seconds/milliseconds bug).
 - `get` no longer returns `age`. Next computes staleness from `lastModified` and `cacheControl`.
 
-Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read and expire on their own.
+Old keys (`nextjs:cache:*`, `nextjs:tags:*`) are no longer read. Those 16.4.2 wrote with a TTL
+expire on their own; entries without one and the `nextjs:tags:<tag>` revalidation records stay
+until you delete them (for example `redis-cli --scan --pattern 'nextjs:tags:*'`).
 
 ## From `@fortedigital/nextjs-cache-handler` or `@neshca/cache-handler`
 
@@ -79,5 +97,6 @@ and stores it.
 
 ## Deprecated exports
 
-The exports the old setups used still work in 16.x. The
-[API reference](./api-reference.md#deprecated) lists each one and its replacement.
+The exports the old setups used still work in 16.4.x, log a one-time deprecation warning, and
+are removed in 16.5.0. The [API reference](./api-reference.md#deprecated) lists each one and its
+replacement.

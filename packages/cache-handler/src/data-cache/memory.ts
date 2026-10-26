@@ -11,6 +11,11 @@ import { nextClockMs } from "../shared/clock.js";
 import { debugWriter } from "../shared/logger.js";
 import type { DataCacheEntry, DataCacheHandler, Timestamp } from "./types.js";
 
+/**
+ * Options of {@link createMemoryDataCacheHandler}.
+ *
+ * @deprecated Part of the 16.4.2 API; use `createLocalCacheHandler`. Still works in 16.4.x; removed in 16.5.0.
+ */
 export interface MemoryDataCacheHandlerOptions {
   /**
    * Maximum cache size in bytes
@@ -330,7 +335,7 @@ function areTagsStale(tags: string[], timestamp: Timestamp): boolean {
  *
  * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)` (its default `"use cache"`
  *   handler keeps values in memory), or `createLocalCacheHandler` in a custom handler file.
- *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
+ *   It keeps working in 16.4.x, logs a one-time deprecation warning, and is removed in 16.5.0.
  */
 export function createMemoryDataCacheHandler(
   options: MemoryDataCacheHandlerOptions = {},

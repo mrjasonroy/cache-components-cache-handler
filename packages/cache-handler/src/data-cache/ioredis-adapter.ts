@@ -6,6 +6,8 @@ import type { RedisClient } from "./redis.js";
  * Only the methods the data cache handler relies on are declared, so consumers
  * don't need ioredis' types in scope to call {@link createIoredisAdapter}. Both
  * ioredis `Redis` and `Cluster` instances satisfy this shape.
+ *
+ * @deprecated Part of the 16.4.2 API; pass the ioredis client to `createRemoteCacheHandler({ client })`. Still works in 16.4.x; removed in 16.5.0.
  */
 export interface IoredisLike {
   get(key: string): Promise<string | null>;
@@ -47,7 +49,7 @@ export interface IoredisLike {
  *
  * @deprecated Only needed by the deprecated `createRedisDataCacheHandler`. Pass an ioredis client
  *   straight to `createRemoteCacheHandler({ client })` instead.
- *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
+ *   It keeps working in 16.4.x, logs a one-time deprecation warning, and is removed in 16.5.0.
  */
 export function createIoredisAdapter(redis: IoredisLike): RedisClient {
   return {

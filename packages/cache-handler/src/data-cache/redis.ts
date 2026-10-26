@@ -43,6 +43,11 @@ const INFINITE_CACHE = 0xfffffffe;
  */
 const DEFAULT_TAG_TTL = 366 * 24 * 60 * 60;
 
+/**
+ * Options of {@link createRedisDataCacheHandler}.
+ *
+ * @deprecated Part of the 16.4.2 API; use `createRemoteCacheHandler`. Still works in 16.4.x; removed in 16.5.0.
+ */
 export interface RedisDataCacheHandlerOptions {
   /**
    * Redis client instance (node-redis)
@@ -97,6 +102,8 @@ export interface RedisDataCacheHandlerOptions {
 /**
  * Redis client interface (node-redis compatible)
  * Uses node-redis-style SET with options object: set(key, value, { EX: seconds })
+ *
+ * @deprecated Part of the 16.4.2 API; `createRemoteCacheHandler` takes an ioredis client. Still works in 16.4.x; removed in 16.5.0.
  */
 export interface RedisClient {
   get(key: string): Promise<string | null>;
@@ -202,7 +209,7 @@ function bufferToStream(buffer: Buffer): ReadableStream<Uint8Array> {
  *
  * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)`, or
  *   `createRemoteCacheHandler({ client })` with an ioredis client in a custom handler file.
- *   It keeps working in 16.x and is removed, or becomes a shim, on the Next 17 line.
+ *   It keeps working in 16.4.x, logs a one-time deprecation warning, and is removed in 16.5.0.
  */
 export function createRedisDataCacheHandler(
   options: RedisDataCacheHandlerOptions,

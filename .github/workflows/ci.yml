@@ -152,8 +152,19 @@ jobs:
             image: redis:7-alpine
             custom_handlers: "1"
 
+          # Upgrade from 16.4.2: no withCache; the app is wired the way the 16.4.2 README told
+          # users to (apps/e2e-test-app/upgrade-16.4.2: createCacheHandler for cacheHandlers, a
+          # RedisCacheHandler subclass for cacheHandler, cacheMaxMemorySize: 0).
+          - backend: redis-16.4.2-config
+            image: redis:7-alpine
+            custom_handlers: "0"
+            config: "16.4.2"
+            key_prefix: "nextjs:cache:"
+
     env:
       E2E_CUSTOM_HANDLERS: ${{ matrix.custom_handlers }}
+      E2E_CONFIG: ${{ matrix.config }}
+      E2E_KEY_PREFIX: ${{ matrix.key_prefix }}
       E2E_FLUSH_TOKEN: ci-e2e-flush-token
 
     steps:
@@ -223,8 +234,9 @@ jobs:
 
       # Last, because it stops Redis under both instances. playwright.config.ts selects only
       # the @outage spec when E2E_OUTAGE=1.
+      # The 16.4.2-config lane skips it: the outage spec asserts withCache's memory fallback.
       - name: Run Redis outage e2e test
-        if: matrix.image != ''
+        if: matrix.image != '' && matrix.config != '16.4.2'
         env:
           E2E_OUTAGE: "1"
         run: |
@@ -372,4 +384,4 @@ jobs:
             fi
           done
 
-          echo "✅ All tests passed (memory, redis, valkey, custom handlers, elasticache, redis integration)!"
+          echo "✅ All tests passed (memory, redis, valkey, custom handlers, 16.4.2 config, elasticache, redis integration)!"

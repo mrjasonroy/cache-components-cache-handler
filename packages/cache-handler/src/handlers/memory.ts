@@ -2,6 +2,7 @@ import { isImplicitTag } from "../helpers/is-implicit-tag.js";
 import { calculateLifespan, isExpired } from "../helpers/lifespan.js";
 import { jsonReplacer } from "../helpers/serialization.js";
 import { nowMs, toNextClock } from "../shared/clock.js";
+import { warnDeprecated } from "../shared/deprecation.js";
 import type {
   CacheHandler,
   CacheHandlerContext,
@@ -15,7 +16,7 @@ import type {
 /**
  * Options for the deprecated `MemoryCacheHandler`.
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
  */
 export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
   /**
@@ -63,7 +64,7 @@ export const MAX_REVALIDATED_TAGS = 10_000;
  * });
  * ```
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
  */
 export class MemoryCacheHandler implements CacheHandler {
   public readonly name = "local-lru";
@@ -77,6 +78,7 @@ export class MemoryCacheHandler implements CacheHandler {
   private readonly defaultTTL?: number;
 
   constructor(options: MemoryCacheHandlerOptions = {}) {
+    warnDeprecated("MemoryCacheHandler", "Use withCache(nextConfig) without REDIS_URL.");
     this.cache = new Map();
     this.revalidatedTags = new Map();
     this.maxItemsNumber = options.maxItemsNumber ?? 1000;
@@ -235,7 +237,7 @@ export class MemoryCacheHandler implements CacheHandler {
  * });
  * ```
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed on the Next 17 line.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
  */
 export function createMemoryCacheHandler(options?: MemoryCacheHandlerOptions): MemoryCacheHandler {
   return new MemoryCacheHandler(options);

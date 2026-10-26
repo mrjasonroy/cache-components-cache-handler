@@ -12,8 +12,11 @@ export const INSTANCE_B = "http://localhost:3001";
 export const REDIS_CONTAINER = process.env.E2E_REDIS_CONTAINER ?? "";
 export const isRedisLane = REDIS_CONTAINER !== "";
 
-/** Mirrors the package default (`CACHE_KEY_PREFIX`, `nextjs:`). */
-export const KEY_PREFIX = process.env.CACHE_KEY_PREFIX ?? "nextjs:";
+/**
+ * Mirrors the package default (`CACHE_KEY_PREFIX`, `nextjs:`). The 16.4.2-config lane sets
+ * E2E_KEY_PREFIX to its page handler's `keyPrefix`.
+ */
+export const KEY_PREFIX = process.env.E2E_KEY_PREFIX || process.env.CACHE_KEY_PREFIX || "nextjs:";
 
 /** Entries live under `<prefix><buildId>:`; the build ID is the one `next build` wrote. */
 export function buildId(): string {

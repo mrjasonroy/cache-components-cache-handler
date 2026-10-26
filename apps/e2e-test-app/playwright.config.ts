@@ -5,6 +5,10 @@ import { defineConfig, devices } from "@playwright/test";
 // E2E_OUTAGE=1, in its own CI step after the main suite.
 const redisLane = Boolean(process.env.E2E_REDIS_CONTAINER);
 const outageRun = process.env.E2E_OUTAGE === "1";
+// E2E_CONFIG=16.4.2: the app is wired the 16.4.2 way (next.config.mjs). Its "use cache" data
+// stack keeps 16.4.2's key layout and has no flushCache, so the specs that assert withCache's
+// layout or call flushCache do not apply.
+const config16_4_2 = process.env.E2E_CONFIG === "16.4.2";
 
 const server = (port: number) => ({
   // IMPORTANT: Must use production build for cache testing
@@ -28,6 +32,7 @@ export default defineConfig({
   timeout: 60 * 1000, // 60 seconds per test (accommodate 3s delays + overhead)
   grep: outageRun ? /@outage/ : undefined,
   grepInvert: outageRun ? undefined : /@outage/,
+  testIgnore: config16_4_2 ? ["**/data-handlers.spec.ts", "**/flush.spec.ts"] : undefined,
   use: {
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",

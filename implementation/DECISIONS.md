@@ -7,6 +7,52 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-14: The 16.4.2 API is deprecated with a runtime warning and removed in 16.5.0 (16.4.3)
+
+**Why.** 16.4.3 is a large release under a patch number (the version follows Next.js), so every
+`^16.4.2` / `~16.4.2` install gets it without asking. The maintainer's policy: a 16.4.2 setup must
+keep working on upgrade, but the old API is not carried forward. It is deprecated in 16.4.3 and
+removed in 16.5.0 (supersedes "kept until the Next 17 line" in DEC-4 M3 and the JSDoc).
+
+**What.**
+- Every 16.4.2-only API is `@deprecated` in JSDoc and logs one warning per process on first use,
+  naming the replacement and `docs/migrating.md` (`shared/deprecation.ts`). The once-per-process
+  set lives on `globalThis` (DEC-5).
+- The package entry exports *wrapped* functions, so only an application's calls warn. The package
+  calls the same code internally (`createCacheHandler` builds on `createRedisDataCacheHandler` and
+  `createIoredisAdapter`; the memory fallback uses `createMemoryDataCacheHandler`), and those
+  calls must stay silent. While a wrapped function runs, deprecation warnings from inside it are
+  suppressed, so one call logs one line (`createMemoryCacheHandler()` does not also warn for the
+  `MemoryCacheHandler` it builds). `MemoryCacheHandler` and `CompositeHandler`, never constructed
+  internally, warn in their constructors. `RedisCacheHandler` is the current page handler: only its
+  16.4.2 options (`redis`, `tagPrefix`, a `defaultTTL` that is not a number) and `close()` warn.
+- A `RedisCacheHandler` the application constructs with no connection setting at all (no `redis`,
+  `url` or `client`, no `REDIS_URL` / `VALKEY_URL` / `ELASTICACHE_ENDPOINT`) runs in memory, as
+  before, but a production server (`NODE_ENV=production`, not `next build`, not the edge runtime,
+  not `CACHE_REDIS=off`) logs once that 16.4.2 connected to `localhost:6379` there. The classes
+  `createPageCacheHandler` returns (and subclasses of them) carry a static marker, so withCache's built-in handler, whose memory-only mode without
+  a URL is documented, never logs it.
+- The Node floor stays `>=22.3.0` (`process.getBuiltinModule`); docs/migrating.md says so up front.
+- `createCacheConfig` / `createCacheConfigWithProfiles` regain 16.4.2's return type when called
+  with `isrHandlerPath` (`cacheHandler: string`) through overloads; without it, `cacheHandler` is
+  `string | undefined`.
+- `IMPLICIT_TAG_PREFIX` and the 16.4.2 types can only be deprecated in JSDoc.
+- One break found by the upgrade tests was fixed by keeping the 16.4.2 behaviour working: 16.4.3's
+  `RedisCacheHandler` constructor threw on any `defaultTTL` that is not a finite number above 0,
+  so a 16.4.2 subclass passing, say, `process.env.CACHE_TTL` failed to start. What 16.4.2 did
+  with each value was measured by running v16.4.2's `RedisCacheHandler` against a recording fake
+  client (table in `implementation/upgrade-16.4.2.md`): every non-number value booted, and the
+  falsy ones (`0`, `NaN`, `null`, `""`, `false`) and most strings (`"1h"`, `"abc"`, `"-5"`) and
+  objects cached without expiry. So no non-number throws now. A falsy or non-numeric value is
+  dropped (365-day default) and a numeric string such as `"60"` converted, each with a one-time
+  warning naming the value. Only negative and infinite numbers still throw: 16.4.2 never cached
+  anything with them (a negative TTL skipped the write; `Infinity` made `SETEX` fail).
+
+**Tests.** `src/upgrade-16.4.2.test.ts`, `src/upgrade-16.4.2.test-d.ts`,
+`src/integration/upgrade-16.4.2.redis.test.ts`, and the `redis-16.4.2-config` e2e lane
+(`E2E_CONFIG=16.4.2`, the app wired exactly as the 16.4.2 README said). The inventory is
+`implementation/upgrade-16.4.2.md`.
+
 ## DEC-13: The package maps one to one onto Next's directives (16.4.3)
 
 **Rule (the maintainer's).** `"use cache"` → `cacheHandlers.default`: per-instance memory with tag
@@ -32,7 +78,7 @@ the `v16.4.2` tag, so no aliases):
 - `createRedisCacheHandler` is renamed `createPageCacheHandler`: it builds the `cacheHandler`
   (page) handler, and "Redis" no longer says which one. Its options type is renamed
   `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` was exported by 16.4.2, so it stays as a
-  deprecated alias. The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
+  deprecated alias (removed in 16.5.0, DEC-14). The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
   page handler.
 
 **Memory split.** `MEMORY_STORE_SHARES` (DEC-9, DEC-11) is unchanged. No store is dead: `page` and

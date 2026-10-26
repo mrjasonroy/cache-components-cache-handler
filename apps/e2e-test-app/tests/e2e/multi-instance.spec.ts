@@ -18,6 +18,9 @@ function settleTagSync(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 1_000));
 }
 
+/** The 16.4.2-config lane (E2E_CONFIG=16.4.2, see next.config.mjs). */
+const config16_4_2 = process.env.E2E_CONFIG === "16.4.2";
+
 // Two `next start` processes (3000 and 3001) sharing one Redis. Invalidation on A must reach B.
 test.describe("Two instances sharing Redis", () => {
   test.skip(!isRedisLane, "needs Redis and the second instance");
@@ -35,14 +38,22 @@ test.describe("Two instances sharing Redis", () => {
     await waitForChange(INSTANCE_B, path, "remote", onA);
   });
 
-  test('plain "use cache" is per instance, "use cache: remote" is shared', async () => {
+  test('plain "use cache" is per instance (shared in the 16.4.2 config), "use cache: remote" is shared', async () => {
     const id = uniqueId("multi-split");
     const path = `/e2e/data?id=${id}`;
 
-    // Each instance renders and keeps its own "use cache" value: the stamps differ.
     const localA = await waitForStable(INSTANCE_A, path, "local");
-    const localB = await waitForStable(INSTANCE_B, path, "local");
-    expect(localB, '"use cache" must not be shared through Redis').not.toBe(localA);
+    if (config16_4_2) {
+      // The 16.4.2 README pointed cacheHandlers.default at the Redis data handler too, so there
+      // plain "use cache" is shared, as it was in 16.4.2.
+      await expect(async () => {
+        expect(await readStamp(INSTANCE_B, path, "local")).toBe(localA);
+      }).toPass({ timeout: 15_000 });
+    } else {
+      // Each instance renders and keeps its own "use cache" value: the stamps differ.
+      const localB = await waitForStable(INSTANCE_B, path, "local");
+      expect(localB, '"use cache" must not be shared through Redis').not.toBe(localA);
+    }
 
     // The remote value from the same page is one copy in Redis for both.
     const remoteA = await waitForStable(INSTANCE_A, path, "remote");

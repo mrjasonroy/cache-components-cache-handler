@@ -10,7 +10,7 @@
  * @param value - Value that might be a Buffer
  * @returns Base64 string if Buffer, original value otherwise
  *
- * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.0.
  */
 export function bufferToString(value: unknown): unknown {
   if (Buffer.isBuffer(value)) {
@@ -43,7 +43,7 @@ export function bufferToString(value: unknown): unknown {
  * @param isBuffer - Whether this value should be converted to Buffer
  * @returns Buffer if isBuffer is true, original value otherwise
  *
- * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.0.
  */
 export function stringToBuffer(value: string, isBuffer: boolean): Buffer | string {
   if (isBuffer && typeof value === "string") {

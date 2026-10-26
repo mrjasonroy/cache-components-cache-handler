@@ -665,14 +665,54 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(fake.ttlOf("app:development:page:/blog")).toBe(1);
     });
 
-    test("an invalid defaultTTL throws at construction, as for the remote handler", () => {
-      for (const defaultTTL of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "60" as never]) {
+    test("a negative or infinite defaultTTL (never cached in 16.4.2) throws at construction", () => {
+      for (const defaultTTL of [-1, -0.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
         expect(
           () => new RedisCacheHandler({ client: asClient(new FakeRedis()), defaultTTL }),
         ).toThrow(
           /RedisCacheHandler: defaultTTL must be a finite number of seconds greater than 0/,
         );
       }
+    });
+
+    test.each([
+      [0, "defaultTTL: 0` (no expiry)"],
+      [Number.NaN, "defaultTTL: NaN` (no expiry)"],
+      [null, "defaultTTL: null` (no expiry)"],
+      ["", 'defaultTTL: ""` (no expiry)'],
+      [false, "defaultTTL: false` (no expiry)"],
+      ["1h", 'defaultTTL: "1h"` (not a number of seconds)'],
+      ["abc", 'defaultTTL: "abc"` (not a number of seconds)'],
+      ["-5", 'defaultTTL: "-5"` (not a number of seconds)'],
+      ["0", 'defaultTTL: "0"` (not a number of seconds)'],
+      [{}, "defaultTTL: [object Object]` (not a number of seconds)"],
+    ])(
+      "a 16.4.2 defaultTTL %j boots with the default lifetime and says so",
+      async (defaultTTL, label) => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const fake = new FakeRedis();
+        const handler = new RedisCacheHandler({
+          client: asClient(fake),
+          keyPrefix: "app:",
+          defaultTTL: defaultTTL as never,
+        });
+        await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
+        expect(fake.ttlOf("app:development:page:/blog")).toBe(MAX_ENTRY_AGE_SECONDS);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(label));
+      },
+    );
+
+    test("a numeric string defaultTTL (e.g. process.env.CACHE_TTL) is coerced, with a warning", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fake = new FakeRedis();
+      const handler = new RedisCacheHandler({
+        client: asClient(fake),
+        keyPrefix: "app:",
+        defaultTTL: "120" as never,
+      });
+      await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
+      expect(fake.ttlOf("app:development:page:/blog")).toBe(120);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('defaultTTL: "120"` (a string)'));
     });
 
     test("a URL string opens a connection from the URL", () => {

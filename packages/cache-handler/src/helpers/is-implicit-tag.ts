@@ -7,7 +7,7 @@ import { IMPLICIT_TAG_PREFIX } from "../types.js";
  * @param tag - The tag to check
  * @returns True if the tag is implicit, false otherwise
  *
- * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed on the Next 17 line.
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.0.
  */
 export function isImplicitTag(tag: string): boolean {
   // Guard against non-string values that Next.js might pass

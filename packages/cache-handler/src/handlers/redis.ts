@@ -38,7 +38,8 @@ import { markPageHandlerCreated } from "../data-cache/isr-warning.js";
 import { getCacheScope, registerServerDistDir } from "../shared/build-id.js";
 import { nowMs, toNextClock } from "../shared/clock.js";
 import { decodeStored, encodeEntry, encodeStored, storedSizes } from "../shared/codec.js";
-import { isBuildPhase, isEdgeRuntime } from "../shared/env.js";
+import { MIGRATION_GUIDE, warnDeprecated, warnOnce } from "../shared/deprecation.js";
+import { isBuildPhase, isEdgeRuntime, isRedisDisabled } from "../shared/env.js";
 import { FLUSH_TAG, MAX_ENTRY_AGE_SECONDS, buildFlushTag, pageKey } from "../shared/keys.js";
 import { stringListBytes } from "../shared/memory-store.js";
 import { readWithTags } from "../shared/read-with-tags.js";
@@ -79,18 +80,22 @@ export const EXPIRE_FACTOR = 1.5;
 export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheOptions {
   /**
    * 16.4.2 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
+   * @deprecated Pass `client` (an ioredis client) or `url` instead. Still works in 16.4.x; removed
+   * in 16.5.0.
    */
   redis?: Redis | Cluster | string | RedisOptions;
 
   /**
    * @deprecated Tag records now live in the `<keyPrefix>tags` hash and are shared by every handler;
-   * this option is ignored.
+   * this option is ignored. Removed in 16.5.0.
    */
   tagPrefix?: string;
 
   /**
    * Lifetime in seconds of an entry without a revalidate period or `expire` (capped at 365 days,
-   * rounded up to whole seconds). A finite number greater than 0; anything else throws.
+   * rounded up to whole seconds). Only a negative or infinite number throws. A falsy or
+   * non-numeric value (16.4.2 forms) is dropped (365-day default) and a numeric string converted,
+   * each with a one-time warning.
    * @default 31536000 (365 days)
    */
   defaultTTL?: number;
@@ -104,7 +109,7 @@ export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheO
 }
 
 /**
- * @deprecated Renamed {@link PageCacheHandlerOptions}. Still works; removed on the Next 17 line.
+ * @deprecated Renamed {@link PageCacheHandlerOptions}. Still works in 16.4.x; removed in 16.5.0.
  */
 export type RedisCacheHandlerOptions = PageCacheHandlerOptions;
 
@@ -134,6 +139,76 @@ function isRedisClient(value: unknown): value is Redis | Cluster {
     typeof (value as Redis).on === "function"
   );
 }
+
+/**
+ * Marks the classes {@link createPageCacheHandler} returns, i.e. the package's own construction
+ * path (withCache's built-in page handler), as opposed to a class the application constructs.
+ */
+const CONFIGURED_CLASS = Symbol("configured page handler class");
+
+function describeValue(value: unknown): string {
+  return typeof value === "string" ? JSON.stringify(value) : String(value);
+}
+
+/**
+ * `defaultTTL` as 16.4.2 accepted it, so a 16.4.2 subclass keeps booting. Measured by running
+ * 16.4.2's `RedisCacheHandler` (implementation/upgrade-16.4.2.md): no non-number value made it
+ * fail, and most ("1h", "abc", {} as well as the falsy ones) cached without expiry, so none
+ * throws here. Each logs a one-time warning naming the value:
+ *
+ * - a falsy value (0, NaN, null, "", false), 16.4.2's "no expiry", is dropped (365-day default);
+ * - a numeric string ("60", `process.env.CACHE_TTL`) becomes its number;
+ * - any other non-number ("1h", "abc", "-5", "0", an object) is dropped (365-day default).
+ *
+ * Numbers are returned as is and validated by the constructor: a negative or infinite one throws
+ * (16.4.2 never cached anything with it).
+ */
+export function legacyDefaultTTL(value: unknown): unknown {
+  if (value === undefined || (typeof value === "number" && value)) return value;
+  if (!value) {
+    warnDeprecated(
+      `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (no expiry)`,
+      "Omit defaultTTL: entries without a revalidate period are kept for 365 days.",
+    );
+    return undefined;
+  }
+  const seconds = typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  if (Number.isFinite(seconds) && seconds > 0) {
+    warnDeprecated(
+      `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (a string)`,
+      "Pass a number of seconds, e.g. Number(process.env.CACHE_TTL).",
+    );
+    return seconds;
+  }
+  warnDeprecated(
+    `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (not a number of seconds)`,
+    "It is ignored: entries without a revalidate period are kept for 365 days.",
+  );
+  return undefined;
+}
+
+/**
+ * Whether no Redis connection is configured at all: no `redis` / `url` / `client` option and no
+ * REDIS_URL, VALKEY_URL or ELASTICACHE_ENDPOINT.
+ */
+function hasNoConnectionSettings(options: PageCacheHandlerOptions): boolean {
+  return (
+    options.redis === undefined &&
+    options.url === undefined &&
+    options.client === undefined &&
+    !process.env.REDIS_URL &&
+    !process.env.VALKEY_URL &&
+    !process.env.ELASTICACHE_ENDPOINT
+  );
+}
+
+export const NO_CONNECTION_WARNING = [
+  "@mrjasonroy/cache-components-cache-handler: RedisCacheHandler has no Redis connection",
+  "configured (no redis, url or client option, and no REDIS_URL, VALKEY_URL or",
+  "ELASTICACHE_ENDPOINT), so pages are cached in this process's memory only. 16.4.2 connected",
+  "to localhost:6379 here: set REDIS_URL (e.g. redis://localhost:6379) to share the cache",
+  `across instances. See ${MIGRATION_GUIDE}`,
+].join(" ");
 
 /**
  * Map the constructor options (16.4.3 and 16.4.2 forms) to runtime options.
@@ -259,7 +334,11 @@ export class RedisCacheHandler {
   private readonly log: ((...args: unknown[]) => void) | undefined;
   private readonly edge = isEdgeRuntime();
 
-  constructor(options: PageCacheHandlerOptions = {}) {
+  constructor(input: PageCacheHandlerOptions = {}) {
+    // 16.4.2 subclasses keep booting with the defaultTTL values 16.4.2 accepted.
+    const legacyTTL = legacyDefaultTTL(input.defaultTTL);
+    const options =
+      legacyTTL === input.defaultTTL ? input : { ...input, defaultTTL: legacyTTL as number };
     const { defaultTTL } = options;
     if (
       defaultTTL !== undefined &&
@@ -268,6 +347,31 @@ export class RedisCacheHandler {
       throw new Error(
         `RedisCacheHandler: defaultTTL must be a finite number of seconds greater than 0, got ${String(defaultTTL)}`,
       );
+    }
+    if (options.redis !== undefined) {
+      warnDeprecated(
+        "RedisCacheHandler's `redis` option",
+        "Pass `client` (an ioredis client) or `url` instead, or use withCache(nextConfig).",
+      );
+    }
+    if (options.tagPrefix !== undefined) {
+      warnDeprecated(
+        "RedisCacheHandler's `tagPrefix` option",
+        "It is ignored: tag records live in the <keyPrefix>tags hash. Remove it.",
+      );
+    }
+    // 16.4.2 connected to localhost:6379 when given nothing; 16.4.3 runs in memory. Say so where
+    // it matters (a production server), but never for withCache's built-in handler, whose
+    // memory-only mode without a URL is documented.
+    if (
+      !(new.target as { [CONFIGURED_CLASS]?: boolean })[CONFIGURED_CLASS] &&
+      hasNoConnectionSettings(options) &&
+      process.env.NODE_ENV === "production" &&
+      !isBuildPhase() &&
+      !isEdgeRuntime() &&
+      !isRedisDisabled()
+    ) {
+      warnOnce("RedisCacheHandler:no-connection", NO_CONNECTION_WARNING);
     }
     registerServerDistDir(options.serverDistDir);
     if (options.serverDistDir && isBuildPhase()) writeBuildStamp(options.serverDistDir);
@@ -583,6 +687,7 @@ export class RedisCacheHandler {
    * @deprecated Call `closeCache()`; it is the same and does not need a handler.
    */
   async close(): Promise<void> {
+    warnDeprecated("RedisCacheHandler.close()", "Call closeCache().");
     await closeCache();
   }
 }
@@ -602,6 +707,8 @@ export function createPageCacheHandler(
   options: PageCacheHandlerOptions = {},
 ): typeof RedisCacheHandler {
   return class ConfiguredPageCacheHandler extends RedisCacheHandler {
+    static readonly [CONFIGURED_CLASS] = true;
+
     constructor(ctx: PageCacheHandlerOptions = {}) {
       super({ ...ctx, ...options });
     }

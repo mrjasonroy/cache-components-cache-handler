@@ -56,25 +56,48 @@ export type { MemoryOptions } from "./shared/memory-budget.js";
 export { type CacheOptions, closeCache } from "./shared/runtime.js";
 
 // =============================================================================
-// Deprecated Next 14-era ISR handlers and helpers (kept until the Next 17 line)
+// Deprecated 16.4.2 API, removed in 16.5.0. Each keeps working in 16.4.x. Functions are exported
+// wrapped (shared/deprecation.ts) so an application's first call logs a one-time warning; the
+// classes warn when constructed. The package's own internal uses never warn.
 // =============================================================================
+
+import { createCacheHandler as createCacheHandlerImpl } from "./data-cache/factory.js";
+import { createIoredisAdapter as createIoredisAdapterImpl } from "./data-cache/ioredis-adapter.js";
+import { createMemoryDataCacheHandler as createMemoryDataCacheHandlerImpl } from "./data-cache/memory.js";
+import { createRedisDataCacheHandler as createRedisDataCacheHandlerImpl } from "./data-cache/redis.js";
+import { createCompositeHandler as createCompositeHandlerImpl } from "./handlers/composite.js";
+import { createMemoryCacheHandler as createMemoryCacheHandlerImpl } from "./handlers/memory.js";
+import {
+  bufferToString as bufferToStringImpl,
+  stringToBuffer as stringToBufferImpl,
+} from "./helpers/buffer.js";
+import { isImplicitTag as isImplicitTagImpl } from "./helpers/is-implicit-tag.js";
+import {
+  calculateLifespan as calculateLifespanImpl,
+  isExpired as isExpiredImpl,
+} from "./helpers/lifespan.js";
+import {
+  createCacheConfig as createCacheConfigImpl,
+  createCacheConfigWithProfiles as createCacheConfigWithProfilesImpl,
+} from "./helpers/next-config.js";
+import {
+  jsonReplacer as jsonReplacerImpl,
+  jsonReviver as jsonReviverImpl,
+} from "./helpers/serialization.js";
+import { deprecatedFunction } from "./shared/deprecation.js";
+
+const NEXT14_HELPER = "It is internal to the Next 14 handlers and has no replacement.";
 
 export {
   CompositeHandler,
   type CompositeHandlerOptions,
-  createCompositeHandler,
 } from "./handlers/composite.js";
 // Renamed PageCacheHandlerOptions
 export type { RedisCacheHandlerOptions } from "./handlers/redis.js";
 export {
-  createMemoryCacheHandler,
   MemoryCacheHandler,
   type MemoryCacheHandlerOptions,
 } from "./handlers/memory.js";
-export { bufferToString, stringToBuffer } from "./helpers/buffer.js";
-export { isImplicitTag } from "./helpers/is-implicit-tag.js";
-export { calculateLifespan, isExpired } from "./helpers/lifespan.js";
-export { jsonReplacer, jsonReviver } from "./helpers/serialization.js";
 export type {
   CacheHandler,
   CacheHandlerContext,
@@ -86,40 +109,132 @@ export type {
 } from "./types.js";
 export { IMPLICIT_TAG_PREFIX } from "./types.js";
 
+/**
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works in
+ * 16.4.x; removed in 16.5.0.
+ */
+export const createCompositeHandler = deprecatedFunction(
+  createCompositeHandlerImpl,
+  "createCompositeHandler",
+  "Use withCache(nextConfig): every handler has a built-in memory fallback.",
+);
+
+/**
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works in
+ * 16.4.x; removed in 16.5.0.
+ */
+export const createMemoryCacheHandler = deprecatedFunction(
+  createMemoryCacheHandlerImpl,
+  "createMemoryCacheHandler",
+  "Use withCache(nextConfig) without REDIS_URL.",
+);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const bufferToString = deprecatedFunction(
+  bufferToStringImpl,
+  "bufferToString",
+  NEXT14_HELPER,
+);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const stringToBuffer = deprecatedFunction(
+  stringToBufferImpl,
+  "stringToBuffer",
+  NEXT14_HELPER,
+);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const isImplicitTag = deprecatedFunction(isImplicitTagImpl, "isImplicitTag", NEXT14_HELPER);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const calculateLifespan = deprecatedFunction(
+  calculateLifespanImpl,
+  "calculateLifespan",
+  NEXT14_HELPER,
+);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const isExpired = deprecatedFunction(isExpiredImpl, "isExpired", NEXT14_HELPER);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const jsonReplacer = deprecatedFunction(jsonReplacerImpl, "jsonReplacer", NEXT14_HELPER);
+
+/** @deprecated Internal to the Next 14 handlers; no replacement. Removed in 16.5.0. */
+export const jsonReviver = deprecatedFunction(jsonReviverImpl, "jsonReviver", NEXT14_HELPER);
+
 // =============================================================================
-// Deprecated legacy data cache stack (kept until the Next 17 line): use withCache, or
+// Deprecated 16.4.2 data cache stack, removed in 16.5.0: use withCache, or
 // createRemoteCacheHandler / createLocalCacheHandler
 // =============================================================================
 
-export {
-  type CacheHandlerOptions as DataCacheHandlerOptions,
-  type CacheHandlerType,
-  createCacheHandler,
+export type {
+  CacheHandlerOptions as DataCacheHandlerOptions,
+  CacheHandlerType,
 } from "./data-cache/factory.js";
-
-export {
-  createMemoryDataCacheHandler,
-  type MemoryDataCacheHandlerOptions,
-} from "./data-cache/memory.js";
-export {
-  createRedisDataCacheHandler,
-  type RedisClient,
-  type RedisDataCacheHandlerOptions,
-} from "./data-cache/redis.js";
-// Adapter for using an ioredis client with the node-redis-style data cache handler
-export {
-  createIoredisAdapter,
-  type IoredisLike,
-} from "./data-cache/ioredis-adapter.js";
+export type { MemoryDataCacheHandlerOptions } from "./data-cache/memory.js";
+export type { RedisClient, RedisDataCacheHandlerOptions } from "./data-cache/redis.js";
+export type { IoredisLike } from "./data-cache/ioredis-adapter.js";
 export type {
   DataCacheEntry,
   DataCacheHandler,
   Timestamp,
 } from "./data-cache/types.js";
+export type { CacheHandlerConfig } from "./helpers/next-config.js";
 
-// next.config helpers
-export {
-  type CacheHandlerConfig,
-  createCacheConfig,
-  createCacheConfigWithProfiles,
-} from "./helpers/next-config.js";
+/**
+ * @deprecated The 16.4.2 data cache factory. Use `withCache(nextConfig)`, or
+ * `createRemoteCacheHandler` / `createLocalCacheHandler` in a custom handler file. Still works in
+ * 16.4.x; removed in 16.5.0.
+ */
+export const createCacheHandler = deprecatedFunction(
+  createCacheHandlerImpl,
+  "createCacheHandler",
+  "Use withCache(nextConfig), or createRemoteCacheHandler / createLocalCacheHandler in a custom handler file.",
+);
+
+/**
+ * @deprecated Use `createLocalCacheHandler`. Still works in 16.4.x; removed in 16.5.0.
+ */
+export const createMemoryDataCacheHandler = deprecatedFunction(
+  createMemoryDataCacheHandlerImpl,
+  "createMemoryDataCacheHandler",
+  "Use withCache(nextConfig), or createLocalCacheHandler in a custom handler file.",
+);
+
+/**
+ * @deprecated Use `createRemoteCacheHandler({ client })` with an ioredis client. Still works in
+ * 16.4.x; removed in 16.5.0.
+ */
+export const createRedisDataCacheHandler = deprecatedFunction(
+  createRedisDataCacheHandlerImpl,
+  "createRedisDataCacheHandler",
+  "Use withCache(nextConfig), or createRemoteCacheHandler({ client }) in a custom handler file.",
+);
+
+/**
+ * @deprecated Pass the ioredis client to `createRemoteCacheHandler({ client })`. Still works in
+ * 16.4.x; removed in 16.5.0.
+ */
+export const createIoredisAdapter = deprecatedFunction(
+  createIoredisAdapterImpl,
+  "createIoredisAdapter",
+  "Pass the ioredis client to createRemoteCacheHandler({ client }).",
+);
+
+/**
+ * @deprecated Use `withCache(nextConfig)`. Still works in 16.4.x; removed in 16.5.0.
+ */
+export const createCacheConfig = deprecatedFunction(
+  createCacheConfigImpl,
+  "createCacheConfig",
+  "Use withCache(nextConfig).",
+);
+
+/**
+ * @deprecated Use `withCache(nextConfig, { handlers })`. Still works in 16.4.x; removed in 16.5.0.
+ */
+export const createCacheConfigWithProfiles = deprecatedFunction(
+  createCacheConfigWithProfilesImpl,
+  "createCacheConfigWithProfiles",
+  "Use withCache(nextConfig, { handlers }).",
+);
