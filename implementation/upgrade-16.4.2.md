@@ -26,7 +26,7 @@ Status: **unchanged**, **changed** (same call, different observable behaviour), 
 | — option `redis: Redis \| string \| RedisOptions` | deprecated (use `client` / `url`) | yes | U, I, E |
 | — option `keyPrefix` | unchanged meaning; keys now `<keyPrefix><buildId>:page:<key>` | no | I, E |
 | — option `tagPrefix` | deprecated, ignored | yes | U |
-| — option `defaultTTL` | changed: default 365 days (16.4.2: no expiry). A falsy value (`0`, `NaN`, `null`, `""`, `false`; 16.4.2's "no expiry") is dropped and a numeric string converted, each with a warning naming the value; values that never cached in 16.4.2 (negative, `Infinity`, non-numeric strings) throw | the falsy and string forms yes | U |
+| — option `defaultTTL` | changed: default 365 days (16.4.2: no expiry). Any non-number boots: a numeric string is converted, every other non-number (falsy, `"1h"`, `"abc"`, objects) is dropped, each with a warning naming the value. Negative and infinite numbers throw (never cached in 16.4.2). See the measured table below | the non-number forms yes | U |
 | — option `debug` | unchanged | no | — |
 | — no `redis` option | **changed**: reads `REDIS_URL` / `VALKEY_URL` / `ELASTICACHE_*`; with none it runs in memory (16.4.2 connected to `localhost:6379`) and a production server logs a one-time warning saying so (never for withCache's built-in handler) | — | U |
 | — `get(key, { implicitTags })`, `set(key, value, { revalidate, tags })` | unchanged call shapes; `get` no longer returns `age` | — | U, I |
@@ -49,6 +49,28 @@ its JSDoc ("Option 1": `redis: process.env.REDIS_URL`, `keyPrefix: "nextjs:cache
 `defaultTTL: 3600`) as `cacheHandler`, `cacheMaxMemorySize: 0`, no `withCache`
 (`apps/e2e-test-app/upgrade-16.4.2/`). The `MemoryCacheHandler`-subclass setup from the 16.4.2
 example app is covered by U only.
+
+### `RedisCacheHandler` `defaultTTL` in 16.4.2, measured
+
+v16.4.2's `handlers/redis.ts` run under Node against a fake ioredis client that records the write
+command and rejects a non-integer or non-positive `SETEX` TTL (as Redis does). The entry is a
+`FETCH` set with no `revalidate`, the only path where `defaultTTL` applies.
+
+| `defaultTTL` | 16.4.2 command | 16.4.2 cached? | 16.4.3 |
+|---|---|---|---|
+| `0`, `NaN`, `null`, `""`, `false` | `SET` (no TTL) | yes, forever | dropped, warning, 365 days |
+| `"1h"`, `"abc"`, `"-5"`, `{}` | `SET` (no TTL) | yes, forever | dropped, warning, 365 days |
+| `"1e3"` | `SETEX` with a huge TTL | yes | converted (1000 s), warning |
+| `"60"`, `"0"`, `" "`, `true` | none (TTL computed negative) | no | `"60"` converted (60 s); others dropped; warning |
+| `-1`, `-5`, `-Infinity` | none | no | throws |
+| `Infinity` | `SETEX Infinity`, rejected | no | throws |
+| `0.5`, `120` (any positive number) | none | **no** | works (rounded up to whole seconds) |
+
+The last row is a 16.4.2 bug: `calculateLifespan` returns seconds and `set` subtracted
+`Date.now()` (milliseconds), so the TTL was always negative and the write skipped. The same bug
+meant 16.4.2's `RedisCacheHandler` never stored an entry with a numeric `revalidate` either (only
+`revalidate: false` or none, with no numeric `defaultTTL`). 16.4.3 caches them: a 16.4.2 user
+whose pages were never cached will see them cached after the upgrade.
 
 ## Documented setups
 
@@ -120,6 +142,8 @@ example app is covered by U only.
   the engines mismatch. Users on 22.0–22.2 must upgrade Node (docs/migrating.md says so first).
 - **No-connection warning**: a `RedisCacheHandler` subclass with no connection setting logs once in
   production that it is running in memory where 16.4.2 connected to `localhost:6379`.
-- **Types**: `CacheHandlerConfig.cacheHandler` is optional; `createCacheConfig` /
+- **Types**: `CacheHandlerConfig.cacheHandler` is optional. Code that annotates
+  `const c: CacheHandlerConfig = createCacheConfig(...)` and then uses `c.cacheHandler` as a
+  `string` no longer type-checks (drop the annotation, or use `c.cacheHandler!`). `createCacheConfig` /
   `createCacheConfigWithProfiles` still return `cacheHandler: string` when given `isrHandlerPath`.
   `RedisCacheHandler.get` no longer returns `age`.

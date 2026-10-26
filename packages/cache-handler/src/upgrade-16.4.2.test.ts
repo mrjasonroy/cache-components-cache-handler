@@ -71,6 +71,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   await resetCacheState();
 });
 
@@ -340,7 +341,18 @@ describe("RedisCacheHandler without any Redis setting (16.4.2 connected to local
     expect(String(noConnectionLines(warn)[0])).toContain("set REDIS_URL");
     await handler.set("/api", fetchValue("memory"), { revalidate: 60, tags: ["t"] });
     expect((await handler.get("/api", { kind: "FETCH" }))?.value).toEqual(fetchValue("memory"));
-    vi.unstubAllEnvs();
+  });
+
+  test("warns for a subclass passing url: process.env.REDIS_URL while it is unset", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    class UrlFromEnv extends pkg.RedisCacheHandler {
+      constructor(options: pkg.PageCacheHandlerOptions) {
+        super({ ...options, url: process.env.REDIS_URL });
+      }
+    }
+    new UrlFromEnv({});
+    expect(noConnectionLines(warn)).toHaveLength(1);
   });
 
   test.each([
@@ -349,12 +361,17 @@ describe("RedisCacheHandler without any Redis setting (16.4.2 connected to local
     ["with REDIS_URL set", { NODE_ENV: "production", REDIS_URL: "redis://127.0.0.1:1" }],
     ["with VALKEY_URL set", { NODE_ENV: "production", VALKEY_URL: "redis://127.0.0.1:1" }],
     ["with CACHE_REDIS=off", { NODE_ENV: "production", CACHE_REDIS: "off" }],
+    [
+      "with ELASTICACHE_ENDPOINT set",
+      { NODE_ENV: "production", ELASTICACHE_ENDPOINT: "127.0.0.1", ELASTICACHE_PORT: "1" },
+    ],
+    ["on the edge runtime", { NODE_ENV: "production", NEXT_RUNTIME: "edge" }],
   ])("does not warn %s", (_name, env) => {
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
     new NextCacheHandler({});
     expect(noConnectionLines(warn)).toEqual([]);
-    vi.unstubAllEnvs();
   });
 
   test("never warns for withCache's built-in page handler (memory-only mode is documented)", () => {
@@ -362,8 +379,10 @@ describe("RedisCacheHandler without any Redis setting (16.4.2 connected to local
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const BuiltIn = pkg.createPageCacheHandler();
     new BuiltIn({});
+    // An application subclass of a createPageCacheHandler() class is configured the 16.4.3 way.
+    class AppSubclass extends BuiltIn {}
+    new AppSubclass({});
     expect(noConnectionLines(warn)).toEqual([]);
-    vi.unstubAllEnvs();
   });
 });
 

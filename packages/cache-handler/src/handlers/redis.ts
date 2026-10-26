@@ -149,13 +149,20 @@ function describeValue(value: unknown): string {
 }
 
 /**
- * `defaultTTL` as 16.4.2 read it: any falsy value (0, NaN, null, "", false) meant "no expiry", and
- * a numeric string worked. Both still boot, with a one-time warning: falsy becomes unset (365
- * days), a numeric string its number. Anything else is returned as is and validated by the
- * constructor (it never cached anything in 16.4.2).
+ * `defaultTTL` as 16.4.2 accepted it, so a 16.4.2 subclass keeps booting. Measured by running
+ * 16.4.2's `RedisCacheHandler` (implementation/upgrade-16.4.2.md): no non-number value made it
+ * fail, and most ("1h", "abc", {} as well as the falsy ones) cached without expiry, so none
+ * throws here. Each logs a one-time warning naming the value:
+ *
+ * - a falsy value (0, NaN, null, "", false), 16.4.2's "no expiry", is dropped (365-day default);
+ * - a numeric string ("60", `process.env.CACHE_TTL`) becomes its number;
+ * - any other non-number ("1h", "abc", "-5", "0", an object) is dropped (365-day default).
+ *
+ * Numbers are returned as is and validated by the constructor: a negative or infinite one throws
+ * (16.4.2 never cached anything with it).
  */
 export function legacyDefaultTTL(value: unknown): unknown {
-  if (value === undefined) return undefined;
+  if (value === undefined || (typeof value === "number" && value)) return value;
   if (!value) {
     warnDeprecated(
       `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (no expiry)`,
@@ -163,17 +170,19 @@ export function legacyDefaultTTL(value: unknown): unknown {
     );
     return undefined;
   }
-  if (typeof value === "string" && value.trim() !== "") {
-    const seconds = Number(value);
-    if (Number.isFinite(seconds) && seconds > 0) {
-      warnDeprecated(
-        "RedisCacheHandler's string `defaultTTL`",
-        "Pass a number of seconds, e.g. Number(process.env.CACHE_TTL).",
-      );
-      return seconds;
-    }
+  const seconds = typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  if (Number.isFinite(seconds) && seconds > 0) {
+    warnDeprecated(
+      `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (a string)`,
+      "Pass a number of seconds, e.g. Number(process.env.CACHE_TTL).",
+    );
+    return seconds;
   }
-  return value;
+  warnDeprecated(
+    `RedisCacheHandler's \`defaultTTL: ${describeValue(value)}\` (not a number of seconds)`,
+    "It is ignored: entries without a revalidate period are kept for 365 days.",
+  );
+  return undefined;
 }
 
 /**

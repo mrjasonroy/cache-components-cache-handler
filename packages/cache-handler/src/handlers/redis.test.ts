@@ -665,8 +665,8 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(fake.ttlOf("app:development:page:/blog")).toBe(1);
     });
 
-    test("a defaultTTL that never cached in 16.4.2 throws at construction", () => {
-      for (const defaultTTL of [-1, Number.POSITIVE_INFINITY, "abc", "-5", "0", {}] as never[]) {
+    test("a negative or infinite defaultTTL (never cached in 16.4.2) throws at construction", () => {
+      for (const defaultTTL of [-1, -0.5, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
         expect(
           () => new RedisCacheHandler({ client: asClient(new FakeRedis()), defaultTTL }),
         ).toThrow(
@@ -676,13 +676,18 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     });
 
     test.each([
-      [0, "defaultTTL: 0"],
-      [Number.NaN, "defaultTTL: NaN"],
-      [null, "defaultTTL: null"],
-      ["", 'defaultTTL: ""'],
-      [false, "defaultTTL: false"],
+      [0, "defaultTTL: 0` (no expiry)"],
+      [Number.NaN, "defaultTTL: NaN` (no expiry)"],
+      [null, "defaultTTL: null` (no expiry)"],
+      ["", 'defaultTTL: ""` (no expiry)'],
+      [false, "defaultTTL: false` (no expiry)"],
+      ["1h", 'defaultTTL: "1h"` (not a number of seconds)'],
+      ["abc", 'defaultTTL: "abc"` (not a number of seconds)'],
+      ["-5", 'defaultTTL: "-5"` (not a number of seconds)'],
+      ["0", 'defaultTTL: "0"` (not a number of seconds)'],
+      [{}, "defaultTTL: [object Object]` (not a number of seconds)"],
     ])(
-      "16.4.2's 'no expiry' defaultTTL %s boots with the default lifetime and says so",
+      "a 16.4.2 defaultTTL %j boots with the default lifetime and says so",
       async (defaultTTL, label) => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const fake = new FakeRedis();
@@ -693,7 +698,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
         });
         await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
         expect(fake.ttlOf("app:development:page:/blog")).toBe(MAX_ENTRY_AGE_SECONDS);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`\`${label}\` (no expiry)`));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(label));
       },
     );
 
@@ -707,7 +712,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       });
       await handler.set("/blog", page("x"), { cacheControl: { revalidate: false } });
       expect(fake.ttlOf("app:development:page:/blog")).toBe(120);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("string `defaultTTL`"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('defaultTTL: "120"` (a string)'));
     });
 
     test("a URL string opens a connection from the URL", () => {

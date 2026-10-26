@@ -25,25 +25,28 @@ removed in 16.5.0 (supersedes "kept until the Next 17 line" in DEC-4 M3 and the 
   suppressed, so one call logs one line (`createMemoryCacheHandler()` does not also warn for the
   `MemoryCacheHandler` it builds). `MemoryCacheHandler` and `CompositeHandler`, never constructed
   internally, warn in their constructors. `RedisCacheHandler` is the current page handler: only its
-  16.4.2 options (`redis`, `tagPrefix`, a falsy or string `defaultTTL`) and `close()` warn.
+  16.4.2 options (`redis`, `tagPrefix`, a `defaultTTL` that is not a number) and `close()` warn.
 - A `RedisCacheHandler` the application constructs with no connection setting at all (no `redis`,
   `url` or `client`, no `REDIS_URL` / `VALKEY_URL` / `ELASTICACHE_ENDPOINT`) runs in memory, as
-  before, but a production server (`NODE_ENV=production`, not `next build`, not `CACHE_REDIS=off`)
-  logs once that 16.4.2 connected to `localhost:6379` there. The classes `createRedisCacheHandler`
-  returns carry a static marker, so withCache's built-in handler, whose memory-only mode without
+  before, but a production server (`NODE_ENV=production`, not `next build`, not the edge runtime,
+  not `CACHE_REDIS=off`) logs once that 16.4.2 connected to `localhost:6379` there. The classes
+  `createPageCacheHandler` returns (and subclasses of them) carry a static marker, so withCache's built-in handler, whose memory-only mode without
   a URL is documented, never logs it.
 - The Node floor stays `>=22.3.0` (`process.getBuiltinModule`); docs/migrating.md says so up front.
 - `createCacheConfig` / `createCacheConfigWithProfiles` regain 16.4.2's return type when called
   with `isrHandlerPath` (`cacheHandler: string`) through overloads; without it, `cacheHandler` is
   `string | undefined`.
 - `IMPLICIT_TAG_PREFIX` and the 16.4.2 types can only be deprecated in JSDoc.
-- One break found by the upgrade tests was fixed by keeping the 16.4.2 behaviour working. 16.4.2's
-  `RedisCacheHandler` read any falsy `defaultTTL` (`0`, `NaN` from `Number(process.env.UNSET)`,
-  `null`, `""`, `false`) as "no expiry" and cached with a numeric string (`process.env.CACHE_TTL`
-  in an `.mjs` file); 16.4.3's constructor threw on all of them, so Next failed to start. A falsy
-  value is now dropped (default lifetime, 365 days) and a numeric string converted, each with a
-  one-time warning naming the value. Values that never cached anything in 16.4.2 (negative,
-  `Infinity`, non-numeric strings) still throw.
+- One break found by the upgrade tests was fixed by keeping the 16.4.2 behaviour working: 16.4.3's
+  `RedisCacheHandler` constructor threw on any `defaultTTL` that is not a finite number above 0,
+  so a 16.4.2 subclass passing, say, `process.env.CACHE_TTL` failed to start. What 16.4.2 did
+  with each value was measured by running v16.4.2's `RedisCacheHandler` against a recording fake
+  client (table in `implementation/upgrade-16.4.2.md`): every non-number value booted, and the
+  falsy ones (`0`, `NaN`, `null`, `""`, `false`) and most strings (`"1h"`, `"abc"`, `"-5"`) and
+  objects cached without expiry. So no non-number throws now. A falsy or non-numeric value is
+  dropped (365-day default) and a numeric string such as `"60"` converted, each with a one-time
+  warning naming the value. Only negative and infinite numbers still throw: 16.4.2 never cached
+  anything with them (a negative TTL skipped the write; `Infinity` made `SETEX` fail).
 
 **Tests.** `src/upgrade-16.4.2.test.ts`, `src/upgrade-16.4.2.test-d.ts`,
 `src/integration/upgrade-16.4.2.redis.test.ts`, and the `redis-16.4.2-config` e2e lane
