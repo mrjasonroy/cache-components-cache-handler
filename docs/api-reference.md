@@ -149,7 +149,7 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 [Sizing](./redis.md#sizing).
 
 `PageCacheHandlerOptions` (16.4.2's `RedisCacheHandlerOptions`, still exported as a deprecated
-alias) is Next's constructor context plus `CacheOptions` and:
+alias until 16.5.0) is Next's constructor context plus `CacheOptions` and:
 
 | Option | Default | Meaning |
 |---|---|---|

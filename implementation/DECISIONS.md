@@ -78,7 +78,7 @@ the `v16.4.2` tag, so no aliases):
 - `createRedisCacheHandler` is renamed `createPageCacheHandler`: it builds the `cacheHandler`
   (page) handler, and "Redis" no longer says which one. Its options type is renamed
   `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` was exported by 16.4.2, so it stays as a
-  deprecated alias. The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
+  deprecated alias (removed in 16.5.0, DEC-14). The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
   page handler.
 
 **Memory split.** `MEMORY_STORE_SHARES` (DEC-9, DEC-11) is unchanged. No store is dead: `page` and

@@ -38,7 +38,7 @@ Status: **unchanged**, **changed** (same call, different observable behaviour), 
 | `bufferToString`, `stringToBuffer`, `isImplicitTag`, `jsonReplacer`, `jsonReviver`, `calculateLifespan`, `isExpired` | deprecated, unchanged behaviour | yes | U |
 | `IMPLICIT_TAG_PREFIX` | deprecated (JSDoc only), unchanged value | yes | U |
 | Types: `CacheHandler`, `CacheHandlerContext`, `CacheHandlerGetMeta`, `CacheHandlerOptions`, `CacheHandlerValue`, `CacheValue`, `LifespanParameters`, `CompositeHandlerOptions`, `MemoryCacheHandlerOptions`, `CacheHandlerConfig`, `DataCacheHandlerOptions`, `CacheHandlerType`, `MemoryDataCacheHandlerOptions`, `RedisDataCacheHandlerOptions`, `RedisClient`, `IoredisLike` | deprecated (JSDoc) | yes | T |
-| Types: `RedisCacheHandlerOptions` | kept (16.4.2 fields still accepted) | no | T |
+| Types: `RedisCacheHandlerOptions` | deprecated alias of `PageCacheHandlerOptions` (JSDoc only); 16.4.2 fields still accepted | yes | T |
 | Types: `DataCacheEntry`, `DataCacheHandler`, `Timestamp` | unchanged (Next's own contract, used by the 16.4.3 handlers) | no | T |
 
 U = `src/upgrade-16.4.2.test.ts`, T = `src/upgrade-16.4.2.test-d.ts`, I =
