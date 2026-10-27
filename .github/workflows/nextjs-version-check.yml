@@ -191,6 +191,9 @@ jobs:
             npm version "$PKG_TARGET" --no-git-tag-version --allow-same-version
             cd ../..
             echo "Bumped package version to $PKG_TARGET"
+            # A new major.minor moves the next peer to ~<major>.<minor>.0; CHANGELOG.md's
+            # "## [Unreleased]" becomes the release's section (publish.yml's release notes).
+            node scripts/release-version.mjs sync "${{ steps.check_version.outputs.current_pkg_version }}"
           else
             echo "Package stays at ${{ steps.check_version.outputs.current_pkg_version }} (not behind Next ${{ steps.check_version.outputs.latest_version }}); not bumping"
           fi

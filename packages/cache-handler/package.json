@@ -39,7 +39,7 @@
     "@aws-crypto/sha256-js": "^5.2.0",
     "@aws-sdk/credential-provider-node": "^3.0.0",
     "@smithy/signature-v4": "^5.0.0",
-    "next": "^16.0.0"
+    "next": "~16.4.0"
   },
   "peerDependenciesMeta": {
     "@aws-crypto/sha256-js": {

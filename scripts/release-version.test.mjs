@@ -1,7 +1,16 @@
 //   node --test scripts/
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { aheadOfNext, compareVersions, pickTarget, usedVersions } from "./release-version.mjs";
+import {
+  aheadOfNext,
+  bumpPeer,
+  compareVersions,
+  peerMismatch,
+  peerRange,
+  pickTarget,
+  releaseChangelog,
+  usedVersions,
+} from "./release-version.mjs";
 
 const burned = usedVersions({
   created: "2025-11-01T00:00:00.000Z",
@@ -51,4 +60,84 @@ test("the guard rejects a major.minor ahead of Next", () => {
   assert.equal(aheadOfNext("16.4.9", "16.4.2"), null);
   assert.equal(aheadOfNext("16.5.2", "16.5.0"), null);
   assert.equal(aheadOfNext("16.4.3", "17.0.0"), null);
+});
+
+test("the next peer pins the package's major.minor, an RC by its base", () => {
+  assert.equal(peerRange("16.4.3"), "~16.4.0");
+  assert.equal(peerRange("16.5.2"), "~16.5.0");
+  assert.equal(peerRange("16.5.2-rc.0"), "~16.5.0");
+  assert.equal(peerRange("17.0.0"), "~17.0.0");
+});
+
+test("a bump to a new Next major.minor moves the peer", () => {
+  assert.equal(bumpPeer("~16.4.0", "16.4.3", "16.5.2"), "~16.5.0");
+  assert.equal(bumpPeer("~16.4.0", "16.4.4", "16.5.2-rc.0"), "~16.5.0");
+  assert.equal(bumpPeer("~16.4.0", "16.4.4-rc.1", "16.5.2"), "~16.5.0");
+  assert.equal(bumpPeer("~16.9.0", "16.9.1", "17.0.0"), "~17.0.0");
+  assert.equal(bumpPeer("^16.0.0", "16.4.3", "16.5.2"), "~16.5.0");
+});
+
+test("a patch or pre-release bump within the minor leaves the peer untouched", () => {
+  assert.equal(bumpPeer("~16.4.0", "16.4.3", "16.4.4"), "~16.4.0");
+  assert.equal(bumpPeer("~16.4.0", "16.4.3", "16.4.4-rc.0"), "~16.4.0");
+  assert.equal(bumpPeer("~16.4.0", "16.4.4-rc.0", "16.4.4-rc.1"), "~16.4.0");
+  assert.equal(bumpPeer("~16.4.0", "16.4.4-rc.1", "16.4.4"), "~16.4.0");
+  assert.equal(bumpPeer("~16.5.0", "16.5.2", "16.5.3"), "~16.5.0");
+});
+
+test("the guard rejects a peer that does not pin the package's minor", () => {
+  const pkg = (version, next) => ({ version, peerDependencies: { next } });
+  assert.equal(peerMismatch(pkg("16.4.3", "~16.4.0")), null);
+  assert.equal(peerMismatch(pkg("16.5.2-rc.0", "~16.5.0")), null);
+  assert.match(peerMismatch(pkg("16.4.3", "^16.0.0")), /"\^16\.0\.0".*"~16\.4\.0"/);
+  assert.match(peerMismatch(pkg("16.5.2", "~16.4.0")), /~16\.5\.0/);
+  assert.match(peerMismatch({ version: "16.4.3" }), /undefined/);
+});
+
+const changelog = (...sections) =>
+  `# Changelog\n\nIntro.\n\n${sections.join("\n")}\n## [16.4.3] - 2026-10-26\n\nOld notes.\n`;
+
+test("a release renames Unreleased to its dated version", () => {
+  const before = changelog("## [Unreleased]\n\n- Pinned peer.\n");
+  assert.equal(
+    releaseChangelog(before, "16.4.4", "2026-11-02"),
+    changelog("## [16.4.4] - 2026-11-02\n\n- Pinned peer.\n"),
+  );
+});
+
+test("a pre-release renames Unreleased to its base version, undated", () => {
+  const before = changelog("## [Unreleased]\n\n- Pinned peer.\n");
+  assert.equal(
+    releaseChangelog(before, "16.4.4-rc.0", "2026-11-02"),
+    changelog("## [16.4.4]\n\n- Pinned peer.\n"),
+  );
+});
+
+test("later RCs and the final merge Unreleased into the RC's section and date it", () => {
+  const rc0 = changelog("## [16.4.4]\n\n- First.\n");
+  const rc1 = releaseChangelog(
+    changelog("## [Unreleased]\n\n- Second.\n", "## [16.4.4]\n\n- First.\n"),
+    "16.4.4-rc.1",
+    "2026-11-02",
+  );
+  assert.equal(rc1, changelog("## [16.4.4]\n\n- Second.\n\n- First.\n"));
+  assert.equal(
+    releaseChangelog(rc0, "16.4.4", "2026-11-03"),
+    changelog("## [16.4.4] - 2026-11-03\n\n- First.\n"),
+  );
+  assert.equal(
+    releaseChangelog(
+      changelog("## [Unreleased]\n\n", "## [16.4.4]\n\n- First.\n"),
+      "16.4.4",
+      "2026-11-03",
+    ),
+    changelog("## [16.4.4] - 2026-11-03\n\n- First.\n"),
+  );
+});
+
+test("nothing pending leaves the changelog as it is", () => {
+  const text = changelog();
+  assert.equal(releaseChangelog(text, "16.4.4", "2026-11-02"), text);
+  assert.equal(releaseChangelog(text, "16.4.3", "2026-11-02"), text);
+  assert.equal(releaseChangelog(text, "16.5.2-rc.0", "2026-11-02"), text);
 });

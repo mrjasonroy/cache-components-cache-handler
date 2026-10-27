@@ -52,6 +52,8 @@ jobs:
         id: version
         run: |
           cd packages/cache-handler
+          PREVIOUS_VERSION=$(node -p "require('./package.json').version")
+          echo "previous_version=$PREVIOUS_VERSION" >> $GITHUB_OUTPUT
 
           if [ "${{ inputs.version }}" = "specific" ]; then
             NEW_VERSION="${{ inputs.specific_version }}"
@@ -84,6 +86,12 @@ jobs:
           else
             echo "dist_tag=latest" >> $GITHUB_OUTPUT
           fi
+
+      # A new major.minor moves the `next` peer to ~<major>.<minor>.0 (the handler is pinned to
+      # the app's Next minor), and CHANGELOG.md's "## [Unreleased]" becomes this version's
+      # section, which publish.yml puts in the release notes (docs/publishing/RELEASE.md).
+      - name: Sync the next peer and CHANGELOG
+        run: node scripts/release-version.mjs sync "${{ steps.version.outputs.previous_version }}"
 
       # npm refuses any version it has ever seen, unpublished ones included, and the package's
       # major.minor must not run ahead of Next's latest stable (docs/publishing/RELEASE.md).
@@ -131,7 +139,8 @@ jobs:
 
           cat >> /tmp/pr-body.md <<EOF
           ### Changes
-          - Updated package.json version to $NEW_VERSION
+          - Updated package.json version to $NEW_VERSION (and the \`next\` peer, on a new major.minor)
+          - Renamed CHANGELOG.md's \`## [Unreleased]\` section, if any, to this version
           - Updated pnpm-lock.yaml
 
           ### Next Steps

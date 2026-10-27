@@ -19,7 +19,19 @@ The package's major.minor follows Next.js; the patch number is ours.
 - **An RC is graduated by hand.** While the package is on a pre-release (e.g. `16.4.3-rc.0` on
   staging), the loop bumps nothing, so it can never publish that untested code to `latest` by
   itself. Bump to the final version once the RC has been proven.
-- **Peer dependency**: `"next": "^16.0.0"`.
+- **The handler is pinned to the app's Next.js minor.** The `next` peer dependency is
+  `~<major>.<minor>.0` for the package's major.minor (an RC counts by its base version), so npm
+  refuses to pair handler 16.5.x with Next 16.4 (`ERESOLVE`). It is `~X.Y.0`, not an exact
+  version: an exact peer would break every app the day Next ships a patch before we do. Every
+  bump runs `node scripts/release-version.mjs sync <previous version>`, which moves the peer
+  when the bump reaches a new major.minor and leaves it alone on a patch or pre-release bump
+  within the same minor. `release-version.mjs check` (CI, and every bump and tag) fails when the
+  peer does not match the version.
+- **Release notes come from CHANGELOG.md.** Write pending entries under `## [Unreleased]` at the
+  top. The same `sync` step renames it to the version being released: `## [16.4.4] - <date>` for
+  a release, `## [16.4.4]` (undated) for an RC, and a later RC or the final merges new Unreleased
+  entries into that section and dates it. `publish.yml` puts the `## [<base version>]` section in
+  the GitHub release.
 
 ### Examples
 
@@ -30,6 +42,13 @@ The package's major.minor follows Next.js; the patch number is ours.
   bump; Next `16.5.3` → `16.5.3`.
 - Package `16.4.3`, our feature → `16.4.4`, never `16.5.0` while Next's latest is 16.4.x.
 - Next.js `17.0.0` released → package `17.0.0` (if unused).
+
+Peer dependency examples:
+
+- Package `16.4.3` → `16.4.4` (Next patch or our fix): the peer stays `"~16.4.0"`.
+- Package `16.4.4` → `16.5.2` (Next `16.5.0` released): the bump PR sets it to `"~16.5.0"`.
+- Package `16.4.4` → `16.5.2-rc.0`: also `"~16.5.0"`, from the RC's base version `16.5.2`.
+- Package `16.9.x` → `17.0.0`: `"~17.0.0"`.
 
 ## Automated Workflows
 
@@ -106,12 +125,10 @@ cd packages/cache-handler
 npm version 16.1.0 --no-git-tag-version
 cd ../..
 
-cd packages/cache-handler-redis
-npm version 16.1.0 --no-git-tag-version
-cd ../..
-
-# Update peer dependencies in both packages
-# Edit package.json: "next": "~16.1.0"
+# Move the next peer to "~16.1.0" and rename CHANGELOG.md's "## [Unreleased]" (16.0.x was the
+# previous version)
+node scripts/release-version.mjs sync 16.0.3
+pnpm format
 ```
 
 ### 4. Update Next.js Dependency
