@@ -10,6 +10,13 @@ memory with revalidation shared across all of them.
 [![CI](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/ci.yml/badge.svg)](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/ci.yml)
 [![Next.js deploy tests](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml/badge.svg?event=pull_request)](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml)
 
+> [!IMPORTANT]
+> **16.4.3 is a major release under a patch number.** The version follows Next.js, so it is
+> numbered 16.4.3 to match Next.js 16.4.3, but it reworks the handler: `withCache`, a new page-cache
+> key layout (the page cache starts cold on upgrade), memory limits, deployment-ID scoping and
+> ElastiCache IAM. 16.4.2 setups keep working with deprecation warnings, and `^16.4.2` installs get
+> it automatically. Read [Upgrading from 16.4.2](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/migrating.md) before you deploy.
+
 ## Quick start
 
 ```bash
