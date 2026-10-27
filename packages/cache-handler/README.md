@@ -13,8 +13,13 @@ memory with revalidation shared across all of them.
 ## Quick start
 
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler
+npm install --save-exact @mrjasonroy/cache-components-cache-handler
 ```
+
+The package version follows Next.js. Pin it to the exact release for your Next.js version
+(`--save-exact`; Next 16.4.3 → `16.4.3`) and upgrade the two together. A range such as `^16.4.3`
+also accepts the 16.5 releases, which follow Next.js 16.5 and remove the APIs deprecated in
+16.4.3.
 
 ```js
 // next.config.mjs
