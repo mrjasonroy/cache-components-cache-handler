@@ -100,6 +100,9 @@ jobs:
           cd packages/cache-handler
           npm version ${{ steps.versions.outputs.new_pkg_version }} --no-git-tag-version --allow-same-version
           cd ../..
+          # A new major.minor moves the next peer to ~<major>.<minor>.0; CHANGELOG.md's
+          # "## [Unreleased]" becomes the release's section (publish.yml's release notes).
+          node scripts/release-version.mjs sync "${{ steps.versions.outputs.current_pkg_version }}"
           # Never let the package's major.minor run ahead of Next's latest stable.
           node scripts/release-version.mjs check
 

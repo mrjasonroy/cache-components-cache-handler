@@ -89,7 +89,9 @@ if [ "$VARIANT" != "baseline" ]; then
   echo "CACHE_KEY_PREFIX=$CACHE_KEY_PREFIX" >.deploy-env
 fi
 
-pnpm install --no-frozen-lockfile --prefer-offline
+# Like Next's own create-next-install: the package's `next` peer pins one minor (~16.4.0), and a
+# dispatch may test it against another Next (a 16.5 canary); that must stay a warning here.
+pnpm install --strict-peer-dependencies=false --no-frozen-lockfile --prefer-offline
 
 # The harness's `build` script is `<fixture build or next build> && pnpm post-build`, and
 # post-build prints the BUILD_ID / DEPLOYMENT_ID / NEXT_SUPPORTS_IMMUTABLE_ASSETS lines that
