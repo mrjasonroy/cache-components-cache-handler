@@ -56,15 +56,25 @@ function startupHost(node: unknown): string | undefined {
  *
  * @example
  * ```js
+ * // cache/redis.mjs: pass `client` to every custom handler file
  * import { Cluster } from "ioredis";
  * import { attachElastiCacheIamAuth } from "@mrjasonroy/cache-components-cache-handler";
  *
- * const client = new Cluster([{ host: "clustercfg.my-cache.abc123.use1.cache.amazonaws.com", port: 6379 }], {
- *   lazyConnect: true,
- *   dnsLookup: (address, callback) => callback(null, address),
- *   redisOptions: { tls: {}, commandTimeout: 1000 },
- * });
- * attachElastiCacheIamAuth(client, { userId: "app-user", cacheName: "my-cache", region: "us-east-1" });
+ * function createClient() {
+ *   const client = new Cluster(
+ *     [{ host: "clustercfg.my-cache.abc123.use1.cache.amazonaws.com", port: 6379 }],
+ *     {
+ *       lazyConnect: true,
+ *       dnsLookup: (address, callback) => callback(null, address), // keep hostnames for TLS
+ *       redisOptions: { tls: {}, commandTimeout: 1000 },
+ *     },
+ *   );
+ *   attachElastiCacheIamAuth(client, { userId: "app-user", cacheName: "my-cache", region: "us-east-1" });
+ *   return client;
+ * }
+ *
+ * // One client per process: Next can load each handler file in its own module graph.
+ * export const client = (globalThis.myAppRedis ??= createClient());
  * ```
  */
 export function attachElastiCacheIamAuth(
