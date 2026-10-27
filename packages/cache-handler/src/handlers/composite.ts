@@ -14,7 +14,7 @@ import type {
 /**
  * Options for the deprecated `CompositeHandler`.
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.
  */
 export interface CompositeHandlerOptions extends CacheHandlerOptions {
   /**
@@ -55,7 +55,7 @@ export interface CompositeHandlerOptions extends CacheHandlerOptions {
  * });
  * ```
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.
  */
 export class CompositeHandler implements CacheHandler {
   public readonly name = "composite";
@@ -182,7 +182,7 @@ export class CompositeHandler implements CacheHandler {
  * });
  * ```
  *
- * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.0.
+ * @deprecated The memory fallback is built into every handler; use `withCache`. Still works; removed in 16.5.
  */
 export function createCompositeHandler(options: CompositeHandlerOptions): CompositeHandler {
   return new CompositeHandler(options);

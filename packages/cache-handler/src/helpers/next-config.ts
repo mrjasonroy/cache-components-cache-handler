@@ -5,7 +5,7 @@
 /**
  * What {@link createCacheConfig} returns.
  *
- * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.0.
+ * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.
  */
 export interface CacheHandlerConfig {
   /**
@@ -56,7 +56,7 @@ export interface CacheHandlerConfig {
  * };
  * ```
  *
- * @deprecated Use `withCache(nextConfig)`, which points Next at the built-in handler files itself. Still works; removed in 16.5.0.
+ * @deprecated Use `withCache(nextConfig)`, which points Next at the built-in handler files itself. Still works; removed in 16.5.
  */
 export function createCacheConfig(options: {
   /** Path to your own ISR `cacheHandler` file, passed through unchanged */
@@ -116,7 +116,7 @@ export function createCacheConfig(options: {
  * };
  * ```
  *
- * @deprecated Use `withCache(nextConfig, { handlers })`. Still works; removed in 16.5.0.
+ * @deprecated Use `withCache(nextConfig, { handlers })`. Still works; removed in 16.5.
  */
 export function createCacheConfigWithProfiles(options: {
   /** Path to your own ISR `cacheHandler` file, passed through unchanged */

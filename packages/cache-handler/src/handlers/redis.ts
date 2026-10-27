@@ -81,13 +81,13 @@ export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheO
   /**
    * 16.4.2 form of `client` / `url`: an ioredis client, a URL, or an ioredis options object.
    * @deprecated Pass `client` (an ioredis client) or `url` instead. Still works in 16.4.x; removed
-   * in 16.5.0.
+   * in 16.5.
    */
   redis?: Redis | Cluster | string | RedisOptions;
 
   /**
    * @deprecated Tag records now live in the `<keyPrefix>tags` hash and are shared by every handler;
-   * this option is ignored. Removed in 16.5.0.
+   * this option is ignored. Removed in 16.5.
    */
   tagPrefix?: string;
 
@@ -109,7 +109,7 @@ export interface PageCacheHandlerOptions extends PageCacheHandlerContext, CacheO
 }
 
 /**
- * @deprecated Renamed {@link PageCacheHandlerOptions}. Still works in 16.4.x; removed in 16.5.0.
+ * @deprecated Renamed {@link PageCacheHandlerOptions}. Still works in 16.4.x; removed in 16.5.
  */
 export type RedisCacheHandlerOptions = PageCacheHandlerOptions;
 

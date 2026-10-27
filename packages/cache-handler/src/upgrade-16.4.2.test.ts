@@ -252,7 +252,7 @@ describe("16.4.2 deprecation warnings", () => {
     await call();
     await call();
     const ours = warn.mock.calls.filter(([message]) =>
-      String(message).includes(`${api} is deprecated and will be removed in 16.5.0`),
+      String(message).includes(`${api} is deprecated and will be removed in 16.5`),
     );
     expect(ours).toHaveLength(1);
     expect(String(ours[0][0])).toContain("docs/migrating.md");

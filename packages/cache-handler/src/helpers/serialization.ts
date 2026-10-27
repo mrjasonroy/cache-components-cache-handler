@@ -27,7 +27,7 @@ function isNodeBufferJson(value: unknown): value is NodeBufferJson {
  * - Maps become `{ __serialized_type: "Map", entries: [...] }`
  * - Buffers become `{ __serialized_type: "Buffer", data: "<base64>" }`
  *
- * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.0.
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.
  */
 export function jsonReplacer(_key: string, value: unknown): unknown {
   if (value instanceof Map) {
@@ -58,7 +58,7 @@ export function jsonReplacer(_key: string, value: unknown): unknown {
  * Also handles backward-compat with Node's native Buffer JSON
  * representation `{ type: "Buffer", data: [byte, ...] }`.
  *
- * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.0.
+ * @deprecated Internal to the Next 14 handlers; there is no replacement. It still works and is removed in 16.5.
  */
 export function jsonReviver(_key: string, value: unknown): unknown {
   if (value && typeof value === "object") {

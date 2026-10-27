@@ -2,7 +2,7 @@
 
 16.4.3 reaches every `^16.4.2` / `~16.4.2` install automatically (the version follows Next.js). Policy
 (DEC-14): a 16.4.2 setup keeps working on upgrade; every 16.4.2-only API is deprecated in 16.4.3
-(JSDoc `@deprecated` plus a one-time warning per process on first use) and removed in **16.5.0**.
+(JSDoc `@deprecated` plus a one-time warning per process on first use) and removed in **16.5**.
 
 Sources: `git show v16.4.2:packages/cache-handler/src/index.ts`, the 16.4.2 README (root and
 package), `docs/installation.md`, `docs/redis.md`, `docs/api-reference.md`, the 16.4.2 example app
@@ -10,11 +10,11 @@ package), `docs/installation.md`, `docs/redis.md`, `docs/api-reference.md`, the 
 `MEMORY_ONLY_TAG`, `createRedisCacheHandler`) were never in 16.4.2 and are not listed.
 
 Status: **unchanged**, **changed** (same call, different observable behaviour), **deprecated**
-(works, warns once, removed in 16.5.0), **removed** (none).
+(works, warns once, removed in 16.5), **removed** (none).
 
 ## Exports and options
 
-| 16.4.2 API | 16.4.3 status | Removed in 16.5.0? | Covered by |
+| 16.4.2 API | 16.4.3 status | Removed in 16.5? | Covered by |
 |---|---|---|---|
 | `createCacheHandler({ type: "memory" \| "redis" \| "valkey" \| "elasticache", url, endpoint, port, tls, password, keyPrefix, tagPrefix, debug, maxSize })` | deprecated; changed (see behaviour) | yes | U, I, E |
 | `createRedisDataCacheHandler({ redis, keyPrefix, tagPrefix, defaultTTL, debug })` | deprecated; changed (serves to `expire`, logs errors) | yes | U, I |
@@ -108,7 +108,7 @@ whose pages were never cached will see them cached after the upgrade.
 
 - **Deprecation warnings**: one line per deprecated API the application calls, once per process
   (a factory does not add a line for the class it builds), e.g.
-  `@mrjasonroy/cache-components-cache-handler: createCacheHandler is deprecated and will be removed in 16.5.0. … See …/docs/migrating.md`.
+  `@mrjasonroy/cache-components-cache-handler: createCacheHandler is deprecated and will be removed in 16.5. … See …/docs/migrating.md`.
   Routed through `setCacheLogger` when set, else `console.warn`.
 - **ISR warning**: `createCacheHandler` (Redis types) in production logs once that it only covers
   `"use cache"`, unless a `RedisCacheHandler` exists in the process or `suppressIsrWarning: true`.

@@ -7,12 +7,14 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
-## DEC-14: The 16.4.2 API is deprecated with a runtime warning and removed in 16.5.0 (16.4.3)
+## DEC-14: The 16.4.2 API is deprecated with a runtime warning and removed in 16.5 (16.4.3)
 
 **Why.** 16.4.3 is a large release under a patch number (the version follows Next.js), so every
 `^16.4.2` / `~16.4.2` install gets it without asking. The maintainer's policy: a 16.4.2 setup must
 keep working on upgrade, but the old API is not carried forward. It is deprecated in 16.4.3 and
-removed in 16.5.0 (supersedes "kept until the Next 17 line" in DEC-4 M3 and the JSDoc).
+removed in the 16.5 line (supersedes "kept until the Next 17 line" in DEC-4 M3 and the JSDoc).
+It says "16.5", not "16.5.0": 16.5.0 and 16.5.1 are burned on npm, so the first 16.5 release
+is 16.5.2, published when Next moves to 16.5.
 
 **What.**
 - Every 16.4.2-only API is `@deprecated` in JSDoc and logs one warning per process on first use,
@@ -78,7 +80,7 @@ the `v16.4.2` tag, so no aliases):
 - `createRedisCacheHandler` is renamed `createPageCacheHandler`: it builds the `cacheHandler`
   (page) handler, and "Redis" no longer says which one. Its options type is renamed
   `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` was exported by 16.4.2, so it stays as a
-  deprecated alias (removed in 16.5.0, DEC-14). The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
+  deprecated alias (removed in 16.5, DEC-14). The `RedisCacheHandler` class keeps its name and is not deprecated: it is the
   page handler.
 
 **Memory split.** `MEMORY_STORE_SHARES` (DEC-9, DEC-11) is unchanged. No store is dead: `page` and
