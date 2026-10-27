@@ -38,8 +38,8 @@ pnpm format           # Format all code
 pnpm typecheck        # TypeScript type checking
 
 # Docker
-pnpm docker:up        # Start Redis
-pnpm docker:down      # Stop Redis
+pnpm docker:up        # Start Redis (6379), Valkey (6380) and Redis Commander (8081)
+pnpm docker:down      # Stop them
 
 # Cleanup
 pnpm clean            # Remove all build artifacts
@@ -123,8 +123,27 @@ ELASTICACHE_CACHE_NAME=<cache name> ELASTICACHE_REGION=<region> \
 
 ### Next.js's own caching suites
 
-`tests/next-deploy/` runs Next.js's caching e2e suites in deploy mode against the package. It runs
-in CI; see [tests/next-deploy/README.md](../tests/next-deploy/README.md).
+`tests/next-deploy/` runs the caching e2e suites from the
+[`vercel/next.js`](https://github.com/vercel/next.js) repo, using Next's deploy-mode test harness
+for deployment adapters. Every PR that changes the package's source runs them. Each suite runs
+twice: once against a plain `next start`, and once with this package, two instances behind a
+round-robin proxy (one instance where a fixture keeps its own handler), sharing one Redis. CI
+fails if a suite (or a test) that passes on `next start` does not pass with the package.
+
+At Next 16.4.2 that is 0 regressions outside one known Next bug: apart from `app-static`, every
+suite and test that passes on `next start` also passes with the package. 28 suites, 18 of which
+run tests in deploy mode ([results](../tests/next-deploy/results/baseline-v16.4.2.md); live
+results on the
+[deploy-tests workflow](https://github.com/mrjasonroy/cache-components-cache-handler/actions/workflows/next-deploy-tests.yml)).
+The limits:
+
+- `test/e2e/app-dir/app-static` fails with any custom cache handler, because of a Next bug
+  (Turbopack's edge `cacheHandlers` registration, fixed in a later Next canary,
+  vercel/next.js#100046). It is listed as a known failure.
+- 10 suites, such as `use-cache` and `ppr-full`, run no tests in deploy mode, so they are not
+  covered here.
+
+See [tests/next-deploy/README.md](../tests/next-deploy/README.md).
 
 ## How it's tested
 

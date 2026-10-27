@@ -1,0 +1,15 @@
+# @mrjasonroy/cache-components-cache-handler
+
+> Redis-backed cache handlers for Next.js 16+: pages, route handlers and "use cache: remote" in Redis; "use cache" in each instance's memory with tag invalidation shared through Redis. One call: withCache(nextConfig). Install the release with the same major.minor as Next.js, pinned exact.
+
+## Docs
+
+- [Agent setup](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/agent-setup.md): a copy-paste prompt that installs and configures the handler
+- [Installation](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/installation.md): install, withCache, environment variables, verifying
+- [Usage](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/usage.md): which directive lands in which cache, revalidation examples
+- [Redis Configuration](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/redis.md): Valkey, ElastiCache (Serverless, cluster mode), IAM, Sentinel, Cluster, key layout, sizing
+- [Custom handlers](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/custom-handlers.md): your own ioredis client or timeouts, CacheOptions
+- [How it works](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/how-it-works.md): tag coordination, page lifetimes, Redis outages
+- [Operations](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/operations.md): flushCache, closeCache, memory budget, logging
+- [API Reference](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/api-reference.md): every export, including the deprecated ones
+- [Migrating](https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/migrating.md): from 16.4.2, @neshca/cache-handler or @fortedigital/nextjs-cache-handler

@@ -76,7 +76,8 @@ The built-in handlers read the [environment](./installation.md#environment-varia
 ## `CacheOptions`
 
 Shared by every factory below and by `flushCache`. Each defaults to the environment, so a factory
-called with no options behaves like the built-in handler.
+called with no options behaves like the built-in handler. The table form, with notes, is in
+[Custom handlers](./custom-handlers.md#cacheoptions).
 
 ```ts
 interface CacheOptions {
@@ -155,7 +156,7 @@ alias until 16.5) is Next's constructor context plus `CacheOptions` and:
 |---|---|---|
 | `buildId` | the app's deployment ID if set, else its `BUILD_ID` | The build that scopes entry keys. |
 | `defaultTTL` | `31536000` (365 days) | Lifetime in seconds of an entry with neither `revalidate` nor `expire`, at most 365 days. |
-| `redis` | — | The 16.4.2 form: an ioredis client, a URL or an ioredis options object. Prefer `client` / `url`. |
+| `redis` | — | Deprecated (removed in 16.5): the 16.4.2 form of `client` / `url`, an ioredis client, a URL or an ioredis options object. Use `client` or `url`. |
 | `tagPrefix` | — | Deprecated and ignored. Tag records live in the `<keyPrefix>tags` hash. |
 
 The constructor has the same shape as in 16.4.2, so subclasses keep working. `close()` is deprecated:
@@ -176,9 +177,11 @@ handler is created). Every entry is kept at most 365 days.
 
 ### `createLocalCacheHandler(options?)`
 
-For `"use cache"`. Values live in this process's memory (up to 10,000 entries and 32/98 of the
-[memory budget](./operations.md#memory), about 27 MiB at `--max-old-space-size=768` on Node 22; a larger value is not kept) until their `revalidate` period. When Redis is configured, tag invalidations are shared across instances.
-Takes `CacheOptions`; only the connection, `keyPrefix`, `debug` and `logger` matter.
+For `"use cache"`. Values live in this process's memory until their `revalidate` period: up to
+10,000 entries and 32/98 of the [memory budget](./operations.md#memory) (about 27 MiB at
+`--max-old-space-size=768` on Node 22). A larger value is not kept. When Redis is configured,
+tag invalidations are shared across instances. Takes `CacheOptions`; only the connection,
+`keyPrefix`, `debug` and `logger` matter.
 
 ```js
 // cache/default.mjs
@@ -227,13 +230,10 @@ function closeCache(): Promise<void>;
 ```
 
 For test runs, scripts and CLIs, so Node can exit; a Next server never needs it. Closes every
-Redis connection the package opened in this process and empties its memory stores. It first
-waits for tag writes in flight and sends any Redis has not acknowledged once more; one still
-refused is kept, applied by this process and sent by the handlers once Redis takes it, if they
-are used again. It never rejects because Redis is down. Safe to call more than once, and
-concurrently: a call made while a close runs closes, after it, any connection opened meanwhile. A `client` you passed in is never closed.
-Handlers created before it reconnect on their next call, onto one new connection; the deprecated
-`createCacheHandler` does not, and serves from memory until it is created again.
+Redis connection the package opened in this process and empties its memory stores. A `client`
+you passed in is never closed. It never rejects because Redis is down, and is safe to call more
+than once. Handlers created before it reconnect on their next call. The details, including what
+happens to revalidations in flight, are under [Closing the cache](./operations.md#closing-the-cache).
 
 ```ts
 import { afterAll } from "vitest";
@@ -273,19 +273,25 @@ function attachElastiCacheIamAuth(
 ): { refresh(): Promise<boolean>; stop(): void };
 ```
 
-For a client you build yourself, such as a `Cluster` for cluster-mode-enabled ElastiCache. Create
-it with `lazyConnect: true` and TLS and do not connect it: this connects it once the first IAM
-token is in its options, makes a new token every 10 minutes for reconnects (every node's options
-on a `Cluster`) and sends `AUTH` with it on every connected node. Options left out come from the
-environment, as in [IAM authentication](./redis.md#iam-authentication). Throws when IAM cannot work
-(TLS off, no user, cache name or region) or the AWS packages are not installed. `stop()` ends the
-refresh; the client keeps its connections.
+For a client you build yourself, such as a `Cluster` for cluster-mode-enabled ElastiCache.
+Create the client with `lazyConnect: true` and TLS, and do not connect it. Then this:
+
+- connects it once the first IAM token is in its options;
+- makes a new token every 10 minutes, puts it in the options for reconnects (every node's options
+  on a `Cluster`) and sends `AUTH` with it on every connected node.
+
+Options left out come from the environment, as in
+[IAM authentication](./redis.md#iam-authentication). Throws when IAM cannot work (TLS off, no
+user, cache name or region) or the AWS packages are not installed. `refresh()` makes a new token
+now; `stop()` ends the refresh and leaves the client connected. Call it once per client:
+[IAM on your own client](./redis.md#iam-on-your-own-client) has the full handler-file example.
 
 ## Legacy data cache API
 
-The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.4.x, logs a one-time deprecation warning on first
-use, and is removed in 16.5. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
-`nextjs:tags:`) and covers `"use cache"` only, not pages.
+The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.4.x,
+logs a one-time deprecation warning on first use, and is removed in 16.5. Use `withCache`, or
+`createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key
+layout (`nextjs:data-cache:`, `nextjs:tags:`) and covers `"use cache"` only, not pages.
 
 ### `createCacheHandler(options)`
 
@@ -301,9 +307,8 @@ connection, fall back to memory during an outage, and use memory during `next bu
 `CACHE_REDIS=off`.
 
 The 16.4.2 wiring still works: a handler file that exports `createCacheHandler({ type })`, wired
-with `createCacheConfig` or by hand into `cacheHandlers`. It covers `"use cache"` only, not
-pages. In production it logs a one-time reminder to use `withCache`; pass
-`suppressIsrWarning: true` to silence it.
+with `createCacheConfig` or by hand into `cacheHandlers`. In production it logs a one-time
+reminder to use `withCache`; pass `suppressIsrWarning: true` to silence it.
 
 `createCacheHandler` reads `REDIS_URL` / `VALKEY_URL`, `REDIS_PASSWORD` and the `ELASTICACHE_*`
 variables, and honours `CACHE_REDIS=off` and the build phase. It does not read `CACHE_KEY_PREFIX`
@@ -370,11 +375,12 @@ log a one-time deprecation warning (once per process, per API) on first use. The
 | `createRedisDataCacheHandler`, `createIoredisAdapter` | `createRemoteCacheHandler({ client })` | It takes an ioredis client directly; no adapter. |
 | `createMemoryDataCacheHandler` | `createLocalCacheHandler` | Memory with tag invalidation shared across instances. |
 | `RedisCacheHandler#close()` | `closeCache()` | The same, without needing a handler. |
+| The page handler's `redis` and `tagPrefix` options, and a `defaultTTL` that is not a number | `client` or `url`; nothing for `tagPrefix`; a number of seconds | 16.4.2 forms. `tagPrefix` is ignored: tag records live in the `<keyPrefix>tags` hash. |
 | `RedisCacheHandlerOptions` | `PageCacheHandlerOptions` | Renamed with `createPageCacheHandler`; the same type. |
-| `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. They keep working. |
+| `createCacheConfig`, `createCacheConfigWithProfiles` | `withCache` | Both make you write and wire handler files yourself. |
 | `CompositeHandler`, `createCompositeHandler` | built in | The memory fallback is now inside every handler. |
 | `MemoryCacheHandler`, `createMemoryCacheHandler` | `withCache` without `REDIS_URL` | Memory only is the no-URL mode. |
-| `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`, `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, and the Next 14 `CacheHandler*` / `CacheValue` / `LifespanParameters` types | none | Internals of the Next 14 handlers. They still work. |
+| `bufferToString`, `stringToBuffer`, `jsonReplacer`, `jsonReviver`, `isImplicitTag`, `calculateLifespan`, `isExpired`, `IMPLICIT_TAG_PREFIX`, and the Next 14 `CacheHandler*` / `CacheValue` / `LifespanParameters` types | none | Internals of the Next 14 handlers. |
 
 `RedisCacheHandler` is **not** deprecated. It is the page handler `withCache` uses.
 
@@ -408,7 +414,9 @@ replacements.
 `AwsCredentialsProvider`, `PageCacheHandlerOptions`, `RedisCacheHandlerOptions` (deprecated),
 `RemoteCacheHandlerOptions`, `LocalCacheHandlerOptions`, `FlushCacheOptions`, `FlushCacheResult`,
 `PageCacheControl`, `PageCacheGetContext`, `PageCacheHandlerContext`, `PageCacheHandlerValue`,
-`PageCacheSetContext`, `PageCacheValue`, `DataCacheHandler`, `DataCacheEntry`, `Timestamp`,
+`PageCacheSetContext`, `PageCacheValue`, `DataCacheHandler`, `DataCacheEntry`, `Timestamp`.
+
+Types of the deprecated legacy data cache API, removed with it in 16.5:
 `DataCacheHandlerOptions`, `CacheHandlerType`, `MemoryDataCacheHandlerOptions`,
 `RedisDataCacheHandlerOptions`, `RedisClient`, `IoredisLike`, `CacheHandlerConfig`.
 
