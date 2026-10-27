@@ -17,7 +17,9 @@ npm install --save-exact @mrjasonroy/cache-components-cache-handler
 The package version follows Next.js. Pin it to the exact release for your Next.js version
 (`--save-exact`; Next 16.4.3 → `16.4.3`) and upgrade the two together. A range such as `^16.4.3`
 also accepts the 16.5 releases, which follow Next.js 16.5 and remove the APIs deprecated in
-16.4.3.
+16.4.3. From the next release, the `next` peer dependency is `~<major>.<minor>.0` of the
+package's own version (for example `~16.4.0` for 16.4.x), so npm refuses a handler whose minor
+does not match your Next.js with an `ERESOLVE` error, and pnpm and Yarn warn.
 
 `ioredis` is an optional dependency, so it is installed with the package unless your package
 manager skips optional dependencies (`npm install --omit=optional`, `pnpm install --no-optional`,

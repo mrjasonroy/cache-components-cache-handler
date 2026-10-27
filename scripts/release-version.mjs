@@ -4,23 +4,24 @@
 // - The package's major.minor never runs ahead of Next.js's latest stable release.
 // - A version npm has ever seen is never used again. `npm view <pkg> time --json` lists every
 //   version ever published, unpublished ones included (npm refuses to reuse those numbers).
+// - The package is pinned to the app's Next.js minor: its `next` peer is `~<major>.<minor>.0`.
 //
 //   node scripts/release-version.mjs check            fail if the package's major.minor is ahead of Next
 //   node scripts/release-version.mjs check --unused   ...or if npm has ever seen the package's version
 //   node scripts/release-version.mjs target <next>    print the version to bump to for Next <next>,
 //                                                     or nothing when the package needs no bump
+//   node scripts/release-version.mjs sync <previous>  after a bump from <previous>: move the `next`
+//                                                     peer to the new major.minor, and rename
+//                                                     CHANGELOG.md's "## [Unreleased]" section
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const PACKAGE_JSON = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "packages",
-  "cache-handler",
-  "package.json",
-);
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PACKAGE_JSON = join(ROOT, "packages", "cache-handler", "package.json");
+const CHANGELOG = join(ROOT, "CHANGELOG.md");
+const RELEASE_DOC = "docs/publishing/RELEASE.md";
 
 const VERSION_RE = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
@@ -103,6 +104,89 @@ export function aheadOfNext(pkg, next) {
   return null;
 }
 
+/** The `next` peer range for package `version`: `~<major>.<minor>.0` (an RC uses its base). */
+export function peerRange(version) {
+  const { major, minor } = parseVersion(version);
+  return `~${major}.${minor}.0`;
+}
+
+/** An error message when the `next` peer is not the range for the package's version, else `null`. */
+export function peerMismatch(pkg) {
+  const peer = pkg.peerDependencies?.next;
+  const expected = peerRange(pkg.version);
+  if (peer === expected) return null;
+  const fix = "node scripts/release-version.mjs sync <previous version>";
+  return (
+    `The "next" peer dependency is ${JSON.stringify(peer)}, but package ${pkg.version} must pin ` +
+    `Next's minor: "${expected}". Run \`${fix}\` or set it by hand (${RELEASE_DOC}).`
+  );
+}
+
+/**
+ * The `next` peer after a bump from `previous` to `current`. A bump to a new major.minor (an RC
+ * counts by its base version) moves it to `~<major>.<minor>.0`; a patch or pre-release bump within
+ * the same major.minor leaves `peer` as it is.
+ */
+export function bumpPeer(peer, previous, current) {
+  const from = parseVersion(previous);
+  const to = parseVersion(current);
+  if (from.major === to.major && from.minor === to.minor) return peer;
+  return peerRange(current);
+}
+
+const UNRELEASED_RE = /^## \[Unreleased\][^\n]*\n/im;
+
+/**
+ * CHANGELOG.md text after bumping to `version`, so publish.yml finds the release's section under
+ * "## [<base version>]" (an RC uses its final version's section).
+ *
+ * - "## [Unreleased]" becomes "## [<base>] - <date>" for a release, or "## [<base>]" for a
+ *   pre-release (dated when the final ships).
+ * - When "## [<base>]" already exists (an earlier RC), the Unreleased entries are appended to the
+ *   end of it (its intro stays first; a repeated ### heading is not merged), and a release dates its heading if it has no date yet.
+ * - With no Unreleased section and nothing to date, the text is returned unchanged.
+ */
+export function releaseChangelog(text, version, date) {
+  const { major, minor, patch, pre } = parseVersion(version);
+  const base = `${major}.${minor}.${patch}`;
+  const heading = pre.length ? `## [${base}]` : `## [${base}] - ${date}`;
+  const escaped = base.replaceAll(".", "\\.");
+  const existingRe = new RegExp(`^## \\[${escaped}\\]([^\\n]*)\\n`, "m");
+
+  let out = text;
+  const unreleased = UNRELEASED_RE.exec(out);
+  if (unreleased) {
+    const start = unreleased.index;
+    const bodyStart = start + unreleased[0].length;
+    const nextHeading = out.slice(bodyStart).search(/^## \[/m);
+    const bodyEnd = nextHeading === -1 ? out.length : bodyStart + nextHeading;
+    const body = out.slice(bodyStart, bodyEnd);
+    const rest = out.slice(0, start) + out.slice(bodyEnd);
+    const existing = existingRe.exec(rest);
+    if (existing && !body.trim()) {
+      out = rest;
+    } else if (existing) {
+      // Append at the end of the existing section, so its intro stays first.
+      const sectionStart = existing.index + existing[0].length;
+      const following = rest.slice(sectionStart).search(/^## \[/m);
+      const at = following === -1 ? rest.length : sectionStart + following;
+      const section = rest.slice(0, at).replace(/\n+$/, "");
+      const after = rest.slice(at);
+      out = `${section}\n\n${body.trim()}\n${after ? `\n${after}` : ""}`;
+    } else {
+      out = `${out.slice(0, start)}${heading}\n${out.slice(bodyStart)}`;
+    }
+  }
+
+  if (!pre.length) {
+    const existing = existingRe.exec(out);
+    if (existing && !/\d{4}-\d{2}-\d{2}/.test(existing[1])) {
+      out = `${out.slice(0, existing.index)}${heading}\n${out.slice(existing.index + existing[0].length)}`;
+    }
+  }
+  return out;
+}
+
 function npmView(...args) {
   return execFileSync("npm", ["view", ...args], {
     encoding: "utf8",
@@ -118,6 +202,8 @@ function main(argv) {
     const next = npmView("next", "version");
     const ahead = aheadOfNext(pkg.version, next);
     if (ahead) throw new Error(ahead);
+    const peer = peerMismatch(pkg);
+    if (peer) throw new Error(peer);
     if (arg === "--unused") {
       const used = usedVersions(JSON.parse(npmView(pkg.name, "time", "--json")));
       if (used.has(pkg.version)) {
@@ -139,7 +225,27 @@ function main(argv) {
     return;
   }
 
-  throw new Error("Usage: release-version.mjs check [--unused] | target <next-version>");
+  if (command === "sync") {
+    if (!arg) throw new Error("Usage: release-version.mjs sync <previous-version>");
+    const peer = bumpPeer(pkg.peerDependencies?.next, arg, pkg.version);
+    if (peer !== pkg.peerDependencies?.next) {
+      pkg.peerDependencies = { ...pkg.peerDependencies, next: peer };
+      writeFileSync(PACKAGE_JSON, `${JSON.stringify(pkg, null, 2)}\n`);
+      console.log(`next peer: ${peer}`);
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    const changelog = readFileSync(CHANGELOG, "utf8");
+    const released = releaseChangelog(changelog, pkg.version, date);
+    if (released !== changelog) {
+      writeFileSync(CHANGELOG, released);
+      console.log(`CHANGELOG.md: release notes under ## [${pkg.version.replace(/-.*$/, "")}]`);
+    }
+    return;
+  }
+
+  throw new Error(
+    "Usage: release-version.mjs check [--unused] | target <next-version> | sync <previous-version>",
+  );
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
