@@ -7,7 +7,7 @@
   `Cannot load node:…: this package needs Node.js 22.3 or later`, and Yarn 1 refuses to install.
   Upgrade Node before upgrading the package.
 - **Deprecation warnings.** Your 16.4.2 setup keeps working in 16.4.x, but each 16.4.2 API it uses
-  logs one warning per process naming its replacement. They are removed in 16.5.0: move to
+  logs one warning per process naming its replacement. They are removed in 16.5: move to
   `withCache` (below) before then.
 
 ## From 16.4.2 (handler files in `next.config`)
@@ -103,5 +103,5 @@ the build output and stored in Redis.
 ## Deprecated exports
 
 The exports the old setups used still work in 16.4.x, log a one-time deprecation warning, and
-are removed in 16.5.0. The [API reference](./api-reference.md#deprecated) lists each one and its
+are removed in 16.5. The [API reference](./api-reference.md#deprecated) lists each one and its
 replacement.

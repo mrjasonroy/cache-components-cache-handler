@@ -149,7 +149,7 @@ that did not write it takes one more `HMGET`, for the tags it learns from the en
 [Sizing](./redis.md#sizing).
 
 `PageCacheHandlerOptions` (16.4.2's `RedisCacheHandlerOptions`, still exported as a deprecated
-alias until 16.5.0) is Next's constructor context plus `CacheOptions` and:
+alias until 16.5) is Next's constructor context plus `CacheOptions` and:
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -284,7 +284,7 @@ refresh; the client keeps its connections.
 ## Legacy data cache API
 
 The data cache API of 16.4.2 and earlier. Deprecated in 16.4.3: it keeps working in 16.4.x, logs a one-time deprecation warning on first
-use, and is removed in 16.5.0. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
+use, and is removed in 16.5. Use `withCache`, or `createRemoteCacheHandler` / `createLocalCacheHandler`. `createCacheHandler` keeps its own key layout (`nextjs:data-cache:`,
 `nextjs:tags:`) and covers `"use cache"` only, not pages.
 
 ### `createCacheHandler(options)`
@@ -362,7 +362,7 @@ export default createRedisDataCacheHandler({
 
 Deprecated in 16.4.3, with JSDoc pointing at the replacement. They keep working in 16.4.x and
 log a one-time deprecation warning (once per process, per API) on first use. They are removed in
-16.5.0.
+16.5.
 
 | Deprecated | Use instead | Why |
 |---|---|---|

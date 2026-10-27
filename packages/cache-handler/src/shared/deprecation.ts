@@ -1,5 +1,5 @@
 /**
- * Once-per-process warnings for the 16.4.2 APIs deprecated in 16.4.3 and removed in 16.5.0.
+ * Once-per-process warnings for the 16.4.2 APIs deprecated in 16.4.3 and removed in 16.5.
  *
  * The package entry (`index.ts`) exports wrapped versions of the deprecated functions, so only an
  * application's own calls warn; the package's internal uses of the same code never do.
@@ -8,7 +8,7 @@
 import { processLogger, writeLog } from "./logger.js";
 
 /** Version in which the deprecated 16.4.2 APIs are removed. */
-export const REMOVED_IN = "16.5.0";
+export const REMOVED_IN = "16.5";
 
 export const MIGRATION_GUIDE =
   "https://github.com/mrjasonroy/cache-components-cache-handler/blob/main/docs/migrating.md";

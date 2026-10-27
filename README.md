@@ -12,13 +12,9 @@ memory with revalidation shared across all of them.
 
 ## Quick start
 
-<!-- rc: drop "@rc" (and the note below) once 16.4.3 is the npm latest release -->
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler@rc
+npm install @mrjasonroy/cache-components-cache-handler
 ```
-
-`withCache` is new in 16.4.3, currently a release candidate on the `rc` tag. Drop `@rc` once
-16.4.3 is the latest release.
 
 ```js
 // next.config.mjs

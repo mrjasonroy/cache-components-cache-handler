@@ -2,9 +2,9 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [16.4.3] - Unreleased
+## [16.4.3] - 2026-10-26
 
-This is a large release under a patch number. The package version follows Next.js, so the work that went into the 16.4.3 release candidates ships as 16.4.3, and every install on `^16.4.2` or `~16.4.2` gets it on its next update. A 16.4.2 setup keeps working on Node 22.3+ (and, for the page handler, Redis 6.2+ with Lua scripting): deprecated APIs still run, log a one-time warning, and are removed in 16.5.0.
+This is a large release under a patch number. The package version follows Next.js, so the work that went into the 16.4.3 release candidates ships as 16.4.3, and every install on `^16.4.2` or `~16.4.2` gets it on its next update. A 16.4.2 setup keeps working on Node 22.3+ (and, for the page handler, Redis 6.2+ with Lua scripting): deprecated APIs still run, log a one-time warning, and are removed in 16.5.
 
 To upgrade, replace your cache config with `withCache` and set `REDIS_URL` in production (or keep your `ELASTICACHE_*` variables):
 
@@ -48,7 +48,9 @@ To wait, pin the exact version `16.4.2` (not `^16.4.2`). [docs/migrating.md](htt
 - **New optional peer dependencies** appear in lockfiles: `@aws-crypto/sha256-js`, `@aws-sdk/credential-provider-node` and `@smithy/signature-v4`. They are needed only for ElastiCache IAM authentication and are not installed unless you add them.
 - **Environment variables** that 16.4.2 ignored now take effect: `CACHE_REDIS`, `CACHE_KEY_PREFIX`, `CACHE_DEBUG`, `CACHE_COMPRESSION`, `CACHE_MEMORY_HEAP_PERCENT`, `CACHE_MEMORY_MAX_MIB`, `ELASTICACHE_IAM_USER`, `ELASTICACHE_CACHE_NAME`, `ELASTICACHE_REGION`, `ELASTICACHE_SERVERLESS`, `AWS_REGION` / `AWS_DEFAULT_REGION` (the IAM region when `ELASTICACHE_REGION` is unset) and `NEXT_DEPLOYMENT_ID` (scopes the keys, see above). `ELASTICACHE_AUTH_TOKEN` is ignored when `ELASTICACHE_IAM_USER` is set.
 
-### Deprecated, removed in 16.5.0
+### Deprecated, removed in 16.5
+
+The removal ships with the package's first 16.5 release, which follows Next.js 16.5. That release is 16.5.2, because 16.5.0 and 16.5.1 were published by mistake in October 2026 and cannot be reused.
 
 Each of these still works in 16.4.x and logs one deprecation warning per process on first use (types and `IMPLICIT_TAG_PREFIX` are marked `@deprecated` in JSDoc only). A deprecated factory does not add a second line for the class it builds.
 
@@ -113,9 +115,9 @@ For anyone who tested `16.4.3-rc.3` or earlier. What to change for `16.4.3-rc.4`
 - `withCache` throws on any option other than `pages`, `handlers` and `memory`.
 - `MEMORY_ONLY_TAG` (`"cache:memory-only"`) is removed and is an ordinary tag now: with Redis configured, every page and `"use cache: remote"` entry goes to Redis. Use `"use cache"` for per-instance data.
 - With Redis connected, the in-memory page and `"use cache: remote"` stores no longer fill; only the outage fallbacks hold entries.
-- `createRedisCacheHandler` is renamed `createPageCacheHandler`, with no alias. Its options type is `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` is a deprecated alias of it, removed in 16.5.0.
+- `createRedisCacheHandler` is renamed `createPageCacheHandler`, with no alias. Its options type is `PageCacheHandlerOptions`; `RedisCacheHandlerOptions` is a deprecated alias of it, removed in 16.5.
 - `RedisCacheHandler` accepts any non-number `defaultTTL` with a warning instead of throwing; negative and infinite numbers still throw. The details are under "Deprecated" above.
-- The 16.4.2 APIs log a one-time deprecation warning and are removed in 16.5.0 (earlier candidates said "on the Next 17 line").
+- The 16.4.2 APIs log a one-time deprecation warning and are removed in 16.5 (earlier candidates said "on the Next 17 line", and rc.4 said "16.5.0", a version npm can no longer publish).
 
 ## [16.0.0] - 2025-11-18
 

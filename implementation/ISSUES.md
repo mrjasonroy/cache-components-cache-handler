@@ -209,7 +209,7 @@ is dropped silently.
   16.5 stack re-resolve its connection was not worth it for a deprecated API. Its deprecation note
   says to create it again.
 - **The 16.5 data stack is deprecated, not removed or shimmed** (architecture review M3, phase 2).
-  It keeps working through 16.4.x with a one-time deprecation warning and is removed in 16.5.0
+  It keeps working through 16.4.x with a one-time deprecation warning and is removed in 16.5
   (DEC-14, superseding DEC-6's "Next 17 line").
 - **No `globalSlot()` helper for the global state** (architecture review L5). DEC-5 writes down the
   rule, which was the finding's cost (M2 broke an unwritten rule). Folding the global slots into

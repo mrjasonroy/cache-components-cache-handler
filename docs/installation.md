@@ -10,13 +10,9 @@
 
 ## Install
 
-<!-- rc: drop "@rc" (and the note below) once 16.4.3 is the npm latest release -->
 ```bash
-npm install @mrjasonroy/cache-components-cache-handler@rc
+npm install @mrjasonroy/cache-components-cache-handler
 ```
-
-`withCache` is new in 16.4.3, currently a release candidate on the `rc` tag. Drop `@rc` once
-16.4.3 is the latest release.
 
 `ioredis` is an optional dependency, so it is installed with the package unless your package
 manager skips optional dependencies (`npm install --omit=optional`, `pnpm install --no-optional`,

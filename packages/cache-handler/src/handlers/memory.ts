@@ -16,7 +16,7 @@ import type {
 /**
  * Options for the deprecated `MemoryCacheHandler`.
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.
  */
 export interface MemoryCacheHandlerOptions extends CacheHandlerOptions {
   /**
@@ -64,7 +64,7 @@ export const MAX_REVALIDATED_TAGS = 10_000;
  * });
  * ```
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.
  */
 export class MemoryCacheHandler implements CacheHandler {
   public readonly name = "local-lru";
@@ -237,7 +237,7 @@ export class MemoryCacheHandler implements CacheHandler {
  * });
  * ```
  *
- * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.0.
+ * @deprecated Use `withCache` without `REDIS_URL`: memory only is the no-URL mode. Still works; removed in 16.5.
  */
 export function createMemoryCacheHandler(options?: MemoryCacheHandlerOptions): MemoryCacheHandler {
   return new MemoryCacheHandler(options);

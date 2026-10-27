@@ -16,14 +16,14 @@ import type { DataCacheHandler } from "./types.js";
 /**
  * Backend of {@link createCacheHandler}.
  *
- * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.0.
+ * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.
  */
 export type CacheHandlerType = "memory" | "redis" | "valkey" | "elasticache";
 
 /**
  * Options of {@link createCacheHandler}.
  *
- * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.0.
+ * @deprecated Part of the 16.4.2 API; use `withCache`. Still works in 16.4.x; removed in 16.5.
  */
 export interface CacheHandlerOptions extends IsrWarningOptions {
   /**
@@ -216,7 +216,7 @@ function warnOnFirstUse(handler: DataCacheHandler, options: IsrWarningOptions): 
  * @deprecated The legacy data cache stack (16.4.2 and earlier). Use `withCache(nextConfig)`, or `createRemoteCacheHandler`
  *   / `createLocalCacheHandler` in a custom handler file, which take `url`, `client`, `keyPrefix`
  *   and the connection options.
- *   It keeps working in 16.4.x, logs a one-time deprecation warning, and is removed in 16.5.0.
+ *   It keeps working in 16.4.x, logs a one-time deprecation warning, and is removed in 16.5.
  */
 export function createCacheHandler(options: CacheHandlerOptions): DataCacheHandler {
   const { type, debug = false } = options;
