@@ -142,8 +142,8 @@ const UNRELEASED_RE = /^## \[Unreleased\][^\n]*\n/im;
  *
  * - "## [Unreleased]" becomes "## [<base>] - <date>" for a release, or "## [<base>]" for a
  *   pre-release (dated when the final ships).
- * - When "## [<base>]" already exists (an earlier RC), the Unreleased entries move to the top of
- *   it, and a release dates its heading if it has no date yet.
+ * - When "## [<base>]" already exists (an earlier RC), the Unreleased entries are appended to the
+ *   end of it (its intro stays first; a repeated ### heading is not merged), and a release dates its heading if it has no date yet.
  * - With no Unreleased section and nothing to date, the text is returned unchanged.
  */
 export function releaseChangelog(text, version, date) {
@@ -166,8 +166,13 @@ export function releaseChangelog(text, version, date) {
     if (existing && !body.trim()) {
       out = rest;
     } else if (existing) {
-      const at = existing.index + existing[0].length;
-      out = `${rest.slice(0, at)}\n${body.trim()}\n\n${rest.slice(at).replace(/^\n+/, "")}`;
+      // Append at the end of the existing section, so its intro stays first.
+      const sectionStart = existing.index + existing[0].length;
+      const following = rest.slice(sectionStart).search(/^## \[/m);
+      const at = following === -1 ? rest.length : sectionStart + following;
+      const section = rest.slice(0, at).replace(/\n+$/, "");
+      const after = rest.slice(at);
+      out = `${section}\n\n${body.trim()}\n${after ? `\n${after}` : ""}`;
     } else {
       out = `${out.slice(0, start)}${heading}\n${out.slice(bodyStart)}`;
     }

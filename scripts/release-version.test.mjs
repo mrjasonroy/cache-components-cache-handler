@@ -120,7 +120,7 @@ test("later RCs and the final merge Unreleased into the RC's section and date it
     "16.4.4-rc.1",
     "2026-11-02",
   );
-  assert.equal(rc1, changelog("## [16.4.4]\n\n- Second.\n\n- First.\n"));
+  assert.equal(rc1, changelog("## [16.4.4]\n\n- First.\n\n- Second.\n"));
   assert.equal(
     releaseChangelog(rc0, "16.4.4", "2026-11-03"),
     changelog("## [16.4.4] - 2026-11-03\n\n- First.\n"),
@@ -140,4 +140,26 @@ test("nothing pending leaves the changelog as it is", () => {
   assert.equal(releaseChangelog(text, "16.4.4", "2026-11-02"), text);
   assert.equal(releaseChangelog(text, "16.4.3", "2026-11-02"), text);
   assert.equal(releaseChangelog(text, "16.5.2-rc.0", "2026-11-02"), text);
+});
+
+test("merged Unreleased entries go after the section's intro and subsections", () => {
+  const rc0 =
+    "## [16.4.4]\n\nIntro paragraph.\n\n### Fixed\n\n- First fix.\n\n### Changed\n\n- First change.\n";
+  const before = changelog("## [Unreleased]\n\n### Fixed\n\n- Second fix.\n", rc0);
+  assert.equal(
+    releaseChangelog(before, "16.4.4", "2026-11-03"),
+    changelog(
+      "## [16.4.4] - 2026-11-03\n\nIntro paragraph.\n\n### Fixed\n\n- First fix.\n\n### Changed\n\n" +
+        "- First change.\n\n### Fixed\n\n- Second fix.\n",
+    ),
+  );
+});
+
+test("merging into the last section of the file keeps one trailing newline", () => {
+  const before =
+    "# Changelog\n\n## [Unreleased]\n\n- Second.\n\n## [16.4.4]\n\nIntro.\n\n- First.\n";
+  assert.equal(
+    releaseChangelog(before, "16.4.4-rc.1", "2026-11-03"),
+    "# Changelog\n\n## [16.4.4]\n\nIntro.\n\n- First.\n\n- Second.\n",
+  );
 });

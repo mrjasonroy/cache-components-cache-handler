@@ -29,8 +29,9 @@ The package's major.minor follows Next.js; the patch number is ours.
   peer does not match the version.
 - **Release notes come from CHANGELOG.md.** Write pending entries under `## [Unreleased]` at the
   top. The same `sync` step renames it to the version being released: `## [16.4.4] - <date>` for
-  a release, `## [16.4.4]` (undated) for an RC, and a later RC or the final merges new Unreleased
-  entries into that section and dates it. `publish.yml` puts the `## [<base version>]` section in
+  a release (the date the bump runs, in UTC, not the publish date), `## [16.4.4]` (undated) for
+  an RC, and a later RC or the final appends new Unreleased entries to the end of
+  that section (after its intro and subsections) and dates it. `publish.yml` puts the `## [<base version>]` section in
   the GitHub release.
 
 ### Examples

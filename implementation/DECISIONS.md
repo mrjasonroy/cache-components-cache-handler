@@ -7,15 +7,15 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
-## DEC-15: The `next` peer pins the package's Next minor (16.4.4)
+## DEC-15: The `next` peer pins the package's Next minor (the release after 16.4.3)
 
 **Why.** The package version follows Next.js (handler 16.4.3 for Next 16.4.3), and the 16.5 line
 removes the APIs deprecated in 16.4.3 (DEC-14). The `next` peer was `^16.0.0`, so npm would pair
 handler 16.5.x with Next 16.4 for anyone on a `^` range.
 
 **What.**
-- The peer is `~<major>.<minor>.0` for the package's major.minor: `~16.4.0` now, `~16.5.0` from
-  16.5.2. Not an exact version: Next often ships a patch before we do, and an exact peer would
+- The peer is `~<major>.<minor>.0` for the package's own major.minor (`~16.4.0` for 16.4.x,
+  `~16.5.0` for 16.5.x). Not an exact version: Next often ships a patch before we do, and an exact peer would
   break every app on that patch until we caught up.
 - `scripts/release-version.mjs sync <previous>` runs in every bump (`version-bump.yml`,
   `nextjs-version-check.yml`, `catch-up-release.yml`). A bump to a new major.minor (an RC by its
