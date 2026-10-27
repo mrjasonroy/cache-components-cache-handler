@@ -9,6 +9,9 @@
 - **Deprecation warnings.** Your 16.4.2 setup keeps working in 16.4.x, but each 16.4.2 API it uses
   logs one warning per process naming its replacement. They are removed in 16.5: move to
   `withCache` (below) before then.
+- **Pin the version.** If your `package.json` has `^16.4.2`, change it to the exact version for
+  your Next.js (for example `"16.4.3"`). The version follows Next.js, and a caret range would also
+  take the 16.5 releases, which remove the deprecated APIs.
 
 ## From 16.4.2 (handler files in `next.config`)
 
