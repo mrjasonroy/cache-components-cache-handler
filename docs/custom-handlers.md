@@ -1,21 +1,26 @@
 # Custom handlers
 
-Use your own handler files when you need a client you built yourself (Sentinel, a custom Cluster)
-or different timeouts. ElastiCache IAM authentication needs neither: the environment turns it on
-(see [IAM authentication](./redis.md#iam-authentication)), and the `iam` option sets it in a
-handler file. Write one file per handler and give the paths to `withCache`. Each file keeps its
-directive's role: `page` for pages, route handlers and cached `fetch`, `remote` for
-`"use cache: remote"` (Redis), `default` for `"use cache"` (per-instance memory, shared tag
-invalidation):
+Use your own handler files when you need a client you built yourself (Sentinel, a Cluster) or
+different timeouts. ElastiCache IAM on a serverless or cluster-mode-disabled cache needs neither:
+the environment turns it on ([IAM authentication](./redis.md#iam-authentication)).
+
+Write one file per handler and give the paths to `withCache`. Each file keeps its directive's
+role:
+
+- `page`: pages, route handlers and cached `fetch`.
+- `remote`: `"use cache: remote"` (Redis).
+- `default`: `"use cache"` (per-instance memory, shared tag invalidation).
 
 ```js
-// cache/redis.mjs: one client for all three files, parked on globalThis because Next can load
-// the three handler modules separately
+// cache/redis.mjs
 import Redis from "ioredis";
 
-const key = Symbol.for("my-app.redis");
-globalThis[key] ??= new Redis(process.env.REDIS_URL, { commandTimeout: 1000 });
-export const client = globalThis[key];
+function createClient() {
+  return new Redis(process.env.REDIS_URL, { commandTimeout: 1000 });
+}
+
+// One client per process: Next can load each handler file in its own module graph.
+export const client = (globalThis.myAppRedis ??= createClient());
 ```
 
 ```js
@@ -64,49 +69,25 @@ runs), not against `next.config`; when the two can differ, pass an absolute path
 
 Handlers that share a client and key prefix share one connection and one tag store. A handler
 you don't replace keeps reading the environment. So if you pass a `client` and leave `REDIS_URL`
-unset, also provide `default`; otherwise `"use cache"` tag invalidation stays local to each
-instance.
+unset, replace all three: a handler you leave out runs without Redis. For `default`, that means
+`"use cache"` tag invalidation stays local to each instance.
 
 A client you pass in is yours: the package never closes, disconnects or reconfigures it. The
-package's own commands reach it through a proxy that bounds them by `commandTimeout`. After 3
-timeouts in a row the handlers serve from memory for 2 s at a time, until a command succeeds
-again. Your other uses of the client are unaffected, so set its own `commandTimeout` (and a
-`retryStrategy`) for those. [Redis Configuration](./redis.md#your-own-client) has Sentinel and
-Cluster clients.
+package's own commands on it are bounded by `commandTimeout`. After 3 timeouts in a row the
+handlers serve from memory for 2 s at a time, until a command succeeds again. Your other uses of
+the client are unaffected, so set its own `commandTimeout` and `retryStrategy` for those.
+[Redis Configuration](./redis.md#your-own-client) has Sentinel and Cluster clients.
 
-For ElastiCache IAM authentication on a client of your own, which is the way to use IAM with
-cluster-mode-enabled ElastiCache (a `Cluster`), create the client with `lazyConnect: true` and TLS,
-do not connect it, and call `attachElastiCacheIamAuth(client, { userId, cacheName, region })`
-once: it connects the client when the first token is ready, refreshes the token every 10 minutes
-and re-authenticates the live connections. Fields you leave out come from the `ELASTICACHE_*`
-environment. Then pass the client as `client` (not `iam`, which throws with `client`):
-
-```js
-// cache/redis.mjs
-import { Cluster } from "ioredis";
-import { attachElastiCacheIamAuth } from "@mrjasonroy/cache-components-cache-handler";
-
-const key = Symbol.for("my-app.redis");
-globalThis[key] ??= (() => {
-  const client = new Cluster([{ host: process.env.ELASTICACHE_ENDPOINT, port: 6379 }], {
-    lazyConnect: true,
-    dnsLookup: (address, callback) => callback(null, address),
-    redisOptions: { tls: {}, commandTimeout: 1000 },
-  });
-  attachElastiCacheIamAuth(client, { userId: "app-user", cacheName: "my-cache", region: "us-east-1" });
-  return client;
-})();
-export const client = globalThis[key];
-```
-
-ElastiCache Serverless and cluster-mode-disabled caches need none of this: the environment's
-connection handles them.
+For ElastiCache IAM on a client of your own (the only way to use IAM with cluster-mode-enabled
+ElastiCache), call `attachElastiCacheIamAuth` on it inside `createClient`. Do not pass `iam`
+with `client`: that throws. [IAM on your own client](./redis.md#iam-on-your-own-client) has the
+example.
 
 All commands share one connection, so a large value on a slow link delays the commands queued
-behind it. At 1000 ms, a 5 MB entry needs about 40 Mbit/s (compression usually makes a page
-entry much smaller than the page); on a slower link (cross-region, or an
-ElastiCache node out of network burst credits) raise `commandTimeout`, or 3 timeouts in a row
-send the handlers to memory.
+behind it. At 1000 ms, a 5 MB entry needs about 40 Mbit/s. Compression usually makes a page
+entry much smaller than the page. On a slower link (cross-region, or an ElastiCache node out of
+network burst credits) raise `commandTimeout`, or 3 timeouts in a row send the handlers to
+memory.
 
 ## `CacheOptions`
 
@@ -127,16 +108,18 @@ All three factories take `CacheOptions`:
 | `logger` | `setCacheLogger`'s, else the console | Where this handler's warnings, errors and debug lines go (see [Logging](./operations.md#logging)). |
 
 Handlers given the same connection settings share one connection and one tag state. Give every
-handler file the same `url`, timeouts and `maxConsecutiveTimeouts`: different settings open a
-second connection to the same server, and the package logs a warning when that happens.
+handler file the same `url`, `iam`, timeouts and `maxConsecutiveTimeouts`: different settings
+open a second connection to the same server, and the package logs a warning when that happens.
 
-`createPageCacheHandler` and `createRemoteCacheHandler` also take `buildId` (default: the app's
-deployment ID when one is set, else its `BUILD_ID`; see
-[skew protection](./how-it-works.md#skew-protection-and-the-deployment-id)), the build that
-scopes entry keys. Both also take `defaultTTL`, in seconds:
-`createPageCacheHandler` keeps an entry with neither `revalidate` nor `expire` that long (default
-and maximum 365 days), and `createRemoteCacheHandler` keeps an entry whose `expire` is infinite
-that long (default 24 hours, maximum 365 days; anything but a number greater than 0 throws).
+`createPageCacheHandler` and `createRemoteCacheHandler` also take:
+
+- `buildId`: the build that scopes entry keys. Default: the app's deployment ID when one is set,
+  else its `BUILD_ID` (see
+  [skew protection](./how-it-works.md#skew-protection-and-the-deployment-id)).
+- `defaultTTL`, in seconds. The page handler keeps an entry with neither `revalidate` nor
+  `expire` that long (default and maximum 365 days). The remote handler keeps an entry whose
+  `expire` is infinite that long (default 24 hours, maximum 365 days); anything but a finite
+  number greater than 0 throws.
 
 `CACHE_REDIS=off` and the build phase apply to custom handlers too: they never use Redis then.
 

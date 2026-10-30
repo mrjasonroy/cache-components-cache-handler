@@ -2,7 +2,7 @@
 
 What `withCache` sets up, how invalidation reaches every instance, how pages and route handlers
 are cached, and what happens when Redis goes down. Setup is in the
-[README](../README.md#quick-start) and the [installation guide](./installation.md).
+[README](../README.md#start-here) and the [installation guide](./installation.md).
 
 ## What goes where
 
@@ -108,24 +108,23 @@ Limits worth knowing:
   removal 365 days plus 10 seconds after the later of its last update and its hard expiration
   deadline. A custom delayed revalidation extends retention by its full duration; `"max"`
   therefore needs about two years. Flush barriers are kept permanently.
-- **Redis 7.4+ and Valkey 9+** expire tag hash fields themselves. Support is probed once per
-  connection in the background, by command capability rather than server version. Subsequent
-  writes set the merged record's field deadline atomically in the existing write script.
-  Startup writes use the same guarded script before the prompt background probe completes, so
-  they cannot strip a supported server's field TTL. A failed probe selects the fallback; a
-  transient failure is retried once on the next connection-ready event.
+- **Redis 7.4+ and Valkey 9+** expire tag hash fields themselves. The package probes for this
+  once per connection, in the background, by command rather than by server version. Once it
+  knows, each tag write sets the field's deadline in the same script. Writes made before the
+  probe finishes cannot remove a field TTL the server already has. A failed probe selects the
+  fallback below; a transient failure is retried once on the next connection.
 - **Standalone Redis / Valkey** also checks up to 1,000 old index members once per minute,
   atomically deleting eligible hash records and index members. It checks the record's deadline
   too, so a concurrent revalidation is preserved. Maintenance adds no request-path command and
   stops with `closeCache()`. With `CACHE_DEBUG=1`, its `tag retention` line reports `pruned`,
   `tagFields` and `tagIndexMembers` without an extra command.
-- **Cluster limitation:** the existing hash and index may occupy different slots. Automatic
-  fallback pruning is skipped on Cluster or after `CROSSSLOT`. Without hash-field TTL support,
-  tag records grow until `flushCache({ scope: "all" })`, with a warning at most hourly by
-  default. On a supported Cluster the hash fields expire, but index members remain until a flush; syncing
-  an expired field returns no record, which is safe after its full retention window. `tag-index`
-  grows by one small member per distinct revalidated tag until a flush. Standalone gets the
-  full prune; existing fields written by an older package gain a TTL only on a later update.
+- **Cluster limitation:** the tag hash and the index may sit in different slots, so the
+  fallback pruning is skipped on a Cluster (or after a `CROSSSLOT` error). Without hash-field
+  TTLs, tag records grow until `flushCache({ scope: "all" })`, with a warning at most hourly.
+  With them, the hash fields expire, but `tag-index` keeps one small member per distinct
+  revalidated tag until a flush. That is safe: an expired field reads as no record, which is
+  only possible after its full retention window.
+- Fields written by an older package gain a TTL only when that tag is next updated.
 - **Unstamped build output:** build output with no surviving stamp can come back after its
   tag record is pruned. This only happens to a deployment serving the same build for over
   365 days after the tag's last invalidation. Redeploy or flush within a year. Missing-stamp
