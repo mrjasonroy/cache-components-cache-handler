@@ -195,3 +195,52 @@ npm. See [auto-release.md](./auto-release.md) and
 - **Next.js deploy tests**: Next.js's own caching suites against the package, on PRs that touch the package source
 - **Publish**: Runs on version tags (tests + npm publish)
 - **Version Check**: Runs daily to check for new Next.js versions
+
+### Three-pod invalidation gate
+
+`multi-pod-e2e.yml` builds the PR's production standalone fixture and loads it into a disposable
+kind cluster: three app replicas behind a ClusterIP Service, one Redis, and a driver Job that
+also acts as the fixture CMS origin. Both default memory storage and `useCache: "redis"` run.
+The driver discovers all three ready Pod IPs from the Service Endpoints; it does not use a
+Service port-forward, which would pin requests to one pod.
+
+The driver warms 19 tagged pages on every pod, changes the CMS versions, sends one authenticated
+webhook, and checks the first subsequent read of every page on every pod. It then repeats five
+bursts: force regeneration, hold all 19 pre-save origin snapshots, change the CMS versions,
+send 19 invalidations spaced 150 ms apart through the Service, observe their commits in Redis,
+release the renders, and check every page directly on all three pods. Freshness assertions never
+retry. Only setup and invalidation-commit barriers poll. The bearer token is generated for each
+cluster and injected through a Kubernetes Secret.
+
+Separate negative-control jobs build a throwaway image with the #104 page timestamp assignment
+reverted. They must fail specifically with `STALE_CONTENT`; build, networking or timeout errors
+do not satisfy the negative control. `REVERT_TIMESTAMP` defaults to `0` and never edits source
+in the checkout. All four jobs have a ten-minute limit. Artifacts include the driver transcript,
+pod logs/events, and Redis tag hash/index dumps, including on expected negative-control failures.
+
+To reproduce with Docker, kind, kubectl, Node 22 and OpenSSL installed:
+
+```bash
+docker build -f k8s/e2e/Dockerfile --build-context handler=. \
+  --build-arg USE_CACHE=redis -t cache-e2e:pr .
+kind create cluster --name cache-e2e
+kind load docker-image cache-e2e:pr --name cache-e2e
+bash k8s/e2e/run.sh
+bash k8s/e2e/diagnostics.sh
+kind delete cluster --name cache-e2e
+```
+
+For the negative control add `--build-arg REVERT_TIMESTAMP=1`; the driver must exit nonzero
+with `STALE_CONTENT`. Use a fresh cluster for each run.
+
+After the workflow has run, the repository owner should add these exact status checks to the
+`main` branch protection/ruleset alongside the existing required checks:
+
+- `Multi-pod (memory, fixed)`
+- `Multi-pod (redis, fixed)`
+- `Multi-pod (memory, reverted)`
+- `Multi-pod (redis, reverted)`
+
+Select GitHub Actions as their source. Do not make the negative-control failure itself a required
+failed check: its job succeeds only when it observes the specific expected regression. Workflow
+changes do not change branch protection automatically.

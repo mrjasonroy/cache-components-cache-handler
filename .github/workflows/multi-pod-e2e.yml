@@ -1,0 +1,77 @@
+name: Multi-pod E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  multi-pod:
+    name: Multi-pod (${{ matrix.storage }}, ${{ matrix.control }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [memory, redis]
+        control: [fixed, reverted]
+    steps:
+      - uses: actions/checkout@v4
+      # Temporary until #106 lands: build the fixture with the pending rc.6 handler.
+      - uses: actions/checkout@v4
+        with:
+          ref: mrjasonroy/empowering-pumps-ep-59
+          path: .handler-under-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build production standalone fixture
+        env:
+          STORAGE: ${{ matrix.storage }}
+          CONTROL: ${{ matrix.control }}
+        run: |
+          revert=0
+          if [ "$CONTROL" = reverted ]; then revert=1; fi
+          docker build -f k8s/e2e/Dockerfile --build-context handler=.handler-under-test \
+            --build-arg USE_CACHE="$STORAGE" --build-arg REVERT_TIMESTAMP="$revert" \
+            -t cache-e2e:pr .
+      - name: Create kind cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          cluster_name: cache-e2e
+      - name: Load fixture
+        run: kind load docker-image cache-e2e:pr --name cache-e2e
+      - name: Single save and five CMS bursts
+        env:
+          CONTROL: ${{ matrix.control }}
+        run: |
+          mkdir -p artifacts
+          set +e
+          bash k8s/e2e/run.sh 2>&1 | tee artifacts/driver.txt
+          result=${PIPESTATUS[0]}
+          set -e
+          if [ "$CONTROL" = reverted ]; then
+            # Infrastructure/build failures are not evidence that the regression was caught.
+            test "$result" -ne 0
+            grep -q 'STALE_CONTENT' artifacts/driver.txt
+            echo 'Negative control caught stale content as required.'
+          else
+            test "$result" -eq 0
+            grep -q 'MULTI_POD_PASS' artifacts/driver.txt
+          fi
+      - name: Collect pod logs and Redis tag records
+        if: always()
+        run: bash k8s/e2e/diagnostics.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: multi-pod-${{ matrix.storage }}-${{ matrix.control }}
+          path: artifacts/
+          retention-days: 7
+      - name: Remove disposable cluster
+        if: always()
+        run: kind delete cluster --name cache-e2e

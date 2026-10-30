@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: driver
+  namespace: cache-e2e
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 180
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: driver
+          image: cache-e2e:pr
+          imagePullPolicy: Never
+          command: ["node", "apps/e2e-test-app/driver.mjs"]
+          env:
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+            - { name: APP_URL, value: "http://app:3000" }
+            - name: POD_URLS
+              valueFrom:
+                configMapKeyRef: { name: pods, key: urls }
+            - name: E2E_REVALIDATE_SECRET
+              valueFrom:
+                secretKeyRef: { name: revalidate, key: token }
