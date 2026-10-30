@@ -2,18 +2,6 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Added
-
-- `withCache(config, { useCache: "redis" })` shares plain `"use cache"` entries across instances.
-  The default remains memory; explicit `handlers.default` takes precedence.
-
-### Fixed
-
-- Data-cache reads enforce the exact render-start hard-expiry deadline in memory, Redis and
-  outage fallback, including when rendering finishes between whole seconds.
-
 ## [16.4.3] - 2026-10-26
 
 **This is a major release under a patch number.** The package version follows Next.js, so the work that went into the 16.4.3 release candidates ships as 16.4.3, and every install on `^16.4.2` or `~16.4.2` gets it on its next update. A 16.4.2 setup keeps working on Node 22.3+ (and, for the page handler, Redis 6.2+ with Lua scripting): deprecated APIs still run, log a one-time warning, and are removed in 16.5.
@@ -140,6 +128,16 @@ For anyone who tested `16.4.3-rc.3` or earlier. What to change for `16.4.3-rc.4`
 ### Changed
 
 - **The handler is pinned to your Next.js minor.** The `next` peer dependency (it was `^16.0.0`) is now `~<major>.<minor>.0` of this release's own version (for example `~16.4.0` for 16.4.x, `~16.5.0` for 16.5.x). The package version follows Next.js, and the 16.5 releases remove the APIs deprecated in 16.4.3, so npm now refuses to install a handler whose minor does not match your Next.js (an `ERESOLVE` error) instead of pairing handler 16.5.x with Next 16.4; pnpm and Yarn warn. Each new Next minor moves the peer with it. Install with `--save-exact` and upgrade the handler and Next.js together.
+
+### Added
+
+- `withCache(config, { useCache: "redis" })` shares plain `"use cache"` entries across instances.
+  The default remains memory; explicit `handlers.default` takes precedence.
+
+### Fixed
+
+- Data-cache reads enforce the exact render-start hard-expiry deadline in memory, Redis and
+  outage fallback, including when rendering finishes between whole seconds.
 
 ## [16.0.0] - 2025-11-18
 
