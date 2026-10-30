@@ -67,6 +67,44 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
     await resetCacheState();
   });
 
+  test.each(["memory", "redis"])(
+    "%s rejects a render that crosses an invalidation",
+    async (backend) => {
+      vi.useFakeTimers();
+      const fake = new FakeRedis();
+      const make = () => (backend === "redis" ? handlerFor(fake) : new RedisCacheHandler());
+      const rendering = make();
+      expect(await rendering.get("/blog")).toBeNull();
+      vi.advanceTimersByTime(10);
+      await make().revalidateTag("t1", { expire: 0 });
+      vi.advanceTimersByTime(10);
+      await rendering.set("/blog", page("old"), pageCtx);
+      expect(await make().get("/blog")).toBeNull();
+      const fresh = make();
+      await fresh.get("/blog");
+      await fresh.set("/blog", page("new"), pageCtx);
+      expect((await make().get("/blog"))?.value.html).toBe("new");
+    },
+  );
+
+  test("a later lookup or overlapping write cannot advance the original render timestamp", async () => {
+    vi.useFakeTimers();
+    const handler = new RedisCacheHandler();
+    await handler.set("/blog", page("cached"), pageCtx);
+    await handler.get("/blog"); // A stale hit can also start background regeneration.
+    vi.advanceTimersByTime(10);
+    await handler.revalidateTag("t1", { expire: 0 });
+    await handler.get("/blog");
+    vi.advanceTimersByTime(10);
+    await handler.set("/blog", page("first completion"), pageCtx);
+    await handler.set("/blog", page("late completion"), pageCtx);
+    expect(await new RedisCacheHandler().get("/blog")).toBeNull();
+    handler.resetRequestCache();
+    await handler.get("/blog");
+    await handler.set("/blog", page("next request"), pageCtx);
+    expect((await new RedisCacheHandler().get("/blog"))?.value.html).toBe("next request");
+  });
+
   describe("get / set shapes", () => {
     test("round-trips APP_PAGE with Buffers and a Map, binary, under the build-scoped key", async () => {
       const fake = new FakeRedis();
@@ -118,7 +156,7 @@ describe("RedisCacheHandler (Next 16 singular cacheHandler)", () => {
       expect(fetched?.cacheControl).toBeUndefined();
     });
 
-    test("resetRequestCache is a no-op", () => {
+    test("resetRequestCache can run before any lookup", () => {
       expect(() => handlerFor(new FakeRedis()).resetRequestCache()).not.toThrow();
     });
 

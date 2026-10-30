@@ -333,6 +333,9 @@ export class RedisCacheHandler {
   private readonly memoryFallback: boolean;
   private readonly log: ((...args: unknown[]) => void) | undefined;
   private readonly edge = isEdgeRuntime();
+  // Next creates this handler per request. Keep the earliest lookup, including stale hits
+  // that trigger background regeneration; a later lookup/write must not advance its age.
+  private readonly renderStarts = new Map<string, number>();
 
   constructor(input: PageCacheHandlerOptions = {}) {
     // 16.4.2 subclasses keep booting with the defaultTTL values 16.4.2 accepted.
@@ -404,6 +407,7 @@ export class RedisCacheHandler {
    */
   async get(cacheKey: string, ctx?: PageCacheGetContext): Promise<PageCacheHandlerValue | null> {
     if (this.edge) return null;
+    if (!this.renderStarts.has(cacheKey)) this.renderStarts.set(cacheKey, nowMs());
     const { connection, stores } = this.runtime;
     const softTags = ctx?.softTags ?? ctx?.implicitTags ?? [];
     const fetchTags = ctx?.kind === "FETCH" ? (ctx.tags ?? []) : [];
@@ -610,7 +614,11 @@ export class RedisCacheHandler {
     // Already expired; Redis rejects `EX 0`.
     if (lifetime <= 0) return;
 
-    const entry: StoredPageEntry = { value: data, tags, lastModified: nowMs() };
+    const entry: StoredPageEntry = {
+      value: data,
+      tags,
+      lastModified: this.renderStarts.get(cacheKey) ?? nowMs(),
+    };
     // Next reads a page's periods back from `get`, so an instance that did not render the page
     // revalidates it on the page's own schedule.
     if (!ctx?.fetchCache && ctx?.cacheControl) entry.cacheControl = ctx.cacheControl;
@@ -660,9 +668,11 @@ export class RedisCacheHandler {
   }
 
   /**
-   * Called by Next at the start of each request. Nothing is cached per request.
+   * Called by Next before the request's first lookup.
    */
-  resetRequestCache(): void {}
+  resetRequestCache(): void {
+    this.renderStarts.clear();
+  }
 
   /**
    * Delete one entry.

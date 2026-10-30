@@ -158,6 +158,14 @@ The page handler implements Next 16's singular `cacheHandler` contract:
   it is served once more and regenerated in the background. `revalidateTag(tag)`, `updateTag` and
   `revalidatePath` make it a miss. A page without a `revalidate` period cannot be served stale, so
   it is a miss either way.
+- **Render timestamps.** A page entry carries the time of its first lookup on the request's
+  handler, including a stale hit that starts background regeneration, rather than the time its
+  render finishes. An invalidation during that render therefore still expires the completed
+  entry. Repeated lookups and overlapping writes on that handler retain the earliest time;
+  `resetRequestCache()` clears it before a new request. Next creates a handler per request,
+  so these timestamps are not shared between requests or processes. Direct `set()` calls with
+  no preceding lookup retain write-time timestamps. Build output keeps its build timestamp;
+  `"use cache"` entries keep Next's supplied render timestamp.
 - **Schedule.** A page's `cacheControl` is stored with it, so an instance that did not render the
   page revalidates it on the page's own schedule.
 - **Prerendered routes are served from the build output.** `next build` writes prerendered pages

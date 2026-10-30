@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file. This projec
 
 ## [Unreleased]
 
+### Fixed
+
+- Page-cache entries now retain their request's first lookup timestamp, preventing a render
+  completed after a tag invalidation from caching its old content as fresh. The production
+  e2e matrix holds a render across invalidation, including two processes sharing Redis.
+
 ### Changed
 
 - **The handler is pinned to your Next.js minor.** The `next` peer dependency (it was `^16.0.0`) is now `~<major>.<minor>.0` of this release's own version (for example `~16.4.0` for 16.4.x, `~16.5.0` for 16.5.x). The package version follows Next.js, and the 16.5 releases remove the APIs deprecated in 16.4.3, so npm now refuses to install a handler whose minor does not match your Next.js (an `ERESOLVE` error) instead of pairing handler 16.5.x with Next 16.4; pnpm and Yarn warn. Each new Next minor moves the peer with it. Install with `--save-exact` and upgrade the handler and Next.js together.
