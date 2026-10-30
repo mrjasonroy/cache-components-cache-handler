@@ -17,11 +17,14 @@ ARG USE_CACHE=memory
 ENV E2E_USE_CACHE=$USE_CACHE
 ENV E2E_STANDALONE=1 NEXT_TELEMETRY_DISABLED=1 REDIS_URL=redis://redis:6379
 RUN pnpm --filter e2e-test-app build
+# Next cannot trace the handler's lazy ioredis require. Keep the locked production closure.
+RUN pnpm --filter e2e-test-app deploy --prod --legacy /runtime-deps
 
 FROM node:22-bookworm-slim
 WORKDIR /app
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 PORT=3000 NEXT_TELEMETRY_DISABLED=1
 COPY --from=build /app/apps/e2e-test-app/.next/standalone ./
+COPY --from=build /runtime-deps/node_modules ./node_modules
 COPY --from=build /app/apps/e2e-test-app/.next/static ./apps/e2e-test-app/.next/static
 COPY k8s/e2e/driver.mjs ./apps/e2e-test-app/driver.mjs
 USER node
