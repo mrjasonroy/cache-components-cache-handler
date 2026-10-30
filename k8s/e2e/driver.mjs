@@ -10,13 +10,17 @@ const secret = process.env.E2E_REVALIDATE_SECRET;
 assert.ok(service && secret, "APP_URL and E2E_REVALIDATE_SECRET required");
 const redis = new Redis(process.env.REDIS_URL, {
   maxRetriesPerRequest: 0,
-  retryStrategy: () => null,
+  retryStrategy: (attempt) => (attempt <= 30 ? 100 : null),
 });
 redis.on("error", (error) => process.stderr.write(`${error.message}\n`));
 const ids = Array.from({ length: 19 }, (_, i) => `article-${i}`);
 const tags = ids.map((id) => `multi-pod-${id}`);
 const state = new Map(ids.map((id) => [id, { version: 1, hold: null, started: false }]));
 const server = createServer(async (request, response) => {
+  if (request.url === "/health") {
+    response.end("ready");
+    return;
+  }
   const entry = state.get(request.url?.slice(1));
   if (!entry) {
     response.writeHead(404).end();
@@ -89,6 +93,23 @@ async function freshEverywhere(version, phase) {
 let release = () => {};
 try {
   await new Promise((resolve) => server.listen(8080, "0.0.0.0", resolve));
+  // A ready Redis pod can precede kube-proxy installing its Service routes.
+  await until(
+    () =>
+      redis.ping().then(
+        () => true,
+        () => false,
+      ),
+    "Redis Service reachable",
+  );
+  await until(
+    () =>
+      fetch("http://driver:8080/health", { signal: AbortSignal.timeout(1000) }).then(
+        (response) => response.ok,
+        () => false,
+      ),
+    "origin Service reachable",
+  );
   const unauthorized = await fetch(`${service}/api/e2e/multi-pod`, {
     method: "POST",
     body: JSON.stringify({ tags }),
