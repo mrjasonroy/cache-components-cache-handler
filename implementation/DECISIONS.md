@@ -1047,3 +1047,29 @@ rewrite them for the Next 16 contract. The package now exports only the data cac
   factory) for the Redis-family backends.
 - If shared ISR caching is needed later, it should be a new handler written against the Next 16
   `cacheHandler` contract with its own e2e coverage, not a revival of the old code.
+
+## DEC-16: Page freshness starts at lookup, not render completion
+
+Next creates its incremental cache and page handler per request. Record each key's first `get`
+time before any asynchronous work, and preserve it for every `set` on that request's handler.
+Record hits too: a stale hit can initiate background regeneration. Do not consume the timestamp
+on `set`, because overlapping completions must not acquire a newer timestamp. Reset the map only
+at the request boundary. No process-global pending-render registry or Redis key changes are needed.
+Direct writes without a lookup keep the existing write-time behavior. Build output and data-cache
+entries retain their existing timestamps.
+
+The previous regression coverage checked completed entries: `page-handler.spec.ts` and
+`multi-instance.spec.ts` waited for stable cached values before revalidating; timing tests checked
+expiry or sequential revalidation. They never held an origin snapshot while a peer committed a
+hard invalidation. The Next deploy adapter round-robins two servers but does not coordinate that
+ordering: adding two processes alone does not create a deterministic race test. Its selected
+upstream suites primarily assert framework cache behavior, including data-cache render timestamps,
+not this package's page-handler write timestamp. The new matrix spec explicitly holds a page
+render, commits invalidation on the other process (same process for memory), releases it, and
+asserts freshness on the first subsequent read, without retrying away a stale result.
+
+This is not the entire Next.js test suite: `tests/next-deploy/suites.txt` selects deploy-mode
+suites, Next's deploy manifest filters unsupported cases, and fixtures with their own handlers
+keep those handlers and run one instance. `app-static` is also a known-failure exclusion below
+16.5.0-canary.10 because of the upstream edge-handler build bug. None of those mechanisms
+provides the held-render/peer-invalidation ordering now asserted by this package's matrix.

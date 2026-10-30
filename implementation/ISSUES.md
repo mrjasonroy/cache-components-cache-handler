@@ -299,3 +299,13 @@ restarts (or `closeCache()` drops the runtime). Production is unaffected: the en
 change while a server runs. A change to `withCache`'s `memory` restarts the dev server, since
 `next.config` changed. Possible fix: re-read the budget on `.env` reload in development, which
 would need resizing live stores; not worth it for a dev-only setting.
+
+## ISSUE-11: In-flight page renders survive a hard tag invalidation
+
+**Status:** Resolved in the pending release · **Severity:** High · **Area:** `handlers/redis.ts`
+
+Reproduce: hold an origin response containing v1 while a page renders; change the origin to v2,
+revalidate the page's tag from another process, then release v1. Previously `set()` stamped the
+shell at completion, later than the invalidation, making v1 appear fresh for its cache lifetime.
+The request's earliest lookup now supplies the timestamp. Unit coverage and
+`inflight-invalidation.spec.ts` exercise the ordering; the Redis e2e uses separate Next processes.
