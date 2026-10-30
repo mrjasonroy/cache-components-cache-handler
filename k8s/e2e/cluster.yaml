@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cache-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: cache-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          args: ["--maxmemory-policy", "noeviction"]
+          ports: [{ containerPort: 6379 }]
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: cache-e2e
+spec:
+  selector: { app: redis }
+  ports: [{ port: 6379, targetPort: 6379 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: cache-e2e
+spec:
+  replicas: 3
+  selector:
+    matchLabels: { app: cache-app }
+  template:
+    metadata:
+      labels: { app: cache-app }
+    spec:
+      containers:
+        - name: app
+          image: cache-e2e:pr
+          imagePullPolicy: Never
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef: { fieldPath: metadata.name }
+            - { name: REDIS_URL, value: "redis://redis:6379" }
+            - { name: CACHE_KEY_PREFIX, value: "multi-pod:" }
+            - { name: E2E_ORIGIN_URL, value: "http://driver:8080" }
+            - name: E2E_REVALIDATE_SECRET
+              valueFrom:
+                secretKeyRef: { name: revalidate, key: token }
+          ports: [{ containerPort: 3000 }]
+          readinessProbe:
+            tcpSocket: { port: 3000 }
+            periodSeconds: 1
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits: { memory: "768Mi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: cache-e2e
+spec:
+  selector: { app: cache-app }
+  ports: [{ port: 3000, targetPort: 3000 }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: driver
+  namespace: cache-e2e
+spec:
+  selector: { job-name: driver }
+  ports: [{ port: 8080, targetPort: 8080 }]
