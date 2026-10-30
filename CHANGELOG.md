@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `withCache(config, { useCache: "redis" })` shares plain `"use cache"` entries across instances.
+  The default remains memory; explicit `handlers.default` takes precedence.
+
+### Fixed
+
+- Data-cache reads enforce the exact render-start hard-expiry deadline in memory, Redis and
+  outage fallback, including when rendering finishes between whole seconds.
+
 ## [16.4.3] - 2026-10-26
 
 **This is a major release under a patch number.** The package version follows Next.js, so the work that went into the 16.4.3 release candidates ships as 16.4.3, and every install on `^16.4.2` or `~16.4.2` gets it on its next update. A 16.4.2 setup keeps working on Node 22.3+ (and, for the page handler, Redis 6.2+ with Lua scripting): deprecated APIs still run, log a one-time warning, and are removed in 16.5.

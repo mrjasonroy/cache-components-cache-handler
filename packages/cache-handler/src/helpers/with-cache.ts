@@ -23,6 +23,14 @@ export interface WithCacheOptions {
   pages?: boolean;
 
   /**
+   * Storage for plain `"use cache"` entries. Redis shares values across instances and checks
+   * tags on every read. An explicit `handlers.default` takes precedence; `handlers.remote`
+   * only changes `"use cache: remote"`. Without Redis, the remote handler uses memory.
+   * @default "memory"
+   */
+  useCache?: "memory" | "redis";
+
+  /**
    * Your own handler files instead of the built-in ones. Relative paths resolve against the
    * working directory (`process.cwd()`), not against `next.config`; pass an absolute path when
    * the two can differ.
@@ -73,7 +81,7 @@ export type NextConfigFunction<T extends object> = (
 
 /**
  * Configure the app's cache: pages and route handlers (`cacheHandler`), `"use cache"`
- * (`cacheHandlers.default`: per-instance memory, tag invalidation shared through Redis) and
+ * (`cacheHandlers.default`: memory by default, Redis with `useCache: "redis"`) and
  * `"use cache: remote"` (`cacheHandlers.remote`: Redis), and `cacheMaxMemorySize: 0`.
  * `"use cache: private"` is Next's own and never reaches a handler. Set `REDIS_URL` to share
  * entries and tags across instances; without it everything stays in memory. Works with
@@ -116,7 +124,7 @@ export function withCache<T extends object>(
   return applyCache(nextConfig, options);
 }
 
-const OPTION_KEYS = new Set(["pages", "handlers", "memory"]);
+const OPTION_KEYS = new Set(["pages", "handlers", "memory", "useCache"]);
 
 /**
  * Throw on an option `withCache` does not know, so a leftover from a release candidate (or a typo)
@@ -124,18 +132,22 @@ const OPTION_KEYS = new Set(["pages", "handlers", "memory"]);
  */
 function checkOptionKeys(options: WithCacheOptions): void {
   if (typeof options !== "object" || options === null) {
-    throw new Error("withCache: options must be an object like { pages, handlers, memory }.");
+    throw new Error(
+      "withCache: options must be an object like { pages, handlers, memory, useCache }.",
+    );
   }
   for (const key of Object.keys(options)) {
     if (OPTION_KEYS.has(key)) continue;
-    if (key === "useCache") {
-      throw new Error(
-        'withCache: the useCache option was removed before 16.4.3. Plain "use cache" always stays in each instance\'s memory; write "use cache: remote" for entries that belong in Redis.',
-      );
-    }
     throw new Error(
-      `withCache: unknown option "${key}"; the options are pages, handlers and memory.`,
+      `withCache: unknown option "${key}"; the options are pages, handlers, memory and useCache.`,
     );
+  }
+  if (
+    options.useCache !== undefined &&
+    options.useCache !== "memory" &&
+    options.useCache !== "redis"
+  ) {
+    throw new Error('withCache: useCache must be "memory" or "redis".');
   }
 }
 
@@ -153,7 +165,9 @@ function applyCache<T extends object>(
   }
 
   const remote = handlers.remote ? resolvePath(handlers.remote) : entryPath("remote");
-  const defaultHandler = handlers.default ? resolvePath(handlers.default) : entryPath("default");
+  const defaultHandler = handlers.default
+    ? resolvePath(handlers.default)
+    : entryPath(options.useCache === "redis" ? "remote" : "default");
 
   handOverMemoryOptions(memory, (config as { output?: unknown }).output);
 

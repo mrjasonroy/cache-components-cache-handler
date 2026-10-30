@@ -7,6 +7,18 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## Data entries could outlive hard expiry in memory
+
+**Status:** Resolved · **Area:** `data-cache/stored-entry.ts`
+
+An entry with a two-second expiry whose render finished 250 ms after its start could remain
+servable in memory or outage fallback for another 250 ms: the remaining Redis TTL was rounded
+up and added to write time. Redis reads also accepted the exact expiry instant.
+
+`toDataCacheEntry` now rejects entries at their render-start timestamp plus `expire`, independent
+of storage TTL rounding. `remote-expiry.test.ts` reproduces memory, Redis and outage paths,
+including stale reads before the deadline and misses at and just after it.
+
 ## ISSUE-1: `revalidateTag(tag, "max")` permanently blocks re-caching for that tag
 
 **Status:** ✅ Resolved · **Severity:** High · **Area:** `data-cache/redis.ts` (tag invalidation)

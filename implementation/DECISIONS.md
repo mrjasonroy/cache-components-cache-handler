@@ -7,6 +7,23 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
+## DEC-16: Opt-in Redis storage for plain `"use cache"`
+
+Restore `withCache`'s `useCache: "memory" | "redis"` with `"memory"` as the default. This
+supersedes DEC-13's removal of that option only. Applications can share existing plain cache
+functions without rewriting their directives, and fresh pods reuse values from the same build.
+
+Routing happens at config load: `"redis"` selects the existing remote entry module for
+`cacheHandlers.default`. `handlers.default` wins when explicit; `handlers.remote` affects only
+the remote directive. No new storage protocol or runtime environment option is needed; the
+serialized handler path also survives standalone packaging.
+
+The trade-off is a Redis round trip per read (two when learning previously unknown entry tags)
+versus per-pod values with throttled tag synchronization. Concurrent misses may still render more
+than once; this is shared storage, not distributed locking. Remote stale-while-revalidate semantics,
+build isolation, memory fallback and render-start timestamps remain intact. Exact hard expiry is
+checked on reads so whole-second Redis TTL rounding cannot extend memory or fallback lifetimes.
+
 ## DEC-15: The `next` peer pins the package's Next minor (the release after 16.4.3)
 
 **Why.** The package version follows Next.js (handler 16.4.3 for Next 16.4.3), and the 16.5 line
