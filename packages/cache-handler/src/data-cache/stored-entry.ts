@@ -80,7 +80,10 @@ export function toDataCacheEntry(
   until: number,
   now: number = nowMs(),
 ): DataCacheEntry | undefined {
-  if (now > until || now >= stored.timestamp + MAX_ENTRY_AGE_SECONDS * 1000) return undefined;
+  // Redis TTLs round up to seconds; memory and outage copies must still honor the exact
+  // render-start deadline, including when a render finishes between whole seconds.
+  const expiresAt = stored.timestamp + Math.min(stored.expire, MAX_ENTRY_AGE_SECONDS) * 1000;
+  if (now >= until || now >= expiresAt) return undefined;
   const state = tags.check(stored.tags, stored.timestamp, now);
   if (state === "expired") return undefined;
   return {

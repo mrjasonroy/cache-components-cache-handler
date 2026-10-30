@@ -8,7 +8,7 @@ are cached, and what happens when Redis goes down. Setup is in the
 
 The package maps one to one onto Next's directives: `"use cache"` goes to `cacheHandlers.default`,
 `"use cache: remote"` to `cacheHandlers.remote`, and `"use cache: private"` never reaches a
-handler. There are no other modes. `withCache` merges these settings into the config you pass,
+handler. By default, `withCache` merges these settings into the config you pass,
 whichever flag (`cacheComponents`, or Next's deprecated `experimental.useCache`) turned
 `"use cache"` on:
 
@@ -42,6 +42,24 @@ What you get without configuring anything:
   served from the build output in `.next` until their revalidate window runs out
   ([details](#pages-and-route-handlers)).
 
+### Sharing plain `"use cache"` values
+
+`withCache(nextConfig, { useCache: "redis" })` points `cacheHandlers.default` at the built-in
+remote handler. Both directives then share values in Redis within the same build, including on
+fresh instances. An explicit `handlers.default` wins; `handlers.remote` remains independent.
+The resolved module path is part of Next's config, so it also works in standalone output.
+
+The default is still `"memory"`. Redis storage costs a Redis round trip on every cache read
+(and another when this process first learns an entry's tags), rather than a throttled tag sync
+for per-instance values. It avoids per-instance value divergence after regeneration; it does
+not provide a distributed render lock for simultaneous misses. The remote handler's normal
+stale-while-revalidate policy applies: `revalidateTag(tag, "max")` permits a stale read,
+while `{ expire: 0 }` makes the next read fresh once the invalidation is committed.
+
+Entries retain Next's render-start timestamp. An invalidation during a render therefore expires
+its eventual write. Memory and outage fallback enforce the exact hard-expiry deadline even
+though Redis TTLs round up to whole seconds. Build-time, no-Redis and outage behavior is unchanged.
+
 ### Skew protection and the deployment ID
 
 When an app sets a deployment ID for skew protection (`deploymentId` in `next.config`, or the
@@ -66,7 +84,7 @@ scope, finds nothing, and still succeeds.
 
 ## Distributed tag coordination for `"use cache"`
 
-Plain `"use cache"` keeps its values in each instance's memory, which is what Next intends for
+By default, plain `"use cache"` keeps its values in each instance's memory, which is what Next intends for
 it. Invalidation is still shared, following Next's
 [Distributed Tag Coordination](https://nextjs.org/docs/app/api-reference/config/next-config-js/cacheHandlers#distributed-tag-coordination)
 pattern:

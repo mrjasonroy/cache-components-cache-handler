@@ -46,12 +46,9 @@ describe("withCache", () => {
     expect(config.cacheMaxMemorySize).toBe(0);
   });
 
-  test("throws on an unknown option; useCache names its replacement", () => {
-    const removed = { useCache: "redis" } as unknown as Parameters<typeof withCache>[1];
-    expect(() => withCache({}, removed)).toThrow(
-      /useCache option was removed.*"use cache: remote"/,
-    );
-    expect(() => withCache(() => ({}), removed)).toThrow(/useCache option was removed/);
+  test("accepts Redis for plain use cache and rejects unknown options", () => {
+    const config = withCache({}, { useCache: "redis" });
+    expect(basename(config.cacheHandlers.default)).toBe("remote.js");
     const typo = { page: false } as unknown as Parameters<typeof withCache>[1];
     expect(() => withCache({}, typo)).toThrow(/unknown option "page"/);
     expect(() => withCache({}, { pages: true, handlers: {}, memory: { maxMiB: 8 } })).not.toThrow();
