@@ -221,7 +221,7 @@ pod logs/events, and Redis tag hash/index dumps, including on expected negative-
 To reproduce with Docker, kind, kubectl, Node 22 and OpenSSL installed:
 
 ```bash
-docker build -f k8s/e2e/Dockerfile --build-context handler=. \
+docker build -f k8s/e2e/Dockerfile \
   --build-arg USE_CACHE=redis -t cache-e2e:pr .
 kind create cluster --name cache-e2e
 kind load docker-image cache-e2e:pr --name cache-e2e

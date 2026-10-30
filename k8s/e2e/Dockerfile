@@ -5,7 +5,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/cache-handler/package.json packages/cache-handler/package.json
 COPY apps/e2e-test-app/package.json apps/e2e-test-app/package.json
 RUN pnpm install --frozen-lockfile
-COPY --from=handler packages/cache-handler packages/cache-handler
+COPY packages/cache-handler packages/cache-handler
 COPY apps/e2e-test-app apps/e2e-test-app
 # Negative control lives only in this throwaway image; never changes the checkout.
 ARG REVERT_TIMESTAMP=0
