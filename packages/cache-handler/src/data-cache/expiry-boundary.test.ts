@@ -18,9 +18,7 @@ describe("remote data entry render-start expiry", () => {
   });
 
   describe.each(["memory", "redis", "outage"] as const)("%s", (lane) => {
-    // Memory and outage fallback currently serve past expire after rounding the remaining TTL up.
-    const check = lane === "redis" ? test : test.fails;
-    check("never serves past expire when rendering finishes between whole seconds", async () => {
+    test("never serves past expire when rendering finishes between whole seconds", async () => {
       const redis = new FakeRedis();
       const handler = createRemoteCacheHandler(
         lane === "memory" ? {} : { client: asClient(redis) },
