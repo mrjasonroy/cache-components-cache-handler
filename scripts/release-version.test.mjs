@@ -8,6 +8,7 @@ import {
   peerMismatch,
   peerRange,
   pickTarget,
+  preReleaseOfReleased,
   releaseChangelog,
   usedVersions,
 } from "./release-version.mjs";
@@ -162,4 +163,18 @@ test("merging into the last section of the file keeps one trailing newline", () 
     releaseChangelog(before, "16.4.4-rc.1", "2026-11-03"),
     "# Changelog\n\n## [16.4.4]\n\nIntro.\n\n- First.\n\n- Second.\n",
   );
+});
+
+test("a pre-release of a published version is refused", () => {
+  const used = usedVersions({ "16.4.3": "2026-10-27T00:00:00.000Z", "16.4.3-rc.4": "x" });
+  assert.match(preReleaseOfReleased("16.4.3-rc.5", used), /16\.4\.4-rc\.5/);
+  assert.equal(preReleaseOfReleased("16.4.4-rc.0", used), null);
+  assert.equal(preReleaseOfReleased("16.4.3", used), null);
+  assert.equal(preReleaseOfReleased("16.4.3-rc.4", usedVersions({ "16.4.3-rc.3": "x" })), null);
+});
+
+test("releaseChangelog refuses to add a pre-release to a dated section", () => {
+  const text = "# Changelog\n\n## [Unreleased]\n\n- New\n\n## [16.4.3] - 2026-10-26\n\n- Old\n";
+  assert.throws(() => releaseChangelog(text, "16.4.3-rc.5", "2026-11-03"), /already released/);
+  assert.match(releaseChangelog(text, "16.4.4-rc.0", "2026-11-03"), /## \[16\.4\.4\]\n\n- New/);
 });
