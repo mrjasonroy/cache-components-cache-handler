@@ -129,12 +129,30 @@ export const cacheOptions = {
 ```
 
 ```js
-// cache/remote.mjs (and the same in cache/page.mjs and cache/default.mjs)
+// cache/page.mjs
+import { createPageCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { cacheOptions } from "./options.mjs";
+
+export default createPageCacheHandler(cacheOptions);
+```
+
+```js
+// cache/remote.mjs
 import { createRemoteCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
 import { cacheOptions } from "./options.mjs";
 
 export default createRemoteCacheHandler(cacheOptions);
 ```
+
+```js
+// cache/default.mjs
+import { createLocalCacheHandler } from "@mrjasonroy/cache-components-cache-handler";
+import { cacheOptions } from "./options.mjs";
+
+export default createLocalCacheHandler(cacheOptions);
+```
+
+Then pass the three files to `withCache` as in [Custom handlers](./custom-handlers.md).
 
 #### IAM on your own client
 

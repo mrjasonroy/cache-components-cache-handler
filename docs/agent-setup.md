@@ -35,18 +35,21 @@ Docs: https://github.com/mrjasonroy/cache-components-cache-handler/tree/v<instal
 
 4. Work out the backing store from the app's env files and deployment config (.env*,
    Dockerfile, docker-compose, Kubernetes manifests, Terraform, the hosting platform's settings).
-   Follow the matching path and do nothing else:
-   - Nothing configured, or a single instance: no Redis. Everything stays in memory. Done.
-   - REDIS_URL or VALKEY_URL: nothing to add. Done.
-   - ELASTICACHE_ENDPOINT with ELASTICACHE_AUTH_TOKEN (Serverless or cluster mode disabled):
-     nothing to add. Done.
-   - ElastiCache with IAM (ELASTICACHE_IAM_USER) on Serverless or cluster mode disabled:
-     install @smithy/signature-v4, @aws-crypto/sha256-js and @aws-sdk/credential-provider-node,
-     and make sure ELASTICACHE_CACHE_NAME and a region (ELASTICACHE_REGION or AWS_REGION) are
-     set. See "IAM authentication" in docs/redis.md.
-   - ElastiCache with cluster mode enabled (a `clustercfg.` endpoint), Redis Cluster or
-     Sentinel: write custom handler files with one shared ioredis client, as in
-     docs/custom-handlers.md; for IAM there, follow "IAM on your own client" in docs/redis.md.
+   Answer these in order and take the first path that matches:
+   a. Is a Redis, Valkey or ElastiCache configured at all (REDIS_URL, VALKEY_URL or
+      ELASTICACHE_ENDPOINT), and not turned off with CACHE_REDIS=off? If not: no Redis.
+      Everything stays in memory. Done.
+   b. Is it a cluster: ElastiCache with cluster mode enabled (a `clustercfg.` endpoint), a Redis
+      Cluster, or Sentinel? Then write custom handler files with one shared ioredis client, as in
+      docs/custom-handlers.md. For IAM there, follow "IAM on your own client" in docs/redis.md.
+      Done.
+   c. Is ELASTICACHE_IAM_USER set (IAM, on Serverless or cluster mode disabled, with either
+      ELASTICACHE_ENDPOINT or a rediss:// REDIS_URL)? Then install @smithy/signature-v4,
+      @aws-crypto/sha256-js and @aws-sdk/credential-provider-node (the package throws without
+      them), and make sure ELASTICACHE_CACHE_NAME and a region (ELASTICACHE_REGION or AWS_REGION)
+      are set. See "IAM authentication" in docs/redis.md. Done.
+   d. Otherwise (REDIS_URL, VALKEY_URL, or ELASTICACHE_ENDPOINT with ELASTICACHE_AUTH_TOKEN):
+      nothing to add. Done.
    If it is unclear which applies, ask me instead of guessing.
 
 5. Do not use the deprecated API. These still work in 16.4.x but are removed in 16.5:
@@ -59,14 +62,18 @@ Docs: https://github.com/mrjasonroy/cache-components-cache-handler/tree/v<instal
    createPageCacheHandler, createRemoteCacheHandler, createLocalCacheHandler,
    attachElastiCacheIamAuth, flushCache, closeCache and setCacheLogger for custom setups.
 
-6. Verify.
-   - Run `next build`. It never connects to Redis, so it needs no Redis. Turning on
-     cacheComponents can surface errors in routes that read request data outside a Suspense
-     boundary. Report those to me with the routes named; do not rewrite pages to silence them.
-   - If a Redis is reachable, run `REDIS_URL=<url> CACHE_DEBUG=1 next start`, load a cached page
-     twice and check the log shows `[PageCache]: set ... redis` and then
-     `[PageCache]: get ... hit` (a prerendered page's first read logs `build output`). Check
-     `redis-cli --scan --pattern 'nextjs:*'` lists keys.
+6. Verify. Run Next through the app's own scripts or the package manager (`npm run build`, or
+   `npx next build` / `pnpm exec next build`); a bare `next` is usually not on the PATH.
+   - Build. It never connects to Redis, so it needs no Redis. Turning on cacheComponents can
+     surface errors in routes that read request data outside a Suspense boundary. Report those
+     to me with the routes named; do not rewrite pages to silence them.
+   - If the configured Redis is reachable from here, start the app with its real connection
+     settings and `CACHE_DEBUG=1`, load a cached page twice and check the log shows
+     `[PageCache]: set ... redis` and then `[PageCache]: get ... hit` (a prerendered page's first
+     read logs `build output`). That log is the check. Only if you can also reach that same
+     Redis with redis-cli, using its host, port, TLS and auth (`redis-cli -u <url>`, adding
+     `--tls` for rediss://), confirm `--scan --pattern '<CACHE_KEY_PREFIX>*'` (default
+     `nextjs:*`) lists keys. Skip redis-cli for IAM and cluster setups.
 
 7. Tell me what you changed: the files, the package and version installed, the path you chose
    in step 4 and why, and anything you could not verify.
