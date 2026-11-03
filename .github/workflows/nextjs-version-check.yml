@@ -10,7 +10,7 @@ jobs:
   # Fails (and emails the owner) when a tagged release never reached npm, so a
   # broken publish chain can't go unnoticed behind an already-merged PR again.
   npm-publish-drift:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,7 +31,7 @@ jobs:
           fi
 
   check-nextjs-version:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       pull-requests: write

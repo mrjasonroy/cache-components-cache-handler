@@ -8,7 +8,7 @@ on:
 
 jobs:
   test-canary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -148,7 +148,7 @@ jobs:
           echo "✅ All tests passed against Next.js ${{ matrix.nextjs-version }}"
 
   create-issue-on-canary-failure:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test-canary
     if: failure() && github.event_name == 'schedule'
     permissions:

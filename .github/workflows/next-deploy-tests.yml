@@ -59,7 +59,7 @@ jobs:
   # dependency, which the Next update loops bump), unless a dispatch names another tag.
   next-ref:
     name: Resolve the next.js tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       ref: ${{ steps.ref.outputs.ref }}
     steps:
@@ -79,7 +79,7 @@ jobs:
   build-nextjs:
     name: Build next.js ${{ needs.next-ref.outputs.ref }}
     needs: next-ref
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       NEXT_REF: ${{ needs.next-ref.outputs.ref }}
     timeout-minutes: 60
@@ -118,7 +118,7 @@ jobs:
 
   prepare-branch:
     name: Pack this branch's package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       skip_reason: ${{ steps.gate.outputs.skip_reason }}
     steps:
@@ -169,7 +169,7 @@ jobs:
   suites:
     name: ${{ matrix.variant }} (shard ${{ matrix.shard }}/4)
     needs: [next-ref, build-nextjs, prepare-branch]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 75
     strategy:
       fail-fast: false
@@ -275,7 +275,7 @@ jobs:
     name: Results and regression gate
     needs: [next-ref, suites]
     if: always() && needs.suites.result != 'skipped'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       NEXT_REF: ${{ needs.next-ref.outputs.ref }}
     steps:

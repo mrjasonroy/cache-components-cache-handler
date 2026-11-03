@@ -19,7 +19,7 @@ on:
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Note: For full automation, we've removed the environment approval requirement
     # If you want manual approval, uncomment the next line and configure the "publish" environment in GitHub
     # environment: publish
