@@ -75,6 +75,12 @@ Docs: https://github.com/mrjasonroy/cache-components-cache-handler/tree/v<instal
      `--tls` for rediss://), confirm `--scan --pattern '<CACHE_KEY_PREFIX>*'` (default
      `nextjs:*`) lists keys. Skip redis-cli for IAM and cluster setups.
 
+   - With cacheComponents on, a route handler that reads no request data is prerendered and
+     never runs again, so a health, readiness or metrics route goes stale. Look for those routes
+     (for example `/api/health`, `/api/actuator/*`, `/api/metrics`). If one has no
+     `await connection()` (from next/server) or other request data, tell me. Do not change probe
+     paths or deployment config yourself. See "Health checks" in docs/operations.md.
+
 7. Tell me what you changed: the files, the package and version installed, the path you chose
    in step 4 and why, and anything you could not verify.
 ````
