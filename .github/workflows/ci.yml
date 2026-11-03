@@ -8,7 +8,7 @@ on:
 
 jobs:
   lint-and-typecheck:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +48,7 @@ jobs:
         run: node --test scripts/sync-package-readme.test.mjs
 
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-typecheck
     steps:
       - uses: actions/checkout@v4
@@ -72,7 +72,7 @@ jobs:
         run: pnpm test
 
   redis-integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: lint-and-typecheck
     # The package's real-Redis suite (src/integration/*.redis.test.ts). It stops, pauses and
     # restarts the server itself, so Redis is a named `docker run` container, not a service.
@@ -125,7 +125,7 @@ jobs:
         run: docker logs "$CACHE_TEST_REDIS_CONTAINER" || true
 
   e2e-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: unit-tests
     # Every lane is a production build (`next build` + `next start`) wired with `withCache`.
     # The Redis lanes run Redis as a named container (not a service) so the outage spec can stop
@@ -257,7 +257,7 @@ jobs:
           if-no-files-found: ignore
 
   e2e-elasticache:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: unit-tests
     # Exercises the ElastiCache handler against the two things that actually differ from a
     # plain Redis container on a real cluster: in-transit TLS and an auth token. No AWS is
@@ -357,7 +357,7 @@ jobs:
           if-no-files-found: ignore
 
   test-summary:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [lint-and-typecheck, unit-tests, e2e-tests, e2e-elasticache, redis-integration]
     if: always()
     steps:
