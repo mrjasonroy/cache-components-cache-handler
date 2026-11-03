@@ -1,7 +1,7 @@
 # Operations
 
-Flushing the cache, closing it in tests and scripts, how much memory it holds, and sending its
-logs to your own logger.
+Flushing the cache, closing it in tests and scripts, how much memory it holds, health checks, and
+sending its logs to your own logger.
 What sits in Redis, and how to size it, is in [Redis Configuration](./redis.md#whats-in-redis).
 
 ## Flushing the cache
@@ -145,6 +145,47 @@ it still competes with the app for the same heap: measure your app's own baselin
 memory after warm-up with the cache empty) and check that it plus the budget (per runtime) leaves
 the heap room to spare. If it does not, lower `heapPercent` or raise the limit.
 
+## Health checks
+
+With `cacheComponents`, a route handler that reads no request data is prerendered at build time.
+A health check like this one never runs on a request:
+
+```ts
+// app/api/health/route.ts: frozen at build time
+export function GET() {
+  return Response.json({ status: "UP" });
+}
+```
+
+Next writes the response into the build output, and the page handler serves it from there
+(`CACHE_DEBUG=1` logs `build output`). Every call answers `x-nextjs-cache: HIT` with
+`cache-control: s-maxage=31536000`. A pass only shows that the port is open. It says nothing about
+whether the app can run a request, so a pod reports ready before it has warmed up. It never fails
+either. A metrics or uptime route has the same problem: it returns the values from the build.
+
+Make probe and metrics routes dynamic with `await connection()`, and send `no-store`:
+
+```ts
+// app/api/health/live/route.ts
+import { connection } from "next/server";
+
+export async function GET() {
+  await connection();
+  return Response.json({ status: "UP" }, { headers: { "Cache-Control": "no-store" } });
+}
+```
+
+Do not reach for `export const dynamic = "force-dynamic"`: Next's
+[Cache Components migration guide](https://nextjs.org/docs/app/guides/migrating-to-cache-components)
+says to remove it, and a request-time API such as `connection()` is what makes a route dynamic. To check a route is live, look for no `x-nextjs-cache` header
+on its response, and check that it is missing from `.next/prerender-manifest.json` after
+`next build`.
+
+Keep Redis out of liveness and readiness. A request never fails because of the cache: while Redis
+is down, the handlers serve from each instance's memory. A probe that fails on Redis would turn a
+Redis blip into a full outage, because every pod leaves the load balancer at once. If you want a
+Redis check, put it on a separate endpoint for people and monitors, not for probes.
+
 ## Logging
 
 Warnings, errors and `CACHE_DEBUG` lines go to the console by default. To send them to your own
@@ -182,15 +223,20 @@ through the logger of the handler that opened them, so give every handler the sa
 `setCacheLogger`.
 
 The package never logs a Redis URL or the connection options, which can hold a password. What it
-logs is scrubbed on the way out: an error (and each error in its `cause` chain) keeps only its
-name, message, stack, `code`, `errno`, `syscall`, `address` and `port`, so the failed command
-ioredis attaches to an error (a rejected `AUTH` carries the password it tried) is dropped; objects
-lose `command`, `password` and similar keys; other values (a `Buffer`, a class instance) are logged
-as a placeholder such as `[Buffer 12 bytes]`; and URLs in any text lose their user information. With ElastiCache IAM the token is never logged,
-and the signature, credential and session token of a presigned AWS query
-(`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`) are removed from any text. A
-refused IAM token (`WRONGPASS`, `NOAUTH`, `NOPERM`) or one that cannot be made is logged as an
-error naming IAM and what to check.
+logs is scrubbed on the way out:
+
+- An error (and each error in its `cause` chain) keeps only its name, message, stack, `code`,
+  `errno`, `syscall`, `address` and `port`. So the failed command ioredis attaches to an error
+  is dropped (a rejected `AUTH` carries the password it tried).
+- Objects lose `command`, `password` and similar keys.
+- Other values (a `Buffer`, a class instance) are logged as a placeholder such as
+  `[Buffer 12 bytes]`.
+- URLs in any text lose their user information.
+- With ElastiCache IAM the token is never logged, and the signature, credential and session token
+  of a presigned AWS query (`X-Amz-Signature`, `X-Amz-Credential`, `X-Amz-Security-Token`) are
+  removed from any text. A refused IAM token (`WRONGPASS`, `NOAUTH`, `NOPERM`) or one that cannot
+  be made is logged as an error naming IAM and what to check.
+
 Other free text in a message is not scrubbed: a credential an error message spells out some other
 way reaches the log. A logger that throws never fails a cache call: the line goes to the console
 instead, with one note that the logger threw.

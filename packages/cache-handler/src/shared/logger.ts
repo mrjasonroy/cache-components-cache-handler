@@ -64,7 +64,7 @@ function getState(): LoggerState {
  * import { logger } from "./lib/logger";
  *
  * export function register() {
- *   setCacheLogger(logger);
+ *   if (process.env.NEXT_RUNTIME === "nodejs") setCacheLogger(logger);
  * }
  * ```
  */
