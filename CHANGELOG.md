@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file. This project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [16.4.5] - 2026-11-03
 
 Two cache fixes, one opt-in option, and a stricter install check. Nothing to change in your
 config. Release candidates 16.4.3-rc.5 and rc.6 carried these changes; they sort below 16.4.3 on
