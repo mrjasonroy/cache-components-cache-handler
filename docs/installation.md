@@ -11,15 +11,17 @@
 ## Install
 
 ```bash
-npm install --save-exact @mrjasonroy/cache-components-cache-handler
+# Next 16.4.x: the newest 16.4 release, pinned exact
+npm install --save-exact @mrjasonroy/cache-components-cache-handler@16.4
 ```
 
-The package version follows Next.js. Pin it to the exact release for your Next.js version
-(`--save-exact`; Next 16.4.3 → `16.4.3`) and upgrade the two together. A range such as `^16.4.3`
-also accepts the 16.5 releases, which follow Next.js 16.5 and remove the APIs deprecated in
-16.4.3. From the next release, the `next` peer dependency is `~<major>.<minor>.0` of the
-package's own version (for example `~16.4.0` for 16.4.x), so npm refuses a handler whose minor
-does not match your Next.js with an `ERESOLVE` error, and pnpm and Yarn warn.
+The package version follows Next.js: use the release with the same major.minor as your Next.js,
+pin it exact, and upgrade the two together. A range such as `^16.4.3` would also accept the 16.5
+releases, which follow Next.js 16.5 and remove the APIs deprecated in 16.4.3.
+
+From the release after 16.4.3, the `next` peer dependency is `~<major>.<minor>.0` of the
+package's own version (`~16.4.0` for 16.4.x). npm then refuses a handler whose minor does not
+match your Next.js with an `ERESOLVE` error, and pnpm and Yarn warn.
 
 `ioredis` is an optional dependency, so it is installed with the package unless your package
 manager skips optional dependencies (`npm install --omit=optional`, `pnpm install --no-optional`,
@@ -38,17 +40,22 @@ export default withCache({
 });
 ```
 
-That one call sets `cacheHandler` (pages, route handlers, cached `fetch`), `cacheHandlers.default`
-(`"use cache"`: each instance's memory, tag invalidation shared through Redis),
-`cacheHandlers.remote` (`"use cache: remote"`: Redis) and `cacheMaxMemorySize: 0`.
-`"use cache: private"` is Next's own and needs nothing. Don't
-set any of those yourself: `withCache` throws if the config already has `cacheHandlers`, or
-`cacheHandler` unless you pass `pages: false`. The [What goes where](./how-it-works.md#what-goes-where) table says what each one does.
+That one call sets:
+
+- `cacheHandler`: pages, route handlers and cached `fetch`, in Redis.
+- `cacheHandlers.default`: `"use cache"`, in each instance's memory, with tag invalidation shared
+  through Redis.
+- `cacheHandlers.remote`: `"use cache: remote"`, in Redis.
+- `cacheMaxMemorySize: 0`.
+
+`"use cache: private"` is Next's own and needs nothing. Don't set any of those yourself:
+`withCache` throws if the config already has `cacheHandlers`, or `cacheHandler` unless you pass
+`pages: false`. The [What goes where](./how-it-works.md#what-goes-where) table has more.
 
 `nextConfig` can also be a config function, `(phase, { defaultConfig }) => config`, sync or
 async. `withCache` then returns an async function that applies the same settings to its result.
-The options (`pages`, `handlers`, `memory`) are in the [README](../README.md#withcachenextconfig-options)
-and the [API reference](./api-reference.md#withcachenextconfig-options).
+The options (`pages`, `handlers`, `memory`) are in the
+[API reference](./api-reference.md#withcachenextconfig-options).
 
 The handler files ship inside the package, so there are no handler files to write. For your own
 client or timeouts, see [Custom handlers](./custom-handlers.md).
@@ -82,12 +89,13 @@ ELASTICACHE_AUTH_TOKEN=...
 # ELASTICACHE_TLS=false   (TLS is on by default)
 ```
 
-For IAM authentication instead of an auth token, set `ELASTICACHE_IAM_USER`,
-`ELASTICACHE_CACHE_NAME` and `ELASTICACHE_REGION` (see
-[IAM authentication](./redis.md#iam-authentication)).
+This covers Serverless and cluster-mode-disabled caches (use the primary endpoint). For IAM
+instead of an auth token, set `ELASTICACHE_IAM_USER`, `ELASTICACHE_CACHE_NAME` and
+`ELASTICACHE_REGION`, and install the AWS signing packages
+([IAM authentication](./redis.md#iam-authentication)). Cluster-mode-enabled ElastiCache needs
+your own `Cluster` ([Redis Cluster](./redis.md#redis-cluster)).
 
-A URL takes precedence over the endpoint when both are set. For cluster-mode-enabled ElastiCache,
-see [Redis Cluster](./redis.md#redis-cluster).
+A URL takes precedence over the endpoint when both are set.
 
 ## Environment variables
 
@@ -132,6 +140,8 @@ If a dev `.env` file carries `REDIS_URL`, the dev server will use Redis; remove 
    ```
 
 2. Load a page twice. The log shows `[PageCache]: set ... redis`, then `[PageCache]: get ... hit`.
+   A prerendered page's first read logs `build output` instead: it is served from `.next` and
+   copied to Redis.
 3. Look at the keys:
 
    ```bash

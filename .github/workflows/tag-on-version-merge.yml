@@ -14,7 +14,7 @@ jobs:
   create-tag:
     # Trigger on version-bump/, nextjs-, or catch-up- branches
     if: github.event.pull_request.merged == true && (startsWith(github.event.pull_request.head.ref, 'version-bump/') || startsWith(github.event.pull_request.head.ref, 'nextjs-') || startsWith(github.event.pull_request.head.ref, 'catch-up-'))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository

@@ -90,6 +90,21 @@ export function pickTarget(next, current, used) {
   return target;
 }
 
+/**
+ * An error message when `version` is a pre-release of a version npm has already seen, else
+ * `null`. 16.4.3-rc.5 after 16.4.3 sorts below 16.4.3, so `latest` and `^16.4.3` never get it,
+ * and its release notes would land in the published 16.4.3 section.
+ */
+export function preReleaseOfReleased(version, used) {
+  const { major, minor, patch, pre } = parseVersion(version);
+  const base = `${major}.${minor}.${patch}`;
+  if (!pre.length || !used.has(base)) return null;
+  return (
+    `${version} is a pre-release of ${base}, which is already published: it sorts below ${base}, ` +
+    `so no install on latest gets it. Use a pre-release of the next patch (${major}.${minor}.${patch + 1}-${pre.join(".")}).`
+  );
+}
+
 /** An error message when `pkg`'s major.minor is ahead of Next's `next`, else `null`. */
 export function aheadOfNext(pkg, next) {
   const p = parseVersion(pkg);
@@ -163,6 +178,11 @@ export function releaseChangelog(text, version, date) {
     const body = out.slice(bodyStart, bodyEnd);
     const rest = out.slice(0, start) + out.slice(bodyEnd);
     const existing = existingRe.exec(rest);
+    if (existing && pre.length && /\d{4}-\d{2}-\d{2}/.test(existing[1]) && body.trim()) {
+      throw new Error(
+        `CHANGELOG.md: ## [${base}] is already released (dated); ${version} must not add to it`,
+      );
+    }
     if (existing && !body.trim()) {
       out = rest;
     } else if (existing) {
@@ -206,6 +226,8 @@ function main(argv) {
     if (peer) throw new Error(peer);
     if (arg === "--unused") {
       const used = usedVersions(JSON.parse(npmView(pkg.name, "time", "--json")));
+      const stale = preReleaseOfReleased(pkg.version, used);
+      if (stale) throw new Error(stale);
       if (used.has(pkg.version)) {
         const where = `\`npm view ${pkg.name} time\`, unpublished versions included`;
         throw new Error(

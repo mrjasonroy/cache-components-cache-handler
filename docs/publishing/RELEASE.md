@@ -19,6 +19,10 @@ The package's major.minor follows Next.js; the patch number is ours.
 - **An RC is graduated by hand.** While the package is on a pre-release (e.g. `16.4.3-rc.0` on
   staging), the loop bumps nothing, so it can never publish that untested code to `latest` by
   itself. Bump to the final version once the RC has been proven.
+- **An RC is for the next unreleased version.** Once 16.4.3 is published, the next RC is
+  `16.4.4-rc.0`, never `16.4.3-rc.5`: semver sorts that below 16.4.3, so `latest` and `^16.4.3`
+  installs never get it, and its notes would land in the published 16.4.3 section.
+  `release-version.mjs check --unused` (every bump and tag) and `sync` refuse it.
 - **The handler is pinned to the app's Next.js minor.** The `next` peer dependency is
   `~<major>.<minor>.0` for the package's major.minor (an RC counts by its base version), so npm
   refuses to pair handler 16.5.x with Next 16.4 (`ERESOLVE`). It is `~X.Y.0`, not an exact

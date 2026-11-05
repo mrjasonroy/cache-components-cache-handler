@@ -21,7 +21,7 @@ jobs:
   stale-sweep:
     # Plain shell, no AI: weekly @-mention for PRs stuck on the maintainer, and
     # a gentle check-in on PRs stuck on the contributor.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
