@@ -109,7 +109,8 @@ for (const lane of ["memory", "redis"]) {
     test.each(["full", "postponed"])(
       "%s build output cannot resurrect after an invalidation",
       async (shape) => {
-        const build = writeBuildOutput();
+        // Built an hour before the workers' fixed clock, not the real one.
+        const build = writeBuildOutput({ ageMs: Date.now() - epoch + 60 * 60 * 1000 });
         buildDirs.push(dirname(build.serverDistDir));
         const key = shape === "full" ? BLOG : POSTS_FALLBACK;
         const context = shape === "full" ? appPageCtx : fallbackCtx;
@@ -324,7 +325,11 @@ for (const lane of ["memory", "redis"]) {
     );
     if (lane === "redis") {
       // Redis page TTL starts at write completion, so a slow render extends the hard lifetime.
-      test.fails("page hard expiry includes time spent rendering (real clocks)", async () => {
+      // The setup and its positive checks run as an ordinary test; only the known bug is
+      // asserted under test.fails, against the stored TTL rather than a timed read.
+      let renderMs: number | undefined;
+      let storedTtlMs: number | undefined;
+      test("page hard expiry setup: a slow render is stored and readable", async () => {
         const worker = await start(lane, { realtime: true });
         const begun = await worker.call({
           op: "begin",
@@ -337,26 +342,20 @@ for (const lane of ["memory", "redis"]) {
         });
         await new Promise((resolve) => setTimeout(resolve, 1200));
         await worker.call({ op: "finish", request: "real-life" });
-        expect(
-          (
-            await worker.call({
-              op: "read",
-              kind: "page",
-              key: "real-life",
-              request: "before-expiry",
-            })
-          )?.value,
-        ).toBe("old");
-        const deadline = (begun?.timestamp ?? 0) + 2100;
-        await new Promise((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
-        expect(
-          await worker.call({
-            op: "read",
-            kind: "page",
-            key: "real-life",
-            request: "after-expiry",
-          }),
-        ).toBeNull();
+        renderMs = Date.now() - (begun?.timestamp ?? 0);
+        const read = { op: "read", kind: "page", key: "real-life", request: "before-expiry" };
+        expect((await worker.call(read))?.value).toBe("old");
+        const ttls = await Promise.all(
+          (await raw?.keys(`${prefix}*`))?.map((key) => raw?.pttl(key)) ?? [],
+        );
+        const expiring = ttls.filter((ttl): ttl is number => (ttl ?? 0) > 0);
+        expect(expiring.length).toBeGreaterThan(0);
+        storedTtlMs = Math.max(...expiring);
+      });
+      // If the setup test fails, it fails the suite on its own.
+      test.fails("page hard expiry includes time spent rendering (real clocks)", () => {
+        // 300ms covers the gap between finish and the PTTL read.
+        expect(storedTtlMs).toBeLessThanOrEqual(2000 - (renderMs ?? 0) + 300);
       });
     }
   });

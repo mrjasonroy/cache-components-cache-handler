@@ -7,19 +7,25 @@ const packageDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export function compileConcurrencyWorker(): { directory: string; cleanup: () => void } {
   const directory = mkdtempSync(join(packageDir, "node_modules", ".concurrency-"));
-  execFileSync(join(packageDir, "node_modules", ".bin", "tsc"), [
-    "-p",
-    join(packageDir, "tsconfig.json"),
-    "--outDir",
-    directory,
-    "--declaration",
-    "false",
-    "--declarationMap",
-    "false",
-    "--sourceMap",
-    "false",
-  ]);
-  return { directory, cleanup: () => rmSync(directory, { recursive: true, force: true }) };
+  const cleanup = () => rmSync(directory, { recursive: true, force: true });
+  try {
+    execFileSync(join(packageDir, "node_modules", ".bin", "tsc"), [
+      "-p",
+      join(packageDir, "tsconfig.json"),
+      "--outDir",
+      directory,
+      "--declaration",
+      "false",
+      "--declarationMap",
+      "false",
+      "--sourceMap",
+      "false",
+    ]);
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+  return { directory, cleanup };
 }
 
 export interface Reply {
