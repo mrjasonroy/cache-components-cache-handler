@@ -7,7 +7,7 @@
 > or "the 16.5 path" is the legacy `createCacheHandler` data stack and the `redis: RedisOptions`
 > form. The headings of DEC-1 and DEC-2 keep the numbers those releases had.
 
-## DEC-17: CI runs on `ubuntu-24.04`, not `ubuntu-latest`
+## DEC-18: CI runs on `ubuntu-24.04`, not `ubuntu-latest`
 
 On 31 Oct 2026 `ubuntu-latest` moved to Ubuntu 26.04, and the locked Playwright (1.56.1) refuses
 to install Chromium there (`Playwright does not support chromium on ubuntu26.04-x64`). The daily
@@ -16,7 +16,7 @@ no version bump. Every job now names `ubuntu-24.04`, so a runner image change ca
 the release loop unannounced. Move to a newer image deliberately, with a Playwright that supports
 it, in one PR that CI proves.
 
-## DEC-16: Opt-in Redis storage for plain `"use cache"`
+## DEC-17: Opt-in Redis storage for plain `"use cache"`
 
 Restore `withCache`'s `useCache: "memory" | "redis"` with `"memory"` as the default. This
 supersedes DEC-13's removal of that option only. Applications can share existing plain cache

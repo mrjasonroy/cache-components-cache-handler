@@ -263,3 +263,25 @@ After the workflow has run, the repository owner should add these exact status c
 Select GitHub Actions as their source. Do not make the negative-control failure itself a required
 failed check: its job succeeds only when it observes the specific expected regression. Workflow
 changes do not change branch protection automatically.
+
+### Isolated-process invalidation tests
+
+The concurrency suite forks real Node processes with separate cache runtimes and controls render
+completion through IPC. Memory runs deliver invalidations to each process explicitly; Redis runs
+write the invalidation once and require peer reads to observe it. The suite covers full and postponed
+page shells, build output, local and remote data, request timestamps, implicit path tags, delayed
+invalidation and lifetime boundaries. These are handler-contract tests, not browser tests.
+
+```bash
+CACHE_TEST_REDIS_URL=redis://localhost:6390 \
+  pnpm --filter @mrjasonroy/cache-components-cache-handler exec vitest run \
+  --no-file-parallelism --maxWorkers=1 \
+  src/integration/concurrency.redis.test.ts src/data-cache/expiry-boundary.test.ts
+```
+
+Without `CACHE_TEST_REDIS_URL`, only the memory lane runs. The existing Redis integration CI matrix
+runs both lanes. Six model tests exercise 180 deterministic seeds each (1,080 scenarios), varying
+render start/completion order and invalidation placement across two processes. A failed assertion
+includes the seed, handler, lane, process and operation trace. Reads allow the documented 100 ms local
+tag-sync interval to elapse and assert the first result, without polling until fresh. Child processes,
+temporary compiled modules, build fixtures and the test's uniquely prefixed Redis keys are cleaned up.
