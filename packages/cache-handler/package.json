@@ -1,6 +1,6 @@
 {
   "name": "@mrjasonroy/cache-components-cache-handler",
-  "version": "16.4.5",
+  "version": "16.4.6",
   "description": "Cache handler for Next.js 16+ with support for 'use cache' directive and Cache Components",
   "author": "Jason Roy",
   "license": "MIT",
@@ -63,7 +63,7 @@
     "@aws-sdk/credential-provider-node": "^3.972.87",
     "@smithy/signature-v4": "^5.7.4",
     "@types/node": "^22.10.2",
-    "next": "16.4.5",
+    "next": "16.4.6",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
